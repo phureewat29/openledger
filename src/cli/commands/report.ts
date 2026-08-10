@@ -13,7 +13,11 @@ interface ShowReportOpts {
 }
 
 async function showReport(opts: ShowReportOpts, command: Command): Promise<void> {
-  if (!opts.from || !opts.to) fail("USAGE", "--from and --to are required");
+  if (!opts.from || !opts.to) {
+    fail("USAGE", "--from and --to are required", {
+      hint: "e.g. `oled report --from 2026-01-01 --to 2026-03-31 --json`; for net worth use `oled status --json`",
+    });
+  }
   if (!ISO_DATE_RE.test(opts.from)) {
     fail("USAGE", `--from must be an ISO date (YYYY-MM-DD), got "${opts.from}"`);
   }
@@ -57,15 +61,15 @@ async function showReport(opts: ShowReportOpts, command: Command): Promise<void>
 export function registerReport(program: Command): void {
   program
     .command("report")
-    .description("Income, expenses, and networth")
+    .description("Income, expenses, and net worth")
     .option("--from <date>", "start date")
     .option("--to <date>", "end date")
     .addHelpText(
       "after",
       [
         "",
-        "Behavior: sums income, expenses, and networth over a date range. For net worth use oled status.",
-        "Typical flow: both dates are required and ISO (YYYY-MM-DD).",
+        "Behavior: sums income, expenses, and net worth over a date range. For net worth use oled status.",
+        "Both dates are required and ISO (YYYY-MM-DD).",
         "Example: oled report --from 2025-01-01 --to 2025-03-31 --json",
       ].join("\n"),
     )
