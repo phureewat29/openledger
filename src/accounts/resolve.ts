@@ -5,6 +5,7 @@ import {
   ensureStructuralAccount,
   isLedgerRootId,
   structuralAccountId,
+  validateAccountId,
   type AccountRefusal,
 } from "./accounts.js";
 import {
@@ -78,12 +79,10 @@ export function ensureUncategorizedFallback(db: Database.Database, currency: str
   return ensureStructuralAccount(db, currency, "uncategorized");
 }
 
-const CURRENCY_HEAD_RE = /^[A-Za-z]{3}:/;
-
 /** The currency head alone decides: booking elsewhere would relabel the
  *  amount at the wrong exponent. */
 export function namesUnopenedLedger(db: Database.Database, accountId: string): boolean {
-  if (!CURRENCY_HEAD_RE.test(accountId)) return false;
+  if (!isLedgerScopedId(accountId)) return false;
   return !ledgerExists(db, currencyOf(accountId));
 }
 
@@ -147,18 +146,28 @@ function walkAncestorChain(
 }
 
 /**
- * False on a malformed id, unknown type, or unopened ledger; `--resolve`
- * depends on that contract. A database failure propagates instead.
+ * The pure half of `ensurePlaceholderAccount`, so a caller can refuse a row
+ * before resolution writes anything.
  */
-function ensurePlaceholderAccount(db: Database.Database, accountId: string): boolean {
+export function shouldPlaceAccount(db: Database.Database, accountId: string): boolean {
   const segments = accountId.split(":").filter(Boolean);
   if (segments.length < 2) return false;
 
   const type = segments[1] as AccountType;
   if (!ACCOUNT_TYPES.includes(type)) return false;
-  if (!ledgerExists(db, segments[0])) return false;
+  if (!validateAccountId(accountId, type).ok) return false;
+  return ledgerExists(db, segments[0]);
+}
 
-  return walkAncestorChain(db, segments, type, segments.length).ok;
+/**
+ * False on a malformed id, unknown type, or unopened ledger; a database
+ * failure propagates instead.
+ */
+function ensurePlaceholderAccount(db: Database.Database, accountId: string): boolean {
+  if (!shouldPlaceAccount(db, accountId)) return false;
+  const segments = accountId.split(":").filter(Boolean);
+  // The cast holds only because `shouldPlaceAccount` just checked segment 1 against ACCOUNT_TYPES.
+  return walkAncestorChain(db, segments, segments[1] as AccountType, segments.length).ok;
 }
 
 interface AncestorsReady {

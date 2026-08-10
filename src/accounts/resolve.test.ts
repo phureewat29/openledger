@@ -5,7 +5,12 @@ import {
   findAccountById,
   listLedgerCurrencies,
 } from "../db/queries/accounts.js";
-import { ensureUncategorizedFallback, namesUnopenedLedger, resolveOnePosting } from "./resolve.js";
+import {
+  shouldPlaceAccount,
+  ensureUncategorizedFallback,
+  namesUnopenedLedger,
+  resolveOnePosting,
+} from "./resolve.js";
 import { failingAccountInsert, freshDb, seedAccount } from "../../fixtures/db.js";
 
 function seedThbLedger(db: Database.Database): void {
@@ -93,10 +98,9 @@ describe("namesUnopenedLedger", () => {
     expect(namesUnopenedLedger(db, "usd:income:salary")).toBe(true);
     // A mistyped currency is indistinguishable from a real one with no ledger; refused the same way.
     expect(namesUnopenedLedger(db, "thn:expense:food")).toBe(true);
-    // The head alone is the claim; a malformed tail or casing doesn't cancel it.
+    // The head alone is the claim; a malformed tail doesn't cancel it.
     expect(namesUnopenedLedger(db, "usd:kbank:savings")).toBe(true);
     expect(namesUnopenedLedger(db, "usd:food")).toBe(true);
-    expect(namesUnopenedLedger(db, "USD:expense:food")).toBe(true);
   });
 
   it("is false for an existing ledger's head, and for hints with no currency claim", () => {
@@ -105,6 +109,48 @@ describe("namesUnopenedLedger", () => {
     expect(namesUnopenedLedger(db, "thb:food")).toBe(false);
     expect(namesUnopenedLedger(db, "expense:food")).toBe(false);
     expect(namesUnopenedLedger(db, "mysterycharge")).toBe(false);
+    // One authority for "has a currency head": the lowercase id grammar. An
+    // uppercase head is malformed input, which ingest refuses as dirty_input.
+    expect(namesUnopenedLedger(db, "USD:expense:food")).toBe(false);
+    expect(namesUnopenedLedger(db, "THB:expense:food")).toBe(false);
+  });
+});
+
+describe("shouldPlaceAccount", () => {
+  let db: Database.Database;
+  beforeEach(() => { db = freshDb(seedThbLedger); });
+
+  it("is true for exactly what resolveOnePosting can build, and false for the rest", () => {
+    expect(shouldPlaceAccount(db, "thb:expense:food")).toBe(true);
+    expect(shouldPlaceAccount(db, "thb:expense:brandnew:leaf")).toBe(true);
+    expect(shouldPlaceAccount(db, "thb:equity")).toBe(true);
+
+    expect(shouldPlaceAccount(db, "usd:expense:food")).toBe(false); // ledger never opened
+    expect(shouldPlaceAccount(db, "thb:food")).toBe(false); // no type in segment 2
+    expect(shouldPlaceAccount(db, "expense:food")).toBe(false); // no currency head
+    expect(shouldPlaceAccount(db, "mysterycharge")).toBe(false);
+  });
+
+  it("agrees with what resolveOnePosting resolved, malformed segments included", () => {
+    for (const id of [
+      "thb:expense:brandnew:leaf",
+      "usd:expense:food",
+      "thb:food",
+      "bogus",
+      "thb:expense:_bad:leaf",
+    ]) {
+      expect(!!resolveOnePosting(db, id).accountId, id).toBe(shouldPlaceAccount(db, id));
+    }
+  });
+
+  it("refuses a malformed segment before the walk opens a type root for it", () => {
+    // thb:equity is unseeded on purpose: the ancestor walk used to open it on
+    // its way to the segment createAccount refuses, and keep it after refusing.
+    const before = countAccounts(db);
+    expect(shouldPlaceAccount(db, "thb:equity:_bad:leaf")).toBe(false);
+    expect(resolveOnePosting(db, "thb:equity:_bad:leaf")).toEqual({ accountId: null, hint: null });
+    expect(findAccountById(db, "thb:equity")).toBeNull();
+    expect(countAccounts(db)).toBe(before);
   });
 });
 

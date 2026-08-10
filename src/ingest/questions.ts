@@ -1,5 +1,9 @@
 import type Database from "libsql";
-import { recordQuestion } from "../db/queries/questions.js";
+import {
+  deleteQuestionsByRowKey,
+  findQuestionByRowKey,
+  recordQuestion,
+} from "../db/queries/questions.js";
 import { ACCOUNT_TYPES, type AccountType } from "../db/queries/accounts.js";
 import { typeFromId } from "../lib/ids.js";
 
@@ -15,6 +19,13 @@ export interface QuestionRow {
   readonly date: string;
   readonly description: string;
   readonly raw_descriptor?: string | null;
+}
+
+/** Where a row sits in its file. `row_index` is page-scoped, so the page is part
+ *  of the address — the same coordinates `deriveTransactionId` hashes. */
+export interface RowAddress {
+  readonly source_page?: number | null;
+  readonly row_index?: number | null;
 }
 
 const NON_WORD = /[^\p{L}\p{N}]+/gu;
@@ -45,18 +56,56 @@ function raiseQuestion(
   return 1;
 }
 
+/** Null when the row has no address: nothing would recognise it on a re-commit,
+ *  which is also the case in which its transaction id is not derived either. */
+function rowRefusalKey(ctx: QuestionContext, row: RowAddress): string | null {
+  if (!ctx.fileId || row.row_index == null) return null;
+  return `refusal:${ctx.fileId}:${row.source_page ?? 0}:${row.row_index}`;
+}
+
+/**
+ * A refused row keeps ONE question however often its batch is re-committed —
+ * recognised by its address, the way a posted row is recognised by its derived
+ * id. The retry reports `raised_questions: 0`, so the count stays true. The
+ * first refusal's wording stands even if the retry fails for a new reason: the
+ * result row carries the current reason, this only holds the row's place.
+ */
+function raiseRefusal(
+  db: Database.Database,
+  ctx: QuestionContext,
+  row: RowAddress,
+  input: Omit<Parameters<typeof recordQuestion>[1], "file_id" | "batch_id">,
+): 0 | 1 {
+  const key = rowRefusalKey(ctx, row);
+  if (!key) return raiseQuestion(db, ctx, input);
+  if (findQuestionByRowKey(db, key)) return 0;
+  return raiseQuestion(db, ctx, { ...input, context: { ...input.context, row_key: key } });
+}
+
+/** The refusal was about a row that now exists; nothing is left to answer. */
+export function closeRowRefusal(
+  db: Database.Database,
+  ctx: QuestionContext,
+  row: RowAddress,
+): void {
+  const key = rowRefusalKey(ctx, row);
+  if (key) deleteQuestionsByRowKey(db, key);
+}
+
 export function raiseDirtyInput(
   db: Database.Database,
   ctx: QuestionContext,
-  input: QuestionRow,
+  input: QuestionRow & RowAddress,
   reason: string,
 ): 0 | 1 {
-  return raiseQuestion(db, ctx, {
+  // reason often already ends in a period; strip it so the template's own doesn't double up.
+  const reasonText = reason.replace(/\.+$/, "");
+  return raiseRefusal(db, ctx, input, {
     transaction_id: null,
     account_id: null,
     kind: "dirty_input",
     prompt:
-      `The ingest input produced a transaction that couldn't be validated: ${reason}. ` +
+      `The ingest input produced a transaction that couldn't be validated: ${reasonText}. ` +
       `Raw description: "${input.description}" on ${input.date}.`,
     context: { description: input.description, date: input.date, reason },
   });
@@ -145,11 +194,11 @@ export function raiseSimilarAccount(
 export function raiseCurrencyMismatch(
   db: Database.Database,
   ctx: QuestionContext,
-  input: QuestionRow,
+  input: QuestionRow & RowAddress,
   debit: { id: string; currency: string },
   credit: { id: string; currency: string },
 ): 0 | 1 {
-  return raiseQuestion(db, ctx, {
+  return raiseRefusal(db, ctx, input, {
     transaction_id: null,
     account_id: null,
     kind: "currency_mismatch",
@@ -167,12 +216,12 @@ export function raiseCurrencyMismatch(
 export function raiseUnknownLedger(
   db: Database.Database,
   ctx: QuestionContext,
-  input: QuestionRow,
+  input: QuestionRow & RowAddress,
   side: TransactionSide,
   accountId: string,
   ledger: string,
 ): 0 | 1 {
-  return raiseQuestion(db, ctx, {
+  return raiseRefusal(db, ctx, input, {
     transaction_id: null,
     account_id: null,
     kind: "currency_mismatch",

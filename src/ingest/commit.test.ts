@@ -4,9 +4,9 @@ import { countAccounts, findAccountById, ledgerExists } from "../db/queries/acco
 import { createAccount, mergeAccounts } from "../accounts/accounts.js";
 import { getAccountBalances } from "../accounts/balances.js";
 import { bulkRecategorize, countTransactions, findTransactionById } from "../db/queries/transactions.js";
-import { upsertMerchant } from "../db/queries/merchants.js";
+import { findMerchantByName, upsertMerchant } from "../db/queries/merchants.js";
 import { deriveTransactionId, deriveGroupId } from "../lib/ids.js";
-import { listQuestions, countQuestions, closeQuestion } from "../db/queries/questions.js";
+import { listQuestions, countQuestions, closeQuestion, deferQuestion } from "../db/queries/questions.js";
 import {
   commitTransaction,
   commitLinkedTransactions,
@@ -282,17 +282,26 @@ describe("commitTransaction", () => {
     expect(q.prompt).toContain("fix the id");
   });
 
-  it("an uppercase currency head is still a currency claim", () => {
-    const out = commitTransaction(
-      db,
-      CTX,
-      raw({ debit_account_id: "USD:expense:food", row_index: 25 }),
-    );
-    expect(out.ok).toBe(false);
-    if (out.ok) return;
-    expect(out.reason).toBe("currency_mismatch");
-    expect(out.message).toContain('names ledger "usd"');
+  it("refuses an uppercase currency head as dirty input, naming the id", () => {
+    // The id grammar is lowercase-only, so an uppercase head names no ledger and
+    // no account. Read as neither, "THB:expense:food" would fall into the OTHER
+    // side's ledger and be re-labelled at that currency's exponent.
+    const before = countAccounts(db);
+    for (const [rowIndex, id] of [[25, "USD:expense:food"], [27, "THB:expense:food"]] as const) {
+      const out = commitTransaction(db, CTX, raw({ debit_account_id: id, row_index: rowIndex }));
+      expect(out.ok, id).toBe(false);
+      if (out.ok) return;
+      expect(out.reason, id).toBe("dirty_input");
+      expect(out.message).toBe(
+        `debit ${id} carries an uppercase currency head; account ids are lowercase, ` +
+          `e.g. ${id.toLowerCase()}`,
+      );
+    }
+
     expect(countTransactions(db)).toBe(0);
+    expect(countAccounts(db)).toBe(before);
+    expect(ledgerExists(db, "usd")).toBe(false);
+    expect(findAccountById(db, "thb:expense:uncategorized")).toBeNull();
   });
 
   it("a malformed tail on the OWN ledger's head still falls back, not refuses", () => {
@@ -522,6 +531,28 @@ describe("commitTransaction", () => {
     expect(findTransactionById(db, unknown.transactionId)!.merchant_id).toBeNull();
   });
 
+  it("reports what the row linked, not the id that missed, when it carries both", () => {
+    // The inline merchant is upserted and linked, so "unknown" would be a lie
+    // about the stored row; the question about the missed id is still asked.
+    const out = commitTransaction(
+      db,
+      CTX,
+      raw({
+        merchant_id: "m:nope",
+        merchant: { canonical_name: "Corner Cafe" },
+        row_index: 15,
+      }),
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+
+    const stored = findTransactionById(db, out.transactionId)!.merchant_id;
+    expect(stored).toBeTruthy();
+    expect(out.merchant).toEqual({ how: "linked", merchant_id: stored });
+    expect(out.raisedQuestions).toBe(1);
+    expect(listQuestions(db).map((q) => q.kind)).toEqual(["unknown_merchant"]);
+  });
+
   it("no-ops every question raise when batchId is null", () => {
     // With no batchId, raise() no-ops, so the fallback commits without persisting a question.
     const out = commitTransaction(
@@ -640,6 +671,136 @@ describe("commitLinkedTransactions", () => {
     expect(countAccounts(db)).toBe(before);
   });
 
+  it("a later leg naming no ledger at all is refused before the earlier leg builds anything", () => {
+    // Placeability is decided in the pure pre-scan, not after leg 0's tree is written.
+    const before = countAccounts(db);
+    const out = commitLinkedTransactions(
+      db,
+      CTX,
+      { date: "2026-05-25", description: "Split with an unplaceable leg", row_index: 10, source_page: 2 },
+      [
+        { debit_account_id: "thb:expense:coffee:beans", credit_account_id: "thb:asset:bank", amount: 300 },
+        { debit_account_id: "bogus", credit_account_id: "alsobogus", amount: 100 },
+      ],
+    );
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.reason).toBe("dirty_input");
+    expect(countTransactions(db)).toBe(0);
+    expect(findAccountById(db, "thb:expense:coffee:beans")).toBeNull();
+    expect(findAccountById(db, "thb:expense:coffee")).toBeNull();
+    expect(countAccounts(db)).toBe(before);
+  });
+
+  it("a later leg that would fall onto the account its other side names is refused the same way", () => {
+    // "grooming" falls back to thb:expense:uncategorized, which the credit side
+    // already names: one account on both legs. Refused before anything is written.
+    const before = countAccounts(db);
+    const out = commitLinkedTransactions(
+      db,
+      CTX,
+      { date: "2026-05-25", description: "Split onto one account", row_index: 11, source_page: 2 },
+      [
+        { debit_account_id: "thb:expense:coffee:beans", credit_account_id: "thb:asset:bank", amount: 300 },
+        { debit_account_id: "grooming", credit_account_id: "thb:expense:uncategorized", amount: 100 },
+      ],
+    );
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.reason).toBe("dirty_input");
+    expect(out.message).toContain("debit and credit accounts must differ.");
+    expect(countTransactions(db)).toBe(0);
+    expect(findAccountById(db, "thb:expense:coffee:beans")).toBeNull();
+    expect(findAccountById(db, "thb:expense:uncategorized")).toBeNull();
+    expect(countAccounts(db)).toBe(before);
+  });
+
+  it("a later leg under the currency's smallest unit is refused before the earlier leg builds anything", () => {
+    // 0.004 THB rounds to 0 satang, which only validateTransaction used to
+    // catch, after leg 0 and leg 1 had both written their placeholder trees.
+    const before = countAccounts(db);
+    const out = commitLinkedTransactions(
+      db,
+      CTX,
+      { date: "2026-05-25", description: "Split with a sub-satang leg", row_index: 13, source_page: 2 },
+      [
+        { debit_account_id: "thb:expense:coffee:beans", credit_account_id: "thb:asset:bank", amount: 300 },
+        { debit_account_id: "thb:expense:coffee:cups", credit_account_id: "thb:asset:bank", amount: 0.004 },
+      ],
+    );
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.reason).toBe("dirty_input");
+    expect(out.message).toBe("amount must be a positive integer in minor units.");
+    expect(countTransactions(db)).toBe(0);
+    expect(findAccountById(db, "thb:expense:coffee")).toBeNull();
+    expect(findAccountById(db, "thb:expense:coffee:beans")).toBeNull();
+    expect(findAccountById(db, "thb:expense:coffee:cups")).toBeNull();
+    expect(countAccounts(db)).toBe(before);
+  });
+
+  it("asks once about an unknown merchant the header gave every leg", () => {
+    const out = commitLinkedTransactions(
+      db,
+      CTX,
+      {
+        date: "2026-05-25",
+        description: "May salary",
+        row_index: 12,
+        source_page: 2,
+        merchant_id: "m:nope",
+      },
+      [
+        { debit_account_id: "thb:asset:bank", credit_account_id: "thb:income:salary", amount: 50000 },
+        { debit_account_id: "thb:expense:tax", credit_account_id: "thb:income:salary", amount: 8000 },
+        { debit_account_id: "thb:expense:socialsecurity", credit_account_id: "thb:income:salary", amount: 2000 },
+      ],
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.results).toHaveLength(3);
+    expect(out.raisedQuestions).toBe(1);
+    expect(out.merchant).toEqual({ how: "unknown" });
+
+    const qs = listQuestions(db);
+    expect(qs).toHaveLength(1);
+    expect(qs[0].kind).toBe("unknown_merchant");
+    // Anchored on the first leg that posted, which speaks for the whole group.
+    expect(qs[0].transaction_id).toBe(out.results[0].id);
+  });
+
+  it("anchors the merchant claim on the leg that posted when a re-commit grows a leg", () => {
+    const known = upsertMerchant(db, { canonical_name: "Employer Co" }, []);
+    const header = { date: "2026-05-25", description: "May salary", row_index: 20, source_page: 2 };
+    const legs = [
+      { debit_account_id: "thb:asset:bank", credit_account_id: "thb:income:salary", amount: 50000 },
+      { debit_account_id: "thb:expense:tax", credit_account_id: "thb:income:salary", amount: 8000 },
+    ];
+    expect(commitLinkedTransactions(db, CTX, { ...header, merchant_id: known.id }, legs).ok).toBe(true);
+    expect(listQuestions(db)).toHaveLength(0);
+
+    // The same row re-read as three legs: legs 0-1 keep their derived ids and
+    // land as duplicates, so only leg 2 carries this run's merchant claim.
+    const out = commitLinkedTransactions(db, CTX, { ...header, merchant_id: "m:nope" }, [
+      ...legs,
+      { debit_account_id: "thb:expense:socialsecurity", credit_account_id: "thb:income:salary", amount: 2000 },
+    ]);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.results.map((r) => r.duplicate)).toEqual([true, true, false]);
+
+    expect(out.raisedQuestions).toBe(1);
+    const qs = listQuestions(db);
+    expect(qs).toHaveLength(1);
+    expect(qs[0].kind).toBe("unknown_merchant");
+    expect(qs[0].transaction_id).toBe(out.results[2].id);
+
+    // The posted leg linked nothing; reading the duplicate leg's merchant would
+    // credit this run with a link it never made.
+    expect(findTransactionById(db, out.results[2].id)!.merchant_id).toBeNull();
+    expect(out.merchant).toEqual({ how: "unknown" });
+  });
+
   it("reports a leg whose stated currency its accounts overruled", () => {
     const out = commitLinkedTransactions(
       db,
@@ -687,6 +848,32 @@ describe("commitLinkedTransactions", () => {
     ]);
   });
 
+  it("takes the group's merchant back when the insert is abandoned", () => {
+    // A source_file_id no file answers to fails the FK at insert time: the way
+    // to abandon a group after its first leg has already claimed the merchant.
+    expect(() =>
+      commitLinkedTransactions(
+        db,
+        CTX,
+        {
+          date: "2026-05-25",
+          description: "May salary",
+          row_index: 6,
+          source_page: 2,
+          source_file_id: "sf-gone",
+          merchant: { canonical_name: "Ghost Employer", alias: "GHOST EMPLOYER" },
+        },
+        [
+          { debit_account_id: "thb:asset:bank", credit_account_id: "thb:income:salary", amount: 50000 },
+          { debit_account_id: "thb:expense:tax", credit_account_id: "thb:income:salary", amount: 8000 },
+        ],
+      ),
+    ).toThrow(/FOREIGN KEY/i);
+
+    expect(findMerchantByName(db, "Ghost Employer")).toBeNull();
+    expect(countTransactions(db)).toBe(0);
+  });
+
   it("rolls back all legs when one leg is invalid", () => {
     const out = commitLinkedTransactions(
       db,
@@ -699,5 +886,126 @@ describe("commitLinkedTransactions", () => {
     );
     expect(out.ok).toBe(false);
     expect(countTransactions(db)).toBe(0);
+  });
+});
+
+describe("a refused row keeps one question across retries", () => {
+  let db: Database.Database;
+  beforeEach(() => { db = freshDb(seedAccountsAndFile); });
+
+  /** Commits a row that must be refused, and reports what the refusal raised. */
+  function refusalRaised(
+    ctx: TransactionCommitContext,
+    input: RawTransactionInput,
+  ): number {
+    const out = commitTransaction(db, ctx, input);
+    if (out.ok) throw new Error(`expected a refusal, got ${out.transactionId}`);
+    return out.raisedQuestions;
+  }
+
+  it("raises once per row for both refusal kinds, and reports raised_questions 0 on the retry", () => {
+    // One refusal decided before resolution (the ledger is not open) and one
+    // among the pure input rules: they leave by the same road and both dedupe.
+    const rows = [
+      raw({ debit_account_id: "eur:expense:food", row_index: 50 }),
+      raw({ amount: 0, row_index: 51 }),
+    ];
+
+    expect(rows.map((input) => refusalRaised(CTX, input))).toEqual([1, 1]);
+    expect(rows.map((input) => refusalRaised(CTX, input))).toEqual([0, 0]);
+
+    expect(countQuestions(db, { file_id: "sf-1" })).toBe(2);
+    expect(countTransactions(db)).toBe(0);
+  });
+
+  it("closes the refusal when the fixed row posts, and the file's open count follows", () => {
+    expect(refusalRaised(CTX, raw({ debit_account_id: "eur:expense:food", row_index: 52 }))).toBe(1);
+    expect(countQuestions(db, { file_id: "sf-1" })).toBe(1);
+
+    // Same address, account fixed: the row posts under the id its address derives.
+    const fixed = commitTransaction(db, CTX, raw({ row_index: 52 }));
+    expect(fixed.ok).toBe(true);
+    if (!fixed.ok) return;
+    expect(fixed.duplicate).toBe(false);
+    expect(fixed.transactionId).toBe(deriveTransactionId("hashABC", 1, 52));
+
+    // The query behind the commit summary's file_open_question_count.
+    expect(countQuestions(db, { file_id: "sf-1" })).toBe(0);
+  });
+
+  it("a row with no address asks again every attempt: nothing recognises the retry", () => {
+    // The two halves of the address, missing one at a time. Neither row's
+    // transaction id would be derived either, so neither re-commit is a no-op.
+    const bad = raw({ debit_account_id: "eur:expense:food", row_index: 53 });
+    const fileless = { ...CTX, fileId: null };
+    expect([refusalRaised(fileless, bad), refusalRaised(fileless, bad)]).toEqual([1, 1]);
+
+    const unindexed = raw({ debit_account_id: "eur:expense:food", row_index: null });
+    expect([refusalRaised(CTX, unindexed), refusalRaised(CTX, unindexed)]).toEqual([1, 1]);
+
+    expect(countQuestions(db)).toBe(4);
+  });
+
+  it("a deferred refusal still blocks the re-raise: deferring is not answering", () => {
+    const bad = raw({ debit_account_id: "eur:expense:food", row_index: 54 });
+    expect(refusalRaised(CTX, bad)).toBe(1);
+
+    expect(deferQuestion(db, listQuestions(db)[0].id, 7)).toBe(true);
+    expect(listQuestions(db)).toHaveLength(0);
+
+    expect(refusalRaised(CTX, bad)).toBe(0);
+    expect(countQuestions(db, { includeDeferred: true })).toBe(1);
+  });
+
+  it("posting leaves the questions the row's own hints raised alone", () => {
+    // Only a refusal is addressed, and only an addressed question is closed by a
+    // post: the fallback question belongs to a row that posted and stays open.
+    const input = raw({ debit_account_id: "thb:food", row_index: 55 });
+    const first = commitTransaction(db, CTX, input);
+    expect(first.ok && first.raisedQuestions).toBe(1);
+
+    const again = commitTransaction(db, CTX, input);
+    expect(again.ok && again.duplicate).toBe(true);
+    expect(again.ok && again.raisedQuestions).toBe(0);
+    expect(listQuestions(db).map((q) => q.kind)).toEqual(["uncategorized"]);
+  });
+
+  it("a compound row's refusal is addressed to the row, not the leg that failed", () => {
+    const header = {
+      date: "2026-05-25",
+      description: "Split with a bad leg",
+      row_index: 60,
+      source_page: 2,
+    };
+    const good = {
+      debit_account_id: "thb:expense:food",
+      credit_account_id: "thb:asset:bank",
+      amount: 300,
+    };
+    const withBadLeg = [
+      good,
+      { debit_account_id: "eur:expense:coffee", credit_account_id: "thb:asset:bank", amount: 100 },
+    ];
+
+    const first = commitLinkedTransactions(db, CTX, header, withBadLeg);
+    expect(first.ok).toBe(false);
+    if (first.ok) return;
+    expect(first.raisedQuestions).toBe(1);
+
+    const second = commitLinkedTransactions(db, CTX, header, withBadLeg);
+    expect(second.ok).toBe(false);
+    if (second.ok) return;
+    expect(second.raisedQuestions).toBe(0);
+    expect(countQuestions(db, { file_id: "sf-1" })).toBe(1);
+    expect(countTransactions(db)).toBe(0);
+
+    // One refusal covered the whole group, so the group landing answers it.
+    const fixed = commitLinkedTransactions(db, CTX, header, [
+      good,
+      { debit_account_id: "thb:expense:tax", credit_account_id: "thb:asset:bank", amount: 100 },
+    ]);
+    expect(fixed.ok).toBe(true);
+    expect(countTransactions(db)).toBe(2);
+    expect(countQuestions(db, { file_id: "sf-1" })).toBe(0);
   });
 });
