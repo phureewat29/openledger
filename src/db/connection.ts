@@ -3,7 +3,7 @@ import { DBNotReadyError } from "./errors.js";
 import { migrate } from "./schema.js";
 import { dirname } from "path";
 import { mkdirSync, existsSync } from "fs";
-import { chmod600 } from "../perms.js";
+import { chmod600 } from "../lib/perms.js";
 
 export function openDb(dbPath: string): Database.Database {
   const dir = dirname(dbPath);

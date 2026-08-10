@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { tryExecute } from "./lib/result.js";
 import { decodeUserText } from "./lib/text.js";
-import { chmod600 } from "./perms.js";
+import { chmod600 } from "./lib/perms.js";
 
 export function readContext(contextPath: string): string {
   if (!existsSync(contextPath)) return "";

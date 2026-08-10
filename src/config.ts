@@ -2,10 +2,10 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { createHash } from "crypto";
 import { dirname, resolve } from "path";
 import { homedir } from "os";
-import { typhoonModelCard } from "./extract/cards/typhoon-ocr1.5.js";
+import { DEFAULT_MODEL_ID } from "./extract/cards/index.js";
 import { expandHome } from "./lib/path.js";
 import { decodeUserText } from "./lib/text.js";
-import { chmod600 } from "./perms.js";
+import { chmod600 } from "./lib/perms.js";
 
 export interface OpenLedgerConfig {
   country: string;
@@ -32,7 +32,7 @@ export interface ResolvedConfig extends OpenLedgerConfig {
 
 export interface LoadedConfig {
   config: ResolvedConfig;
-  /** File values only, no defaults folded in — lets converge tell an explicitly-persisted value from a defaulted one. */
+  /** File values only, no defaults folded in; lets converge tell an explicitly-persisted value from a defaulted one. */
   fileValues: Partial<OpenLedgerConfig>;
   /** Why the file is unusable, or null when it is fine or simply absent. */
   problem: string | null;
@@ -58,7 +58,7 @@ const CONFIG_FIELDS: Record<keyof OpenLedgerConfig, { default: () => string }> =
   cacheDir: { default: () => resolve(defaultOledDir(), "cache") },
   userName: { default: () => "User" },
   ocrBaseUrl: { default: () => "" },
-  ocrModel: { default: () => typhoonModelCard.model },
+  ocrModel: { default: () => DEFAULT_MODEL_ID },
   ocrApiKey: { default: () => "" },
 };
 
@@ -67,7 +67,7 @@ const CONFIG_KEYS = Object.keys(CONFIG_FIELDS) as readonly (keyof OpenLedgerConf
 /** Fields never echoed in plaintext; `oled config` renders each as `{ set, fingerprint }` via `keyFingerprint()` instead. */
 export const CONFIG_SECRETS = ["ocrApiKey"] as const;
 
-/** Non-reversible fingerprint (`sha256:` + first 8 hex) so `oled config` can prove a secret is set without printing it. */
+/** Non-reversible, so `oled config` can prove a secret is set without printing it. */
 export function keyFingerprint(key: string): string {
   return `sha256:${createHash("sha256").update(key).digest("hex").slice(0, 8)}`;
 }
