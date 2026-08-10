@@ -1,61 +1,34 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { extname, isAbsolute, relative, resolve, sep } from "node:path";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type Database from "libsql";
 import type { OpenLedgerConfig } from "../config.js";
-import {
-  findFileByHash,
-  findFileById,
-  insertPendingFile,
-  replaceFile,
-  type PendingFileInput,
-} from "../db/queries/files.js";
+import { findFileByHash, replaceFile, type FileStatus } from "../db/queries/files.js";
 import { extractFile, type Extraction, type TextPage } from "../extract/extract.js";
 import { resolveOcr, type OCRConfigSource } from "../extract/ocr.js";
 import { isEncryptedPdf, unlockPdf, type UnlockFailureReason } from "../extract/pdf.js";
 import type { TextLayer } from "../extract/route.js";
-import { SOURCES, loadSource, type LoadedSource } from "../extract/source.js";
+import { loadSource, type LoadedSource } from "../extract/source.js";
 import { newFileId } from "../lib/ids.js";
 import { tryExecute, type Result } from "../lib/result.js";
+import {
+  RM_OPTS,
+  cleanCache,
+  pendingRow,
+  registerPendingFile,
+  resolveEntryPath,
+  walkFiles,
+  type WalkedFile,
+} from "./files.js";
 
-type IngestStatus = "new" | "pending" | "ingested" | "failed" | "unreadable";
+type IngestStatus = FileStatus | "new" | "unreadable";
 
-export interface IngestEntry {
-  path: string;
-  /** Forward-slashed relative path from the data dir. */
-  relPath: string;
+export interface IngestEntry extends WalkedFile {
   /** null when the bytes could not be read. */
   hash: string | null;
   fileId: string | null;
   status: IngestStatus;
   encrypted: boolean;
   note?: string;
-}
-
-interface WalkedFile {
-  path: string;
-  relPath: string;
-}
-
-function walk(dir: string, root: string, out: WalkedFile[]): void {
-  const entries = tryExecute(() => readdirSync(dir));
-  if (!entries.ok) return;
-
-  for (const entry of entries.value) {
-    if (entry.startsWith(".")) continue;
-    const full = resolve(dir, entry);
-
-    const stat = tryExecute(() => statSync(full));
-    if (!stat.ok) continue;
-
-    if (stat.value.isDirectory()) {
-      walk(full, root, out);
-      continue;
-    }
-    if (!stat.value.isFile()) continue;
-    if (!SOURCES[extname(entry).toLowerCase()]) continue;
-
-    out.push({ path: full, relPath: relative(root, full).split(sep).join("/") });
-  }
 }
 
 /** Only a PDF can be locked, and only a PDF can be unopenable; an image needs neither probe. */
@@ -74,11 +47,8 @@ export async function discoverFiles(
   dataDir: string,
   opts: { regex?: RegExp } = {},
 ): Promise<IngestEntry[]> {
-  const walked: WalkedFile[] = [];
-  walk(dataDir, dataDir, walked);
-
   const entries: IngestEntry[] = [];
-  for (const file of walked) {
+  for (const file of walkFiles(dataDir)) {
     if (opts.regex && !opts.regex.test(file.relPath)) continue;
 
     const loaded = loadSource(file.path);
@@ -104,57 +74,6 @@ export async function discoverFiles(
   return entries;
 }
 
-/** How many data-dir files ingest has not registered. Hashes but never parses,
- *  so `status` can call it without pulling mupdf onto its path; a null db is a
- *  ledger that does not exist yet, where every readable file is new. */
-export function countNewFiles(db: Database.Database | null, dataDir: string): number {
-  const walked: WalkedFile[] = [];
-  walk(dataDir, dataDir, walked);
-
-  return walked.filter((file) => {
-    const loaded = loadSource(file.path);
-    return loaded.ok && (!db || !findFileByHash(db, loaded.value.hash));
-  }).length;
-}
-
-function pendingRow(source: LoadedSource, fileId: string): PendingFileInput {
-  return { id: fileId, path: source.path, file_hash: source.hash, mime: source.mime };
-}
-
-/** Pending row keyed by content hash, so re-registering the same bytes is a
- *  no-op that returns the existing id. */
-export function registerPendingFile(
-  db: Database.Database,
-  source: LoadedSource,
-): { fileId: string; alreadyKnown: boolean } {
-  const known = findFileByHash(db, source.hash);
-  if (known) return { fileId: known.id, alreadyKnown: true };
-
-  const fileId = newFileId();
-  insertPendingFile(db, pendingRow(source, fileId));
-  return { fileId, alreadyKnown: false };
-}
-
-/** Resolution order: absolute, data-dir-relative, cwd-relative, then file id; null if none match. */
-export function resolveEntryPath(
-  db: Database.Database,
-  dataDir: string,
-  entryOrId: string,
-): string | null {
-  if (isAbsolute(entryOrId) && existsSync(entryOrId)) return entryOrId;
-
-  const viaDataDir = resolve(dataDir, entryOrId);
-  if (existsSync(viaDataDir)) return viaDataDir;
-
-  const viaCwd = resolve(entryOrId);
-  if (existsSync(viaCwd)) return viaCwd;
-
-  const byId = findFileById(db, entryOrId);
-  if (byId) return byId.path;
-
-  return null;
-}
-
 interface PrepareOptions {
   password?: string;
   /** Re-reads bytes, then replaces the prior row, dropping its transactions,
@@ -166,7 +85,7 @@ interface PrepareOptions {
   noOcr?: boolean;
 }
 
-/** Everything that can stop a prepare. The CLI maps each to an exit code and a hint. */
+/** Everything that can stop a prepare. */
 export type PrepareFailure =
   | "not_found"
   | "unsupported_extension"
@@ -218,7 +137,7 @@ export type PrepareOutcome =
     }
   | { ok: false; reason: PrepareFailure; message: string };
 
-type PrepareSuccess = Extract<PrepareOutcome, { ok: true }>;
+export type PrepareSuccess = Extract<PrepareOutcome, { ok: true }>;
 
 function replaceFileRow(
   db: Database.Database,
@@ -256,7 +175,7 @@ const UNLOCK_FAILURES: Record<UnlockFailureReason, Extract<UnlockedBytes, { ok: 
 async function readableBytes(source: LoadedSource, password?: string): Promise<UnlockedBytes> {
   if (source.kind !== "pdf") return { ok: true, bytes: source.bytes };
 
-  const probe = await tryExecute(() => isEncryptedPdf(source.bytes));
+  const probe = await encryptionOf(source);
   if (!probe.ok) return { ok: false, reason: "pdf_unreadable", message: probe.error };
   if (!probe.value) return { ok: true, bytes: source.bytes };
   if (!password) {
@@ -286,9 +205,6 @@ interface WriteTarget {
   /** The input file's own path: what an untouched image page cites. */
   sourcePath: string;
 }
-
-/** Retries absorb the transient EBUSY/EPERM thrown while a Windows scanner briefly holds a fresh artifact. */
-const RM_OPTS = { recursive: true, force: true, maxRetries: 3 } as const;
 
 /** Rebuilt per prepare, so a prior run's artifacts can never be mistaken for this one's. */
 function freshDir(dir: string): void {
@@ -377,7 +293,7 @@ export async function prepareFile(
   if (!loaded.ok) return { ok: false, reason: loaded.reason, message: loaded.message };
   const source = loaded.value;
 
-  // Registers now (except --force's swap): a file that never opens still needs an id for `ingest fail`.
+  // Registers now (except --force's swap): a file that never opens still needs an id.
   const prior = opts.force ? findFileByHash(db, source.hash) : null;
   const fileId = prior ? newFileId() : registerPendingFile(db, source).fileId;
 
@@ -398,18 +314,4 @@ export async function prepareFile(
   const written = WRITE_ARTIFACTS[extracted.value.kind](extracted.value as never, target);
   if (prior) replaceFileRow(db, cfg.cacheDir, prior.id, source, fileId);
   return written;
-}
-
-export function cleanCache(cacheDir: string, fileId?: string): { removed: string[] } {
-  if (fileId) {
-    const dir = resolve(cacheDir, fileId);
-    if (!existsSync(dir)) return { removed: [] };
-    rmSync(dir, RM_OPTS);
-    return { removed: [dir] };
-  }
-
-  if (!existsSync(cacheDir)) return { removed: [] };
-  const removed = readdirSync(cacheDir).map((name) => resolve(cacheDir, name));
-  rmSync(cacheDir, RM_OPTS);
-  return { removed };
 }

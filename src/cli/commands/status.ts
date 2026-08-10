@@ -9,13 +9,13 @@ import { countMerchants } from "../../db/queries/merchants.js";
 import { countNotes } from "../../db/queries/notes.js";
 import { countQuestions } from "../../db/queries/questions.js";
 import { countTransactions } from "../../db/queries/transactions.js";
-import { countNewFiles } from "../../ingest/prepare.js";
+import { countNewFiles } from "../../ingest/files.js";
 import { applyRedaction } from "../../privacy/redactor.js";
 import { existsSync } from "fs";
 import { homeRelative } from "../../lib/path.js";
 import { formatAmount, toDecimalTotals } from "../currency.js";
 import { banner, visibleLength, ANSI_RE, formatInt } from "../format.js";
-import { currentMode, emit, redactionEnabled, runAction } from "../output.js";
+import { currentMode, emit, redactionEnabled, renderByMode, runAction } from "../output.js";
 import { tryExecute } from "../../lib/result.js";
 import { lenientConfig } from "./config.js";
 import { openDb } from "../db.js";
@@ -44,8 +44,7 @@ export interface StatusReport {
   /** Always present: `new` counts unregistered data-dir files, the "is there work waiting?" answer. */
   files: { new: number; ingested: number; pending: number; failed: number };
   questions: { open: number; deferred: number } | null;
-  // Keys are currencies with an asset/liability account (report's are currencies
-  // with legs in range), so an untouched ledger still reports {"THB":0}.
+  // Keyed by currencies with an asset or liability account, so an untouched ledger still reports {"THB":0}.
   net_worth: {
     assets: Record<string, number>;
     liabilities: Record<string, number>;
@@ -126,21 +125,14 @@ export async function showStatus(opts: { redact?: boolean }, command: Command): 
   // Decided before redaction: paths and error prose are display strings, not facts to branch on.
   const ledgerMissing = !report.db.reachable && !existsSync(cfg.dbPath);
   if (redactionEnabled(opts)) {
-    report = applyRedaction(report, true, STATUS_REDACT_FIELDS, {
-      userName: cfg.userName,
-      contextPath: cfg.contextPath,
-    });
+    report = applyRedaction(report, true, STATUS_REDACT_FIELDS, cfg);
   }
   const mode = currentMode();
-  if (mode.json) {
-    emit(report);
-    return;
-  }
-  if (mode.tty) {
-    renderTty(report, mode.color, ledgerMissing);
-    return;
-  }
-  renderPlain(report);
+  renderByMode({
+    json: () => emit(report),
+    tty: () => renderTty(report, mode.color, ledgerMissing),
+    plain: () => renderPlain(report),
+  });
 }
 
 function renderPlain(r: StatusReport): void {
@@ -188,7 +180,7 @@ function renderPlain(r: StatusReport): void {
 
 const LABEL_WIDTH = 18;
 
-// Exported for the display test: this renderer only runs on a real TTY, so no subprocess suite executes it.
+// Exported for tests: this renderer only runs on a real TTY, so no subprocess suite executes it.
 export function renderTty(r: StatusReport, color: boolean, ledgerMissing = false): void {
   const dim = (s: string) => (color ? chalk.dim(s) : s);
   const bold = (s: string) => (color ? chalk.bold.yellow(s) : s);

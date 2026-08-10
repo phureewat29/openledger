@@ -13,14 +13,14 @@ import { requireConfig } from "./config.js";
 import {
   FILE_STATUSES,
   deleteFile,
-  findFileById,
   listFiles as queryFiles,
   type FileRow,
   type FileStatus,
 } from "../../db/queries/files.js";
 import { countTransactionsBySourceFile } from "../../db/queries/transactions.js";
 import { countQuestions } from "../../db/queries/questions.js";
-import { cleanCache } from "../../ingest/prepare.js";
+import { cleanCache } from "../../ingest/files.js";
+import { requireFile } from "../files.js";
 
 const FILE_COLUMNS: Column<FileRow>[] = [
   { header: "Status", value: (r) => r.status },
@@ -59,8 +59,7 @@ async function listFiles(opts: ListFilesOpts, command: Command): Promise<void> {
 async function showFile(id: string, _opts: Record<string, unknown>, command: Command): Promise<void> {
   const config = requireConfig(command);
   const db = await openDb(config.dbPath);
-  const row = findFileById(db, id);
-  if (!row) fail("NOT_FOUND", `no file: ${id}`);
+  const row = requireFile(db, id, "run `oled files list --json` for the ids");
 
   emitObject({
     type: "file_detail",
@@ -78,8 +77,8 @@ async function dropFile(id: string, opts: DropFileOpts, command: Command): Promi
   requireYes(opts, `dropping file ${id}`);
   const config = requireConfig(command);
   const db = await openDb(config.dbPath);
+  requireFile(db, id, "run `oled files list --json` for the ids");
   const res = deleteFile(db, id);
-  if (!res.removed) fail("NOT_FOUND", `no file: ${id}`);
 
   // Same cache purge `ingest done`/`fail` do: nothing can reach the extracted text once the row is gone.
   const { removed } = cleanCache(config.cacheDir, id);

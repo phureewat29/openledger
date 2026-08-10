@@ -15,7 +15,7 @@ import {
 import { openDb } from "../db.js";
 import { requireConfig } from "./config.js";
 import { commitIngest } from "./commit.js";
-import { findFileById, markFileFailed, markFileIngested } from "../../db/queries/files.js";
+import { markFileFailed, markFileIngested } from "../../db/queries/files.js";
 import { getAccountBalanceMinor } from "../../accounts/balances.js";
 import { DIRECTION_RULES } from "../../ingest/commit.js";
 import { formatFixed } from "../currency.js";
@@ -25,17 +25,16 @@ import { parseInput, num, str } from "../../lib/validate.js";
 import * as z from "zod";
 // source.ts avoids mupdf/libsql, so this import is safe on the startup path.
 import { MAX_SOURCE_BYTES, SUPPORTED_EXTS } from "../../extract/source.js";
+import { cleanCache } from "../../ingest/files.js";
+import { requireFile } from "../files.js";
 // prepare.ts keeps mupdf/libsql lazy internally (getMupdf() in extract/pdf.ts), so this import is safe on the startup path.
 import {
-  cleanCache,
   discoverFiles,
   prepareFile,
   type IngestEntry,
-  type PrepareOutcome,
   type PrepareFailure,
+  type PrepareSuccess,
 } from "../../ingest/prepare.js";
-
-type PrepareSuccess = Extract<PrepareOutcome, { ok: true }>;
 
 const INGEST_COLUMNS: Column<IngestEntry>[] = [
   { header: "Status", value: (r) => r.status },
@@ -231,7 +230,7 @@ function reconcileStatement(db: Database.Database, target: ReconcileTarget): Rec
       "INVALID",
       `${account} holds ${show(balanceMinor)}, but the statement closes at ${show(closingMinor)} (off by ${show(closingMinor - balanceMinor)})`,
       {
-        hint: `compare \`oled transactions list --account ${account} --json\` against the statement: a row may be misread, missing, or invented; a first statement also needs its opening balance posted against ${currency.toLowerCase()}:equity:opening; and a balance lives on the account the rows post to, never on a parent`,
+        hint: `a balance lives on the account the rows post to, never on a parent; compare \`oled transactions list --account ${account} --json\` against the statement: a row may be misread, missing, or invented; a first statement also needs its opening balance posted against ${currency.toLowerCase()}:equity:opening`,
       },
     );
   }
@@ -252,7 +251,11 @@ async function completeIngest(
   const target = reconcileTarget(flags);
   const config = requireConfig(command);
   const db = await openDb(config.dbPath);
-  if (!findFileById(db, id)) fail("NOT_FOUND", `no ingest entry: ${id}`);
+  requireFile(
+    db,
+    id,
+    "run `oled ingest list --json` for the file ids; done takes the sf-id prepare returned, not the path",
+  );
 
   // Before the status flips, so a file that was pending stays pending.
   const reconciliation = target ? reconcileStatement(db, target) : null;
@@ -277,8 +280,12 @@ async function failIngest(id: string, opts: FailIngestOpts, command: Command): P
 
   const config = requireConfig(command);
   const db = await openDb(config.dbPath);
-  const changes = markFileFailed(db, id, { source: opts.agent ?? "external", error: opts.error });
-  if (changes === 0) fail("NOT_FOUND", `no ingest entry: ${id}`);
+  requireFile(
+    db,
+    id,
+    "run `oled ingest list --json` for the file ids; fail takes the sf-id prepare returned, not the path",
+  );
+  markFileFailed(db, id, { source: opts.agent ?? "external", error: opts.error });
 
   const { removed } = cleanCache(config.cacheDir, id);
   emitObject({ file_id: id, status: "failed", cache_removed: removed });
@@ -292,10 +299,20 @@ export function registerIngest(program: Command): void {
       "after",
       [
         "",
-        "Behavior: the statement pipeline, list the files waiting, prepare one for reading, commit its rows, mark it done or failed.",
-        "Typical flow: list, prepare <id>, read what prepare returns, commit --file <sf-id> with the rows on stdin (or --input <batch>), then done <sf-id>.",
-        `Accepts ${ACCEPTED_EXTS}, up to ${SIZE_LIMIT}. Locked PDFs exit 4: pass the password with --password <password>.`,
-        "Example: oled ingest prepare statement.pdf --json",
+        "Behavior:",
+        "  The statement pipeline: list what waits, prepare a file for reading, commit its rows,",
+        "  answer the questions raised, then mark it done or failed.",
+        `  Accepts ${ACCEPTED_EXTS}, up to ${SIZE_LIMIT}. A locked PDF exits 4: re-run with --password <password>.`,
+        "",
+        "Flow:",
+        "  oled ingest list --json",
+        "  oled ingest prepare <path> --json    then read the document it returns",
+        "  oled ingest commit --file <sf-id> --input <batch> --json",
+        "  oled questions list --json           then answer what the commit raised",
+        "  oled ingest done <sf-id> --account <id> --closing-balance <n> --json",
+        "",
+        "Example:",
+        "  oled ingest prepare statement.pdf --json",
       ].join("\n"),
     );
 
@@ -303,6 +320,18 @@ export function registerIngest(program: Command): void {
     .command("list")
     .description("List items in the ingest pipeline")
     .option("--regex <pattern>", "filter items by regex")
+    .addHelpText(
+      "after",
+      [
+        "",
+        "Behavior:",
+        "  Walks the data dir and reports every statement's status; new files appear here first.",
+        "  `oled files list` shows only what is already registered.",
+        "",
+        "Example:",
+        "  oled ingest list --json",
+      ].join("\n"),
+    )
     .action(runAction(listIngest));
 
   ingest
@@ -316,12 +345,30 @@ export function registerIngest(program: Command): void {
       "after",
       [
         "",
-        'Behavior: reads the file once and returns text whenever it can. A PDF carrying its own text layer is extracted directly. Otherwise the pages become images, a scan is rasterized, a photo is taken as it lies, and the OCR endpoint reads them when one is configured (`oled config --ocr-base-url <url>`); with none configured they come back to you. The reader is named in source: "text-layer" or "ocr" when kind is "text", "raster" or "original" when kind is "images".',
-        'Output kind "text": one `document` path to read. Inside it, pages are separated by `--- page N ---` markers; cite the row\'s page as source_page on commit. Page numbers count from 1 everywhere: the markers, the pages[] entries, and source_page.',
-        'Output kind "images": one path per page under pages[], in order; read them yourself.',
-        "Escape hatches: --rescan ignores a garbled text layer and reads the pages instead; --no-ocr ignores the OCR endpoint and returns the page images. Both together always return images.",
-        "Exits: 2 the file type is not supported, 3 the OCR endpoint is misconfigured or unreachable, 4 the PDF needs a password (re-run with --password), 5 nothing at that path or id, 6 the file is too large or corrupt, 7 the OCR endpoint failed on some pages: each carries a `[page N: OCR failed]` line in the document and is listed in failed_pages; re-run with --no-ocr to read those pages yourself.",
-        "Example: oled ingest prepare statement.pdf --json",
+        "Behavior:",
+        "  Reads the file once and returns text whenever it can.",
+        "  A PDF with its own text layer is extracted directly. Otherwise the pages become images",
+        "  (a scan rasterized, a photo as it lies) and the OCR endpoint reads them when configured",
+        "  (`oled config --ocr-base-url <url>`); with none configured they come back to you.",
+        '  source names the reader: "text-layer" or "ocr" for kind "text", "raster" or "original" for kind "images".',
+        "",
+        "Output:",
+        '  kind "text": one `document` path to read; pages separated by --- page N --- markers.',
+        "  Cite each row's page as source_page on commit. Pages count from 1 everywhere.",
+        '  kind "images": one path per page under pages[], in order; read them yourself.',
+        "",
+        "Escape Hatches:",
+        "  --rescan ignores a garbled text layer and reads the page images instead.",
+        "  --no-ocr ignores the OCR endpoint and returns the page images. Both together always return images.",
+        "",
+        "Exits:",
+        "  2 unsupported file type · 3 OCR endpoint misconfigured or unreachable",
+        "  4 locked PDF (re-run with --password) · 5 nothing at that path or id · 6 too large or corrupt",
+        "  7 OCR failed on some pages: each carries a [page N: OCR failed] line in the document and",
+        "    is listed in failed_pages; re-run with --no-ocr to read those pages yourself.",
+        "",
+        "Example:",
+        "  oled ingest prepare statement.pdf --json",
       ].join("\n"),
     )
     .action(runAction(prepareIngest));
@@ -335,12 +382,44 @@ export function registerIngest(program: Command): void {
       "after",
       [
         "",
-        "Behavior: posts one batch of statement rows; each item resolves account hints, links merchants, and raises questions instead of failing.",
-        'Item: {"date":"YYYY-MM-DD","description":"...","debit_account":"thb:expense:food","credit_account":"thb:asset:bank:kbank","amount":135.00,"source_page":2,"row_index":0,"raw_descriptor":"<verbatim bank text>","merchant":{"canonical_name":"..."}}',
-        "Rules: amount > 0, direction comes from the two accounts, never a sign; account ids are currency-prefixed (<currency>:<type>:<path>) and both sides must share the prefix; ids are taken literally (an exact match posts there, a well-formed path inside an existing ledger is created, a lookalike only raises a question); commit never opens a new ledger — an id whose currency prefix names no existing ledger is refused, naming the ledger and the accounts create command that opens it, and only ids with no usable prefix fall back to the other side's <currency>:expense:uncategorized with a question; set row_index + source_page and pass --file <sf-id> so a re-run is an idempotent duplicate:true no-op.",
-        DIRECTION_RULES,
-        "Compound rows (payslip, FX): replace debit/credit/amount with linked:[{debit_account,credit_account,amount},...] sharing one account; legs commit atomically under one group_id. Cross-currency rows become two linked legs through <currency>:equity:conversion, one per ledger, sharing the group.",
-        "Output: one result per item, then a summary with batch_id/posted/duplicates/failed, plus file_status and a done hint while the file stays pending. Exit 7 = some rows failed; duplicate:true is a success.",
+        "Behavior:",
+        "  Posts one batch of statement rows: each item resolves account hints, links merchants,",
+        "  and raises questions instead of failing.",
+        "",
+        "Item:",
+        '  {"date":"YYYY-MM-DD","description":"...","debit_account":"thb:expense:food","credit_account":"thb:asset:bank:kbank","amount":135.00,"source_page":2,"row_index":0,"raw_descriptor":"<verbatim bank text>","merchant":{"canonical_name":"..."}}',
+        "",
+        "Rules:",
+        "  amount > 0; direction comes from the two accounts, never a sign.",
+        "  Account ids are currency-prefixed (<currency>:<type>:<path>); both sides share the prefix.",
+        "  Ids are taken literally: an exact match posts there, a well-formed path inside an existing",
+        "  ledger is created, a lookalike only raises a question.",
+        "  Commit never opens a ledger: an id whose prefix names no existing ledger is refused, naming",
+        "  the accounts create command that opens it; only ids with no usable prefix fall back to the",
+        "  other side's <currency>:expense:uncategorized with a question.",
+        "  Set row_index + source_page and pass --file <sf-id>: a re-run is an idempotent duplicate:true",
+        "  no-op, and a failed row keeps one question across retries (raised_questions: 0 on the retry)",
+        "  which closes itself once the fixed row posts.",
+        "",
+        "Directions:",
+        "  " + DIRECTION_RULES,
+        "",
+        "Compound Rows (payslip, FX):",
+        "  Replace debit/credit/amount with linked:[{debit_account,credit_account,amount},...] sharing",
+        "  one account; legs commit atomically under one group_id. A cross-currency row becomes two",
+        "  linked legs through <currency>:equity:conversion, one per ledger, sharing the group.",
+        "",
+        "Output:",
+        "  One result per item, then a summary with batch_id/posted/duplicates/failed.",
+        "  With --file the summary adds file_status, file_transaction_count and file_open_question_count,",
+        "  cumulative for that file after this batch, plus a done hint while it stays pending.",
+        "  file_transaction_count counts ledger transactions, not items: a compound row posts once but",
+        "  adds one per leg, and a row carrying its own source_file_id counts toward that file instead;",
+        "  the same two numbers `oled files show <sf-id>` reports as transaction_count and open_question_count.",
+        "  Exit 7 = some rows failed; duplicate:true is a success.",
+        "",
+        "Example:",
+        "  oled ingest commit --file sf-abc --input rows.ndjson --json",
       ].join("\n"),
     )
     .action(runAction(commitIngest));
@@ -355,9 +434,16 @@ export function registerIngest(program: Command): void {
       "after",
       [
         "",
-        "Behavior: closes the file. With --account and --closing-balance it first verifies the ledger against the statement: that account's balance must equal the statement's closing figure, and a file that was pending stays pending when it does not.",
-        "A mismatch means a misread, missing, or invented row, or a first statement whose opening balance was never posted. The check reads one account, so a row booked to the wrong counter-account still ties — the questions queue covers that.",
-        "Example: oled ingest done sf-abc --account thb:liability:card --closing-balance 1234.56 --json",
+        "Behavior:",
+        "  Closes the file. With --account and --closing-balance it first verifies the ledger:",
+        "  that account's balance must equal the statement's closing figure; on a mismatch the",
+        "  file stays pending.",
+        "  A mismatch means a misread, missing, or invented row, or a first statement whose opening",
+        "  balance was never posted. The check reads one account; a row booked to the wrong",
+        "  counter-account still ties, which the questions queue covers.",
+        "",
+        "Example:",
+        "  oled ingest done sf-abc --account thb:liability:card --closing-balance 1234.56 --json",
       ].join("\n"),
     )
     .action(runAction(completeIngest));
@@ -367,5 +453,16 @@ export function registerIngest(program: Command): void {
     .description("Mark an ingest item as failed")
     .option("--agent <name>", "name of the failing agent")
     .option("--error <text>", "failure reason")
+    .addHelpText(
+      "after",
+      [
+        "",
+        "Behavior:",
+        "  Marks the file failed, recording --error, and removes its cache artifacts.",
+        "",
+        "Example:",
+        '  oled ingest fail sf-abc --error "unreadable scan" --json',
+      ].join("\n"),
+    )
     .action(runAction(failIngest));
 }
