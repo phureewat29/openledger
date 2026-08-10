@@ -35,6 +35,9 @@ export const MODEL_CARD_NAMES = Object.keys(MODEL_CARDS) as ModelCardName[];
 /** Supplies the model when none is configured. */
 const DEFAULT_MODEL_CARD: ModelCardName = "typhoon";
 
+/** The model id `ocrModel` defaults to; the only spelling of it outside this folder. */
+export const DEFAULT_MODEL_ID = MODEL_CARDS[DEFAULT_MODEL_CARD].model;
+
 /** Any configured id no family claims. */
 const FALLBACK_MODEL_CARD: ModelCardName = "fallback";
 

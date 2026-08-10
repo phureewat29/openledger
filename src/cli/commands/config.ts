@@ -14,7 +14,7 @@ import {
 import { expandHome } from "../../lib/path.js";
 import { findCountryDefaults, availableCountries } from "../../datasets/defaults.js";
 import { createContextTemplate } from "../../context.js";
-import { typhoonModelCard } from "../../extract/cards/typhoon-ocr1.5.js";
+import { DEFAULT_MODEL_ID } from "../../extract/cards/index.js";
 import { printKeyValues } from "../format.js";
 import { currentMode, emit, fail, runAction, type OutputMode } from "../output.js";
 import * as z from "zod";
@@ -45,7 +45,7 @@ export function requireConfig(cmd: Command): ResolvedConfig {
   return config;
 }
 
-/** For status, doctor, and config itself, which must run on virgin or broken setups. */
+/** Loads config without requiring the file to exist or parse cleanly. */
 export function lenientConfig(cmd: Command): LoadedConfig {
   return loadConfig(resolveConfigPath(cmd));
 }
@@ -65,7 +65,7 @@ function redactConfig(cfg: OpenLedgerConfig): RedactedConfig {
   return redacted as RedactedConfig;
 }
 
-/** The 10 value keys without the resolution fields; those render as their own snake_case rows. */
+/** Strips the resolution fields (config path, context path, exists); those render as their own rows. */
 function configValues(cfg: ResolvedConfig): OpenLedgerConfig {
   const { configPath, contextPath, exists, ...values } = cfg;
   return values;
@@ -258,7 +258,7 @@ export function registerConfig(program: Command): void {
     .option("--country <code>", "country whose reference data applies; also seeds locale/currency (default: TH)")
     .option("--user-name <name>", "your name; config shows it and redaction masks it")
     .option("--ocr-base-url <url>", "OCR endpoint base URL, e.g. http://127.0.0.1:1234/v1; OCR is off until this is set")
-    .option("--ocr-model <id>", `model id, or a varaint of it (default ${typhoonModelCard.model}); does nothing until --ocr-base-url is set`)
+    .option("--ocr-model <id>", `model id, or a variant of it (default ${DEFAULT_MODEL_ID}); does nothing until --ocr-base-url is set`)
     .option("--ocr-api-key <key>", 'API key for the OCR endpoint; saved to the config file (0600), shown only as a fingerprint; "" clears it')
     .addHelpText(
       "after",
