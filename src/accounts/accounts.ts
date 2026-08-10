@@ -12,6 +12,7 @@ import {
 import { accountHasTransactions, repointTransactions } from "../db/queries/transactions.js";
 import { repointMerchantDefaultAccount } from "../db/queries/merchants.js";
 import { currencyOf, typeFromId } from "../lib/ids.js";
+import { STRUCTURAL_SUFFIX } from "../lib/structural.js";
 
 /** The DDL only GLOB-checks the currency head and the type position; this
  *  module owns the rest of the grammar. */
@@ -29,11 +30,15 @@ const TYPE_ROOT_NAME: Record<AccountType, string> = {
 
 export type StructuralKind = "uncategorized" | "adjustments" | "opening";
 
+function structuralType(kind: StructuralKind): AccountType {
+  return STRUCTURAL_SUFFIX[kind].split(":")[0] as AccountType;
+}
+
 /** The accounts the system auto-creates, one set per ledger. */
 export const STRUCTURAL_ACCOUNTS: Record<StructuralKind, { type: AccountType; name: string }> = {
-  uncategorized: { type: "expense", name: "Uncategorized" },
-  adjustments: { type: "equity", name: "Adjustments" },
-  opening: { type: "equity", name: "Opening Balance" },
+  uncategorized: { type: structuralType("uncategorized"), name: "Uncategorized" },
+  adjustments: { type: structuralType("adjustments"), name: "Adjustments" },
+  opening: { type: structuralType("opening"), name: "Opening Balance" },
 };
 
 /** A bad currency here is a broken invariant, not user input (refused at the
@@ -47,7 +52,7 @@ function ledgerCurrency(currency: string): string {
 }
 
 export function structuralAccountId(currency: string, kind: StructuralKind): string {
-  return `${ledgerCurrency(currency)}:${STRUCTURAL_ACCOUNTS[kind].type}:${kind}`;
+  return `${ledgerCurrency(currency)}:${STRUCTURAL_SUFFIX[kind]}`;
 }
 
 function ledgerRootId(currency: string, type: AccountType): string {
@@ -96,8 +101,7 @@ export function ensureStructuralAccount(
   return id;
 }
 
-/** Callers branch on these: the CLI maps them to exit codes, and the ancestor
- *  walk singles out `account_exists` to swallow a lost race. */
+/** `account_exists` is singled out elsewhere to swallow a lost race in the ancestor walk. */
 export type AccountFailure = "account_exists" | "parent_not_found" | "invalid_hierarchy";
 
 export interface AccountRefusal {
