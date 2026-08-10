@@ -13,6 +13,7 @@ import {
   mapNotFoundError,
   readStdinBatch,
   redactionEnabled,
+  renderByMode,
   requireYes,
   runAction,
   type Column,
@@ -49,6 +50,7 @@ import { failAccountNotFound, requireAccount } from "../accounts.js";
 import { fromMinorUnits } from "../../lib/money.js";
 import { formatFixed, toDecimalTotals } from "../currency.js";
 import { applyRedaction } from "../../privacy/redactor.js";
+import { tryExecute } from "../../lib/result.js";
 import * as z from "zod";
 import { parseInput, safeParse, str, num, int, json } from "../../lib/validate.js";
 
@@ -168,7 +170,7 @@ async function listAccounts(opts: ListAccountsOpts, command: Command): Promise<v
     getAccountBalances(db, type ? { type } : {}).map(presentAccount),
     redactionEnabled(opts),
     ACCOUNT_REDACT_FIELDS,
-    { userName: config.userName, contextPath: config.contextPath },
+    config,
   );
   emitList(rows, ACCOUNT_COLUMNS);
   emitSummary({ total: rows.length, returned: rows.length });
@@ -187,20 +189,17 @@ async function treeAccounts(opts: TreeAccountsOpts, command: Command): Promise<v
     getBalanceTree(db, type ? { type } : {}).map(presentTreeNode),
     redactionEnabled(opts),
     ACCOUNT_REDACT_FIELDS,
-    { userName: config.userName, contextPath: config.contextPath },
+    config,
   );
-  const mode = currentMode();
-  if (mode.json) {
-    // One object per root so every stdout line stays a single JSON object.
-    for (const root of roots) emit(root);
-    emitSummary({ roots: roots.length });
-    return;
-  }
-  if (mode.tty) {
-    renderTreeTty(roots);
-    return;
-  }
-  renderTreePlain(roots);
+  renderByMode({
+    json: () => {
+      // One object per root so every stdout line stays a single JSON object.
+      for (const root of roots) emit(root);
+      emitSummary({ roots: roots.length });
+    },
+    tty: () => renderTreeTty(roots),
+    plain: () => renderTreePlain(roots),
+  });
 }
 
 async function showAccount(
@@ -228,7 +227,7 @@ async function showAccount(
       },
       redactionEnabled(opts),
       ACCOUNT_REDACT_FIELDS,
-      { userName: config.userName, contextPath: config.contextPath },
+      config,
     ),
   );
 }
@@ -338,38 +337,44 @@ async function createSingleAccount(opts: Record<string, unknown>, command: Comma
   });
 }
 
-// json/color are global flags, not per-account options.
-const NON_ACCOUNT_FLAG_KEYS = new Set(["input", "json", "color"]);
+// color is a global flag, not a per-account option; json never lands here (see output.ts's resolveMode).
+const NON_ACCOUNT_FLAG_KEYS = new Set(["input", "color"]);
 
-// One result row per item plus a summary row, exit PARTIAL(7) on any failure;
-// `account_exists` counts as an idempotent success (`duplicate: true`).
-async function createAccountsBatch(inputPath: string | undefined, command: Command): Promise<void> {
-  const items = await readStdinBatch(inputPath);
-  if (items.length === 0) fail("USAGE", "no account data provided");
-
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+/**
+ * One result row per item plus a summary row; exits PARTIAL on any failure.
+ * `account_exists` counts as success (`duplicate: true`); a throw from one
+ * item becomes that item's failure row instead of aborting the batch.
+ */
+export function createAccountsBatch(db: Database.Database, items: unknown[]): void {
   const results: Record<string, unknown>[] = [];
   let created = 0;
   let duplicates = 0;
   let failed = 0;
 
+  function failedRow(index: number, message: string): Record<string, unknown> {
+    failed++;
+    return { type: "result", index, ok: false, message };
+  }
+
   for (let index = 0; index < items.length; index++) {
     const record = asRecord(items[index]);
     if (!record) {
-      failed++;
-      results.push({ type: "result", index, ok: false, message: "each account must be a JSON object." });
+      results.push(failedRow(index, "each account must be a JSON object."));
       continue;
     }
 
     const parsed = safeParse(CREATE_ACCOUNT_SPEC, record, { aliases: CREATE_ACCOUNT_ALIASES });
     if (!parsed.ok) {
-      failed++;
-      results.push({ type: "result", index, ok: false, message: parsed.error });
+      results.push(failedRow(index, parsed.error));
       continue;
     }
 
-    const one = createOneAccount(db, parsed.value);
+    const attempt = tryExecute(() => createOneAccount(db, parsed.value));
+    if (!attempt.ok) {
+      results.push(failedRow(index, attempt.error));
+      continue;
+    }
+    const one = attempt.value;
     if (one.ok) {
       created++;
       results.push({
@@ -388,8 +393,7 @@ async function createAccountsBatch(inputPath: string | undefined, command: Comma
       results.push({ type: "result", index, ok: true, id: parsed.value.id, duplicate: true });
       continue;
     }
-    failed++;
-    results.push({ type: "result", index, ok: false, message: one.message });
+    results.push(failedRow(index, one.message));
   }
 
   const mode = currentMode();
@@ -404,12 +408,20 @@ async function createAccountsBatch(inputPath: string | undefined, command: Comma
   if (failed > 0) process.exitCode = EXIT.PARTIAL;
 }
 
-async function createAccount(opts: Record<string, unknown>, command: Command): Promise<void> {
+interface CreateAccountOpts extends Record<string, unknown> {
+  input?: string;
+}
+
+async function createAccount(opts: CreateAccountOpts, command: Command): Promise<void> {
   if (opts.input !== undefined) {
     if (Object.keys(opts).some((k) => opts[k] !== undefined && !NON_ACCOUNT_FLAG_KEYS.has(k))) {
       fail("USAGE", "--input and per-account flags are mutually exclusive");
     }
-    await createAccountsBatch(opts.input as string, command);
+    const items = await readStdinBatch(opts.input);
+    if (items.length === 0) fail("USAGE", "no account data provided");
+    const config = requireConfig(command);
+    const db = await openDb(config.dbPath);
+    createAccountsBatch(db, items);
     return;
   }
   await createSingleAccount(opts, command);
@@ -544,25 +556,31 @@ async function updateAccount(
 
   const config = requireConfig(command);
   const db = await openDb(config.dbPath);
-  const result: Record<string, unknown> = { id };
 
-  if (name !== undefined) {
-    const changes = renameAccount(db, id, name);
-    if (changes === 0) failAccountNotFound(db, id);
-    result.name = name;
-    result.renamed = true;
-  }
+  // One transaction: a metadata patch that throws must not leave the rename committed.
+  const result = db.transaction((): Record<string, unknown> => {
+    const out: Record<string, unknown> = { id };
 
-  if (Object.keys(patch).length > 0) {
-    let metaResult;
-    try {
-      metaResult = updateAccountMetadata(db, id, patch);
-    } catch (err) {
-      mapNotFoundError(err);
+    if (name !== undefined) {
+      const changes = renameAccount(db, id, name);
+      if (changes === 0) failAccountNotFound(db, id);
+      out.name = name;
+      out.renamed = true;
     }
-    result.before = metaResult.before;
-    result.after = metaResult.after;
-  }
+
+    if (Object.keys(patch).length > 0) {
+      let metaResult;
+      try {
+        metaResult = updateAccountMetadata(db, id, patch);
+      } catch (err) {
+        mapNotFoundError(err);
+      }
+      out.before = metaResult.before;
+      out.after = metaResult.after;
+    }
+
+    return out;
+  })();
 
   emitObject(result);
 }
@@ -575,7 +593,7 @@ export function registerAccounts(program: Command): void {
       "after",
       [
         "",
-        "Behavior: manages the chart of accounts. Ids are <currency>:<type>:<path> — the currency comes first and every id needs it: thb:asset:bank:kbank, usd:expense:food. Types are asset, liability, income, expense, equity; thb:asset is a ledger's type root.",
+        "Behavior: manages the chart of accounts. Ids are <currency>:<type>:<path>; the currency comes first and every id needs it: thb:asset:bank:kbank, usd:expense:food. Types are asset, liability, income, expense, equity; thb:asset is a ledger's type root.",
         "Typical flow: match to reuse an existing account before create; read balances with tree or show.",
         "One ledger per currency: an account's currency is its id prefix, and a transaction's two accounts must share it. A USD balance lives under usd:, never under thb:.",
         "Example: oled accounts match --query groceries --json",
