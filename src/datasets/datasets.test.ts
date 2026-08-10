@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { countryFileSchema } from "./institutions.js";
+import { countryFileSchema, institutionsDataset } from "./institutions.js";
 import { findCountryDefaults, availableCountries } from "./defaults.js";
 import { noiseTokens } from "./noise.js";
 import { listDatasets, readDataset } from "./index.js";
@@ -48,6 +48,11 @@ describe("institutions dataset", () => {
       institutions: [{ code: "ACME", kind: "bank" }],
     });
     expect(missingLabel.success).toBe(false);
+  });
+
+  it("flattens to no rows when a country file omits the institutions key", () => {
+    const parsed = countryFileSchema.parse({ country: "XX" });
+    expect(institutionsDataset.flatten(parsed)).toEqual([]);
   });
 });
 
