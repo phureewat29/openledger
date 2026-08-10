@@ -7,6 +7,7 @@ import {
   type RawTransactionInput,
   type LinkedTransactionHeader,
   type LinkedTransactionLeg,
+  type TransactionDropReason,
 } from "../../ingest/commit.js";
 import { EXIT, asRecord, currentMode, emit, emitObject, emitSummary, fail, readStdinBatch } from "../output.js";
 import { openDb } from "../db.js";
@@ -14,9 +15,12 @@ import { requireConfig } from "./config.js";
 import { newBatchId } from "../../lib/ids.js";
 import { errorMessage } from "../../lib/result.js";
 import { findFileById } from "../../db/queries/files.js";
+import { countTransactionsBySourceFile } from "../../db/queries/transactions.js";
+import { countQuestions } from "../../db/queries/questions.js";
 import * as z from "zod";
 import { safeParse, str, num, json } from "../../lib/validate.js";
 import type { MerchantUpsertInput } from "../../db/queries/merchants.js";
+import { requireFile } from "../files.js";
 
 interface CommitIngestOpts {
   file?: string;
@@ -82,10 +86,13 @@ function failRow(counters: Counters, index: number, message: string): Record<str
   return failOutcome(counters, index, { reason: "dirty_input", message, raisedQuestions: 0 });
 }
 
+// The batch loop's own catch adds `unexpected_error`, unreachable from the ingest layer.
+type RowFailureReason = TransactionDropReason | "unexpected_error";
+
 function failOutcome(
   counters: Counters,
   index: number,
-  outcome: { reason: string; message: string; raisedQuestions: number; unopenedLedger?: string },
+  outcome: { reason: RowFailureReason; message: string; raisedQuestions: number; unopenedLedger?: string },
 ): Record<string, unknown> {
   counters.failed++;
   return {
@@ -112,22 +119,14 @@ function commitCompoundRow(
   const header: LinkedTransactionHeader = { ...parsedHeader.value, source_file_id: row.fileId };
 
   const legs: LinkedTransactionLeg[] = [];
-  let legError: string | undefined;
   for (const rawLeg of linked) {
     const legRecord = asRecord(rawLeg);
-    if (!legRecord) {
-      legError = "each linked leg must be a JSON object.";
-      break;
-    }
+    if (!legRecord) return failRow(counters, row.index, "each linked leg must be a JSON object.");
     const parsedLeg = safeParse(LINKED_LEG_SPEC, legRecord, { aliases: LEG_ALIASES });
-    if (!parsedLeg.ok) {
-      legError = parsedLeg.error;
-      break;
-    }
+    if (!parsedLeg.ok) return failRow(counters, row.index, parsedLeg.error);
     // Cast is a lie for malformed rows: validateRawTransaction rejects those.
     legs.push({ ...parsedLeg.value, amount: legRecord.amount as number });
   }
-  if (legError !== undefined) return failRow(counters, row.index, legError);
 
   const outcome = commitLinkedTransactions(db, row.ctx, header, legs);
   counters.raisedTotal += outcome.raisedQuestions;
@@ -238,12 +237,13 @@ export async function commitIngest(opts: CommitIngestOpts, command: Command): Pr
 
   // An unknown --file id must fail before insert, else a null file hash breaks id determinism.
   // Held for the summary: a commit writes transactions, never `files`, so the status stays current.
-  const fileRow = opts.file ? findFileById(db, opts.file) : null;
-  if (opts.file && !fileRow) {
-    fail("NOT_FOUND", `no ingest entry: ${opts.file}`, {
-      hint: "run `oled ingest list --json` for the file ids, or drop --file to commit rows with no source file",
-    });
-  }
+  const fileRow = opts.file
+    ? requireFile(
+        db,
+        opts.file,
+        "run `oled ingest list --json` for the file ids, or drop --file to commit rows with no source file",
+      )
+    : null;
 
   // Must be non-null: raise() no-ops when batchId is null, silently dropping every question.
   const batchId = newBatchId();
@@ -279,6 +279,10 @@ export async function commitIngest(opts: CommitIngestOpts, command: Command): Pr
       ? `the file stays pending until \`oled ingest done ${fileRow.id}\` closes it`
       : null;
 
+  // Queried after the row loop so the cumulative figures include this batch.
+  const fileTransactionCount = fileRow ? countTransactionsBySourceFile(db, fileRow.id) : null;
+  const fileOpenQuestionCount = fileRow ? countQuestions(db, { file_id: fileRow.id }) : null;
+
   const mode = currentMode();
   if (mode.json) {
     for (const r of results) emit(r);
@@ -288,7 +292,14 @@ export async function commitIngest(opts: CommitIngestOpts, command: Command): Pr
       duplicates: counters.duplicates,
       failed: counters.failed,
       raised_questions: counters.raisedTotal,
-      ...(fileRow ? { file_id: fileRow.id, file_status: fileRow.status } : {}),
+      ...(fileRow
+        ? {
+            file_id: fileRow.id,
+            file_status: fileRow.status,
+            file_transaction_count: fileTransactionCount,
+            file_open_question_count: fileOpenQuestionCount,
+          }
+        : {}),
       ...(pendingHint ? { hint: pendingHint } : {}),
     });
   } else {
@@ -296,6 +307,11 @@ export async function commitIngest(opts: CommitIngestOpts, command: Command): Pr
     process.stdout.write(
       `\nbatch ${batchId}: ${counters.posted} posted, ${counters.duplicates} duplicate(s), ${counters.failed} failed, ${counters.raisedTotal} question(s) raised\n`,
     );
+    if (fileRow) {
+      process.stdout.write(
+        `file ${fileRow.id}: ${fileTransactionCount} transactions, ${fileOpenQuestionCount} open questions\n`,
+      );
+    }
     if (pendingHint) process.stdout.write(`${pendingHint}\n`);
   }
 

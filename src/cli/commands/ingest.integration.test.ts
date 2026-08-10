@@ -491,11 +491,15 @@ describe("ingest commit v2 (subprocess)", () => {
     expect(balanceAfter - balanceBefore).toBeCloseTo(42, 5);
   });
 
-  it("commits a compound (linked) salary split under one shared group", async () => {
+  it("commits a compound (linked) salary split under one shared group, one leg per file_transaction_count", async () => {
+    const fileId = "sf-compound";
     const db = readDb();
     createAccount(db, { id: "thb:asset:bank", name: "Bank", type: "asset", parent_id: "thb:asset" });
     createAccount(db, { id: "thb:income:salary", name: "Salary", type: "income", parent_id: "thb:income" });
     createAccount(db, { id: "thb:expense:tax", name: "Tax", type: "expense", parent_id: "thb:expense" });
+    db.prepare(
+      `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
+    ).run(fileId, "/tmp/compound.pdf", "compound-hash", "application/pdf");
     db.close();
 
     const item = JSON.stringify({
@@ -507,7 +511,9 @@ describe("ingest commit v2 (subprocess)", () => {
       ],
     });
 
-    const { stdout, code } = await runCLI(["ingest", "commit", "--json"], { stdin: item });
+    const { stdout, code } = await runCLI(["ingest", "commit", "--file", fileId, "--json"], {
+      stdin: item,
+    });
     expect(code).toBe(0);
 
     const objs = parseNdjson(stdout);
@@ -525,6 +531,11 @@ describe("ingest commit v2 (subprocess)", () => {
     const rows = db2.prepare("SELECT id FROM transactions WHERE group_id = ?").all(r.group_id);
     db2.close();
     expect(rows).toHaveLength(2);
+
+    // One compound row posts once but writes two ledger transactions: the cumulative
+    // file count tracks transactions, not commit-batch items.
+    const summary = objs.find((o) => o.type === "summary");
+    expect(summary).toMatchObject({ posted: 1, file_transaction_count: 2 });
   }, 30000);
 
   it("rejects a cross-currency transaction with a currency_mismatch question", async () => {
@@ -899,8 +910,101 @@ describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
     });
     expect(code).toBe(0);
     const summary = parseNdjson(stdout).find((o) => o.type === "summary");
-    expect(summary).toMatchObject({ file_id: fileId, file_status: "pending" });
+    expect(summary).toMatchObject({
+      file_id: fileId,
+      file_status: "pending",
+      file_transaction_count: 1,
+      file_open_question_count: 0,
+    });
     expect(summary.hint).toContain(`oled ingest done ${fileId}`);
+
+    // A duplicate re-commit posts nothing new: the cumulative transaction count stays flat.
+    const dup = await runCLI(["ingest", "commit", "--file", fileId, "--json"], { stdin: ndjson });
+    expect(dup.code).toBe(0);
+    const dupSummary = parseNdjson(dup.stdout).find((o) => o.type === "summary");
+    expect(dupSummary).toMatchObject({
+      posted: 0,
+      duplicates: 1,
+      file_transaction_count: 1,
+      file_open_question_count: 0,
+    });
+
+    // A row an account resolver can't place raises a question, and the file's open count follows.
+    const questionRow = JSON.stringify({
+      date: "2026-03-02",
+      description: "Unresolvable charge",
+      debit_account: "mysterious-pending-hint-xyz",
+      credit_account: "thb:asset:cash",
+      amount: 5,
+      row_index: 901,
+    });
+    const questioned = await runCLI(["ingest", "commit", "--file", fileId, "--json"], {
+      stdin: questionRow,
+    });
+    expect(questioned.code).toBe(0);
+    const questionedSummary = parseNdjson(questioned.stdout).find((o) => o.type === "summary");
+    expect(questionedSummary).toMatchObject({
+      posted: 1,
+      raised_questions: 1,
+      file_transaction_count: 2,
+      file_open_question_count: 1,
+    });
+  }, 30000);
+
+  it("re-piping a batch of failed rows leaves the file's open question count where it was", async () => {
+    const fileId = "sf-refusal-retry";
+    const db = readDb();
+    try {
+      db.prepare(
+        `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'ingested')`,
+      ).run(fileId, "/tmp/refusal-retry.pdf", "refusal-retry-hash", "application/pdf");
+    } finally {
+      db.close();
+    }
+
+    // No eur ledger is open here, so every row is refused before it posts.
+    const batch = (debitAccount: string) =>
+      [910, 911, 912]
+        .map((row_index) =>
+          JSON.stringify({
+            date: "2026-04-01",
+            description: `Retry row ${row_index}`,
+            debit_account: debitAccount,
+            credit_account: "thb:asset:cash",
+            amount: 20,
+            row_index,
+          }),
+        )
+        .join("\n");
+
+    async function commit(debitAccount: string): Promise<Record<string, unknown>> {
+      const { stdout } = await runCLI(["ingest", "commit", "--file", fileId, "--json"], {
+        stdin: batch(debitAccount),
+      });
+      return parseNdjson(stdout).find((o) => o.type === "summary");
+    }
+
+    const first = await commit("eur:expense:food");
+    expect(first).toMatchObject({ posted: 0, failed: 3, raised_questions: 3, file_open_question_count: 3 });
+
+    // The rows are unchanged, so they are the same three questions, not six then nine.
+    for (const pass of [2, 3]) {
+      const again = await commit("eur:expense:food");
+      expect(again, `pass ${pass}`).toMatchObject({
+        failed: 3,
+        raised_questions: 0,
+        file_open_question_count: 3,
+      });
+    }
+
+    // Fixing the account posts all three, and takes their refusals with them.
+    const fixed = await commit("thb:expense:food");
+    expect(fixed).toMatchObject({
+      posted: 3,
+      failed: 0,
+      file_transaction_count: 3,
+      file_open_question_count: 0,
+    });
   }, 30000);
 });
 
