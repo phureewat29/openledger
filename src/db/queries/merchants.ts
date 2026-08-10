@@ -88,15 +88,13 @@ export function upsertMerchant(
     }
   } else {
     const id = `m:${randomUUID()}`;
-    db.prepare(
-      `INSERT INTO merchants (id, canonical_name, default_account_id) VALUES (?, ?, ?)`,
-    ).run(id, canonical, input.default_account_id ?? null);
-    merchant = {
-      id,
-      canonical_name: canonical,
-      default_account_id: input.default_account_id ?? null,
-      created_at: new Date().toISOString(),
-    };
+    // RETURNING captures the created_at DEFAULT the insert assigned.
+    merchant = db
+      .prepare(
+        `INSERT INTO merchants (id, canonical_name, default_account_id) VALUES (?, ?, ?)
+         RETURNING id, canonical_name, default_account_id, created_at`,
+      )
+      .get(id, canonical, input.default_account_id ?? null) as MerchantRow;
   }
 
   const aliasConflict = input.alias

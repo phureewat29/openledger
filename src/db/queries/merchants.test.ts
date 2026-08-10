@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import Database from "libsql";
 import {
   upsertMerchant,
@@ -75,6 +75,17 @@ describe("upsertMerchant", () => {
     expect(m.id).toMatch(/^m:/);
     expect(m.canonical_name).toBe("Starbucks");
     expect(m.default_account_id).toBeNull();
+  });
+
+  it("returns the stored created_at, not one fabricated from the JS clock", () => {
+    // A frozen Date diverges from SQLite's own `now`, so a fabricated timestamp cannot pass.
+    vi.useFakeTimers({ now: new Date("2020-01-01T00:00:00Z"), toFake: ["Date"] });
+    try {
+      const m = upsertMerchant(db, { canonical_name: "Starbucks" }, TH_NOISE);
+      expect(m.created_at).toBe(findMerchantById(db, m.id)!.created_at);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns the same merchant on second upsert by canonical_name", () => {
