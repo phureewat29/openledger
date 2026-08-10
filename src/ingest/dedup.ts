@@ -1,4 +1,5 @@
 import type Database from "libsql";
+import { sortBy, sumBy } from "es-toolkit";
 import {
   listDuplicateCandidateTransactions,
   voidTransactionAsMirror,
@@ -28,31 +29,34 @@ export function findDuplicateTransactions(
   return clusterDuplicateCandidates(rows, toleranceDays);
 }
 
-/** Voids exact matches into the earliest transaction, never deletes: a
- *  delete's `void_of` self-FK (ON DELETE SET NULL) would un-void an
+/** Voids cross-statement mirrors into the earliest transaction, never deletes:
+ *  a delete's `void_of` self-FK (ON DELETE SET NULL) would un-void an
  *  already-voided mirror. */
 export function autoMergeStrictDuplicateTransactions(db: Database.Database): { merged: number } {
-  let merged = 0;
-  for (const group of findDuplicateTransactions(db)) {
-    merged += autoMergeStrictGroup(db, group);
-  }
+  const merged = sumBy(findDuplicateTransactions(db), (group) => autoMergeStrictGroup(db, group));
   return { merged };
 }
 
+/** One cluster: how many of its rows were voided into the earliest. */
 function autoMergeStrictGroup(db: Database.Database, group: DuplicateTransactionRow[]): number {
-  const sorted = [...group].sort((a, b) => {
-    const d = a.date.localeCompare(b.date);
-    return d !== 0 ? d : a.id.localeCompare(b.id);
-  });
+  const sorted = sortBy(group, ["date", "id"]);
   const head = sorted[0];
   if (!head.merchant_id || !head.source_file_id) return 0;
+
+  // Two contenders from one statement make every pairing a guess, and the wrong
+  // guess voids a real purchase. `transactions dedupe` still lists them.
+  const contenders = sorted.filter(
+    (r) => r.date === head.date && r.amount === head.amount && r.merchant_id === head.merchant_id,
+  );
+  if (new Set(contenders.map((r) => r.source_file_id)).size !== contenders.length) return 0;
 
   let merged = 0;
   for (let i = 1; i < sorted.length; i++) {
     const cand = sorted[i];
     if (
       cand.merchant_id === head.merchant_id &&
-      cand.source_file_id === head.source_file_id &&
+      !!cand.source_file_id &&
+      cand.source_file_id !== head.source_file_id &&
       cand.date === head.date &&
       cand.amount === head.amount
     ) {

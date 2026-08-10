@@ -10,7 +10,7 @@ import {
   type CLIRunner,
   type Sandbox,
 } from "../fixtures/sandbox.js";
-import { encryptedPdf, type PageKind } from "../fixtures/pdf.js";
+import { encryptedPdf, textPdf, type PageKind } from "../fixtures/pdf.js";
 
 let sandbox: Sandbox;
 let runCLI: CLIRunner;
@@ -217,7 +217,13 @@ describe("lifecycle against a local ledger (dist subprocess)", () => {
       expect(typeof dogfood.merchant.merchant_id).toBe("string");
 
       expect(summary, "ingest commit must end with a summary row").toBeDefined();
-      expect(summary).toMatchObject({ posted: 3, duplicates: 0, failed: 0 });
+      expect(summary).toMatchObject({
+        posted: 3,
+        duplicates: 0,
+        failed: 0,
+        file_transaction_count: 3,
+        file_open_question_count: 1,
+      });
       expect(summary.raised_questions).toBeGreaterThan(0);
 
       salaryId = salary.transaction_id;
@@ -297,10 +303,11 @@ describe("lifecycle against a local ledger (dist subprocess)", () => {
     30000,
   );
 
-  // Auto-merge only matches rows carrying both a merchant_id and a source_file_id; a manual
-  // add has neither, so its auto-merge coverage rides on a second file-sourced duplicate row.
+  // Auto-merge collapses cross-statement mirrors only: same merchant/date/amount from a
+  // *different* source file. A manual add carries no file at all, so its coverage rides on a
+  // duplicate row committed under a second prepared statement.
   it(
-    "transactions add creates a manual row, and dedupe --auto-merge collapses one file-sourced duplicate",
+    "transactions add creates a manual row, and dedupe --auto-merge collapses one cross-statement duplicate",
     async () => {
       const manual = parseOne(
         (
@@ -324,6 +331,12 @@ describe("lifecycle against a local ledger (dist subprocess)", () => {
       expect(manual.transaction_id).toMatch(/^tx:/);
       manualDupId = manual.transaction_id;
 
+      const dupStatementPath = join(sandbox.dataDir, "corgi-bank", "card-statement-2026-06.pdf");
+      writeFileSync(dupStatementPath, textPdf());
+      const dupFileId = parseOne(
+        (await ok(["ingest", "prepare", dupStatementPath])).stdout,
+      ).file_id as string;
+
       const dup = {
         date: "2026-06-02",
         description: "Pet Paradise Dog Food (duplicate posting)",
@@ -336,7 +349,7 @@ describe("lifecycle against a local ledger (dist subprocess)", () => {
         merchant: { canonical_name: "Pet Paradise", alias: "PET PARADISE DOG FOOD" },
       };
       const dupCommit = parseNdjson(
-        (await ok(["ingest", "commit", "--file", fileId], JSON.stringify(dup))).stdout,
+        (await ok(["ingest", "commit", "--file", dupFileId], JSON.stringify(dup))).stdout,
       );
       expect(dupCommit.find((o) => o.type === "result")).toMatchObject({ ok: true, duplicate: false });
 
