@@ -8,6 +8,7 @@ import {
   type ServerFailure,
 } from "./ocr.js";
 import {
+  DEFAULT_RENDER,
   probePdfPages,
   renderPdfPages,
   type PageImage,
@@ -17,10 +18,8 @@ import {
 import { readerFor, verdictOf, type TextLayer } from "./route.js";
 import type { SourceKind } from "./source.js";
 
-/** The agent route's raster spec, deliberately the same one the built-in OCR
- *  model card renders at: 200 dpi keeps statement glyphs legible, 1800 px stays
- *  under common vision-model input limits. */
-export const PAGE_RENDER: RenderSpec = { dpi: 200, maxLongestDimPx: 1800 };
+// Same spec the built-in OCR fallback card renders at; see pdf.ts's DEFAULT_RENDER.
+export const PAGE_RENDER = DEFAULT_RENDER;
 
 export interface TextPage {
   page: number;
@@ -159,11 +158,18 @@ export async function extractFile(
     };
   }
 
+  if (reader === "agent") {
+    const images = await pageImages(input, PAGE_RENDER);
+    if (!images.ok) return { ok: false, reason: "pdf_unreadable", message: images.error };
+    return { ok: true, value: { kind: "images", textLayer, ...images.value } };
+  }
+
+  // reader === "ocr": the table only reaches here with ocr configured.
+  if (!ocr) throw new Error(`reader "ocr" selected with no OCR settings configured`);
+
   // Resolved before rendering: the served id picks the card, and the card carries the render spec.
-  const resolved = ocr ? await resolveServedModel(ocr) : null;
-  const images = await pageImages(input, resolved ? resolved.render : PAGE_RENDER);
+  const resolved = await resolveServedModel(ocr);
+  const images = await pageImages(input, resolved.render);
   if (!images.ok) return { ok: false, reason: "pdf_unreadable", message: images.error };
-  // The "agent" arm: `readerFor` only returns it with no endpoint configured.
-  if (!resolved) return { ok: true, value: { kind: "images", textLayer, ...images.value } };
   return ocrExtraction(await ocrPages(images.value.pages, resolved), resolved, textLayer);
 }

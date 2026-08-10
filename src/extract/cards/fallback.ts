@@ -1,3 +1,4 @@
+import { DEFAULT_RENDER } from "../pdf.js";
 import type { ModelCard } from "./index.js";
 
 /** Fallback for any model no family claims: a plain markdown ask, greedy decoding. */
@@ -9,5 +10,5 @@ export const fallbackModelCard: ModelCard = {
   prompt:
     "Convert this page to markdown. Preserve all text, numbers, and tables exactly as they appear.",
   params: { temperature: 0, top_p: 1, max_tokens: 4096 },
-  render: { dpi: 200, maxLongestDimPx: 1800 },
+  render: DEFAULT_RENDER,
 };

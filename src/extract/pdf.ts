@@ -107,6 +107,10 @@ export interface RenderSpec {
   maxLongestDimPx: number;
 }
 
+/** 200 dpi keeps statement glyphs legible, 1800 px stays under common
+ *  vision-model input limits; each model card may declare its own. */
+export const DEFAULT_RENDER: RenderSpec = { dpi: 200, maxLongestDimPx: 1800 };
+
 /** One page as image bytes, 1-based. */
 export interface PageImage {
   page: number;
