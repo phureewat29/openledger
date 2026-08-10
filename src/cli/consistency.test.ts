@@ -182,7 +182,7 @@ describe("docs consistency (no subprocesses)", () => {
 const PLUGIN_MANIFEST = JSON.parse(readFileSync(resolve(repoRoot, "plugin.json"), "utf8")) as Record<string, unknown>;
 const PACKAGE = JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8")) as Record<string, unknown>;
 
-// Permitted top-level fields of the closed manifest schema (spec §5.2).
+// Permitted top-level fields of the closed manifest schema.
 const PERMITTED_MANIFEST_FIELDS = [
   "$schema", "name", "version", "description", "author",
   "homepage", "repository", "license", "keywords", "extensions",

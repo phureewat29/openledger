@@ -40,7 +40,7 @@ function shiftPoint(value: number, places: number): number {
 
 /**
  * Rounds half away from zero (Math.round ties toward +Infinity: 100.5->101 but
- * -100.5->-100). Signed input is real: `adjustAccountBalance` converts a signed target balance.
+ * -100.5 -> -100). Signed input is real: `adjustAccountBalance` converts a signed target balance.
  */
 export function toMinorUnits(decimal: number, currency: string): number {
   const shifted = shiftPoint(decimal, minorUnitExponent(currency));
