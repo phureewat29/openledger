@@ -28,6 +28,9 @@ export interface QuestionRow {
   created_at: string;
 }
 
+const ROW_COLUMNS =
+  "id, batch_id, file_id, transaction_id, account_id, kind, prompt, context_json, deferred_until, created_at";
+
 interface ClosedQuestion {
   prompt: string;
   kind: string | null;
@@ -55,17 +58,21 @@ export function recordQuestion(db: Database.Database, input: RecordQuestionInput
   return id;
 }
 
+export function findQuestionById(db: Database.Database, id: string): QuestionRow | null {
+  return (
+    (db.prepare(`SELECT ${ROW_COLUMNS} FROM questions WHERE id = ?`).get(id) as
+      | QuestionRow
+      | undefined) ?? null
+  );
+}
+
 /** Hard-deletes the row rather than marking it closed. */
 export function closeQuestion(
   db: Database.Database,
   id: string,
   answer: string,
 ): ClosedQuestion | null {
-  const row = db
-    .prepare(`SELECT prompt, kind, context_json FROM questions WHERE id = ?`)
-    .get(id) as
-    | { prompt: string; kind: string | null; context_json: string | null }
-    | undefined;
+  const row = findQuestionById(db, id);
   if (!row) return null;
   db.prepare(`DELETE FROM questions WHERE id = ?`).run(id);
   return {
@@ -81,7 +88,31 @@ function extractRuleKey(contextJson: string | null): string | null {
   return typeof parsed?.rule_key === "string" ? parsed.rule_key : null;
 }
 
-interface CountQuestionsScope {
+/**
+ * A question's `row_key` is the source row it is about, not a signature to learn
+ * a rule from — that is `rule_key`'s job, and a one-off row address would teach
+ * it nothing. `json_extract` yields NULL for a null context, which never equals
+ * a bound key, so questions carrying neither are untouched by both queries.
+ */
+const ROW_KEY_SQL = "json_extract(context_json, '$.row_key')";
+
+/** Deferred rows count: a deferred question is still open, so re-raising it
+ *  would leave the row asking twice. */
+export function findQuestionByRowKey(db: Database.Database, rowKey: string): QuestionRow | null {
+  return (
+    (db.prepare(`SELECT ${ROW_COLUMNS} FROM questions WHERE ${ROW_KEY_SQL} = ?`).get(rowKey) as
+      | QuestionRow
+      | undefined) ?? null
+  );
+}
+
+/** Closing is deletion here as in `closeQuestion`; a row that posted has nothing
+ *  left to answer, and no answer worth recording. */
+export function deleteQuestionsByRowKey(db: Database.Database, rowKey: string): void {
+  db.prepare(`DELETE FROM questions WHERE ${ROW_KEY_SQL} = ?`).run(rowKey);
+}
+
+interface QuestionScope {
   file_id?: string;
   transaction_id?: string;
   account_id?: string;
@@ -90,35 +121,36 @@ interface CountQuestionsScope {
   includeDeferred?: boolean;
 }
 
+// listQuestions/countQuestions hide deferred rows by default until the timestamp passes (includeDeferred: true shows all).
 const ACTIVE_DEFERRED_CLAUSE =
   `(deferred_until IS NULL OR deferred_until <= ${ISO_NOW_SQL})`;
 
-export function countQuestions(db: Database.Database, scope: CountQuestionsScope = {}): number {
+// Shared by listQuestions/countQuestions so a filtered count matches the list.
+function buildQuestionWhere(scope: QuestionScope): { whereSql: string; params: unknown[] } {
   const conditions: string[] = [];
-  const params: any[] = [];
-  if (scope.file_id)     { conditions.push("file_id = ?");     params.push(scope.file_id); }
+  const params: unknown[] = [];
+  if (scope.file_id)        { conditions.push("file_id = ?");        params.push(scope.file_id); }
   if (scope.transaction_id) { conditions.push("transaction_id = ?"); params.push(scope.transaction_id); }
-  if (scope.account_id)  { conditions.push("account_id = ?");  params.push(scope.account_id); }
+  if (scope.account_id)     { conditions.push("account_id = ?");     params.push(scope.account_id); }
   if (scope.kind)           { conditions.push("kind = ?");           params.push(scope.kind); }
   if (scope.batch_id)       { conditions.push("batch_id = ?");       params.push(scope.batch_id); }
   if (!scope.includeDeferred) conditions.push(ACTIVE_DEFERRED_CLAUSE);
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  return { whereSql, params };
+}
+
+export function countQuestions(db: Database.Database, scope: QuestionScope = {}): number {
+  const { whereSql, params } = buildQuestionWhere(scope);
   const row = db
-    .prepare(`SELECT COUNT(*) AS n FROM questions ${where}`)
+    .prepare(`SELECT COUNT(*) AS n FROM questions ${whereSql}`)
     .get(...params) as { n: number };
   return row.n;
 }
 
-/** Snake_case like CountQuestionsScope, so one filter object can feed both. */
-interface ListQuestionsOptions {
+interface ListQuestionsOptions extends QuestionScope {
   limit?: number;
   offset?: number;
-  batch_id?: string;
-  includeDeferred?: boolean;
 }
-
-const ROW_COLUMNS =
-  "id, batch_id, file_id, transaction_id, account_id, kind, prompt, context_json, deferred_until, created_at";
 
 const DEFAULT_LIST_LIMIT = 200;
 const MAX_LIST_LIMIT = 1000;
@@ -132,22 +164,18 @@ export function listQuestions(
   opts: ListQuestionsOptions = {},
 ): QuestionRow[] {
   const capped = clampQuestionsLimit(opts.limit);
-  const conditions: string[] = [];
-  const params: any[] = [];
-  if (opts.batch_id) { conditions.push("batch_id = ?"); params.push(opts.batch_id); }
-  if (!opts.includeDeferred) conditions.push(ACTIVE_DEFERRED_CLAUSE);
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const { whereSql, params } = buildQuestionWhere(opts);
   params.push(capped, clampOffset(opts.offset));
   return db.prepare(
     `SELECT ${ROW_COLUMNS}
      FROM questions
-     ${where}
-     ORDER BY created_at ASC
+     ${whereSql}
+     ORDER BY created_at ASC, id ASC
      LIMIT ? OFFSET ?`,
   ).all(...params) as QuestionRow[];
 }
 
-/** `listQuestions`/`countQuestions` hide deferred rows by default until the timestamp passes (`includeDeferred: true` shows all). */
+/** Returns false when no row matched `id`. */
 export function deferQuestion(
   db: Database.Database,
   id: string,

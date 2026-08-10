@@ -1,7 +1,15 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 
-import { recordQuestion, listQuestions, closeQuestion, countQuestions, deferQuestion } from "./questions.js";
+import {
+  recordQuestion,
+  listQuestions,
+  closeQuestion,
+  countQuestions,
+  deferQuestion,
+  deleteQuestionsByRowKey,
+  findQuestionByRowKey,
+} from "./questions.js";
 import { freshDb, seedAccount } from "../../../fixtures/db.js";
 
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -49,6 +57,36 @@ describe("questions table", () => {
     expect(listQuestions(db).map(r => r.prompt).sort()).toEqual(["a", "b", "c"]);
   });
 
+  it("orders by id when created_at ties, not by insertion/rowid order", () => {
+    // Insert out of lexicographic id order so an ORDER BY that dropped the
+    // `id ASC` tiebreak and fell back to rowid/insertion order would return
+    // e, c, a, d, b instead of the sorted a..e this asserts.
+    const insertOrder = ["cn:e", "cn:c", "cn:a", "cn:d", "cn:b"];
+    const tiedCreatedAt = "2026-01-01T00:00:00.000Z";
+    for (const id of insertOrder) {
+      db.prepare(
+        `INSERT INTO questions (id, account_id, prompt, created_at) VALUES (?, ?, ?, ?)`,
+      ).run(id, "thb:expense:food", id, tiedCreatedAt);
+    }
+    expect(listQuestions(db, { limit: 5 }).map((r) => r.id)).toEqual(
+      [...insertOrder].sort(),
+    );
+  });
+
+  it("pages tied created_at rows without skip or repeat", () => {
+    const ids = ["a", "b", "c", "d", "e"].map((k) =>
+      recordQuestion(db, { file_id: null, account_id: "thb:expense:food", kind: "uncategorized", prompt: k }),
+    );
+    db.prepare(`UPDATE questions SET created_at = '2026-01-01T00:00:00.000Z'`).run();
+
+    const seen: string[] = [];
+    for (let offset = 0; offset < ids.length; offset++) {
+      seen.push(...listQuestions(db, { limit: 1, offset }).map((r) => r.id));
+    }
+    expect(seen.sort()).toEqual([...ids].sort());
+    expect(new Set(seen).size).toBe(ids.length);
+  });
+
   it("countQuestions already supports kind and file_id scoping (pre-existing)", () => {
     insertFile(db, "sf-a");
     insertFile(db, "sf-b");
@@ -58,6 +96,59 @@ describe("questions table", () => {
     expect(countQuestions(db, { file_id: "sf-a" })).toBe(1);
     expect(countQuestions(db, { kind: "duplicate", file_id: "sf-b" })).toBe(1);
     expect(countQuestions(db, { kind: "duplicate", file_id: "sf-a" })).toBe(0);
+  });
+});
+
+describe("row_key lookups", () => {
+  let db: Database.Database;
+  beforeEach(() => {
+    db = freshDb(seedExpenseAccounts);
+  });
+
+  function record(prompt: string, context: Record<string, unknown> | null): string {
+    return recordQuestion(db, {
+      file_id: null,
+      account_id: "thb:expense:food",
+      kind: "dirty_input",
+      prompt,
+      context,
+    });
+  }
+
+  it("matches on the row_key alone, blind to rows carrying a rule_key or no context", () => {
+    const addressed = record("bad row", { row_key: "refusal:sf-a:1:3", reason: "amount" });
+    record("other row", { row_key: "refusal:sf-a:1:4" });
+    record("learnable", { rule_key: "refusal:sf-a:1:3" });
+    record("contextless", null);
+
+    expect(findQuestionByRowKey(db, "refusal:sf-a:1:3")?.id).toBe(addressed);
+    expect(findQuestionByRowKey(db, "refusal:sf-a:1:9")).toBeNull();
+  });
+
+  it("finds a deferred row: still open, so re-raising it would ask twice", () => {
+    const id = record("bad row", { row_key: "refusal:sf-a:1:3" });
+    deferQuestion(db, id, 7);
+    expect(listQuestions(db)).toHaveLength(0);
+    expect(findQuestionByRowKey(db, "refusal:sf-a:1:3")?.id).toBe(id);
+  });
+
+  it("deletes only the addressed row, leaving every other question standing", () => {
+    record("bad row", { row_key: "refusal:sf-a:1:3" });
+    const neighbour = record("other row", { row_key: "refusal:sf-a:1:4" });
+    const lookalike = record("learnable", { rule_key: "refusal:sf-a:1:3" });
+    const contextless = record("contextless", null);
+
+    deleteQuestionsByRowKey(db, "refusal:sf-a:1:3");
+
+    expect(listQuestions(db).map((q) => q.id).sort()).toEqual(
+      [neighbour, lookalike, contextless].sort(),
+    );
+  });
+
+  it("is a silent no-op when no row carries the key", () => {
+    const id = record("bad row", { row_key: "refusal:sf-a:1:3" });
+    expect(() => deleteQuestionsByRowKey(db, "refusal:sf-a:1:9")).not.toThrow();
+    expect(listQuestions(db).map((q) => q.id)).toEqual([id]);
   });
 });
 
