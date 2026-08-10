@@ -180,8 +180,14 @@ async function diagnoseEnvironment(_opts: Record<string, unknown>, command: Comm
     emit({ checks, ok });
   } else {
     emitList(checks, CHECK_COLUMNS);
-    const line = `overall: ${ok ? "ready" : "not ready"}`;
-    process.stdout.write((mode.color ? (ok ? chalk.green(line) : chalk.red(line)) : line) + "\n");
+    const failed = checks.some((c) => !c.ok);
+    const line = !ok
+      ? "OpenLedger is not ready. Fix the failed checks above, then run `oled doctor` again."
+      : failed
+        ? "OpenLedger is ready, but some checks failed. See the details above."
+        : "Everything looks good. OpenLedger is ready.";
+    const paint = !ok ? chalk.red : failed ? chalk.yellow : chalk.green;
+    process.stdout.write("\n" + (mode.color ? paint(line) : line) + "\n");
   }
   if (!ok) process.exitCode = EXIT.NOT_READY;
 }
