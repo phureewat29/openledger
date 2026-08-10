@@ -39,7 +39,7 @@ describe("insertStructuralAccount", () => {
     insertStructuralAccount(db, { ...root });
 
     expect(() =>
-      insertStructuralAccount(db, { ...root, name: "Assets (THB) — later writer" }),
+      insertStructuralAccount(db, { ...root, name: "Assets (THB), later writer" }),
     ).not.toThrow();
     expect(findAccountById(db, "thb:asset")!.name).toBe("Assets (THB)");
     expect(countAccounts(db)).toBe(1);

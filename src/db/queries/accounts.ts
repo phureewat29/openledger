@@ -2,14 +2,13 @@ import type Database from "libsql";
 import { parseJsonOrNull } from "../../lib/json.js";
 import { normalizeMaskedAccountNumber } from "../../lib/masked.js";
 import { buildPatch, type PatchField } from "../../lib/patch.js";
-import { errorMessage } from "../../lib/result.js";
 
 export const ACCOUNT_TYPES = ["asset", "liability", "income", "expense", "equity"] as const;
 
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
 /**
- * Currency is derived from the id's currency head, never stored — the same
+ * Currency is derived from the id's currency head, never stored: the same
  * rule as `currencyOf` (src/lib/ids.ts) and the cross-ledger trigger's
  * `substr(id,1,4)` compare (0001_baseline.ts). Change all three together.
  */
@@ -122,11 +121,13 @@ export function insertAccount(
   db: Database.Database,
   input: CreateAccountInput,
 ): { inserted: boolean } {
-  try {
-    db.prepare(
+  const result = db
+    .prepare(
       `INSERT INTO accounts (id, name, type, parent_id, subtype, bank_name, account_number_masked, due_day, statement_day, metadata_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO NOTHING`,
+    )
+    .run(
       input.id,
       input.name,
       input.type,
@@ -138,12 +139,7 @@ export function insertAccount(
       input.statement_day ?? null,
       input.metadata ? JSON.stringify(input.metadata) : null,
     );
-    return { inserted: true };
-  } catch (err) {
-    // Only the taken-id case is data; a CHECK/FK abort is a broken invariant, not a duplicate.
-    if (errorMessage(err).includes("UNIQUE")) return { inserted: false };
-    throw err;
-  }
+  return { inserted: result.changes > 0 };
 }
 
 /** A concurrent writer claiming the id between check and insert is a lost race, not a broken invariant. */
