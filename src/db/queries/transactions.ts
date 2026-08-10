@@ -1,10 +1,12 @@
 import type Database from "libsql";
+import { chunk } from "es-toolkit";
 import { accountCurrencySQL, accountExists } from "./accounts.js";
 import { upsertMerchant, type MerchantUpsertInput } from "./merchants.js";
 import { buildPatch, type PatchField } from "../../lib/patch.js";
 import { currencyOf, newGroupId, newTransactionId } from "../../lib/ids.js";
 import { clampLimit, clampOffset } from "../../lib/limit.js";
 import { ISO_DATE_RE } from "../../lib/date.js";
+import { STRUCTURAL_SUFFIX } from "../../lib/structural.js";
 
 /** `noise_tokens` lives here, not on `TransactionInput`, so only rows claiming an alias carry one. */
 interface TransactionMerchantInput extends MerchantUpsertInput {
@@ -118,7 +120,7 @@ export function validateTransaction(input: TransactionInput): ValidateTransactio
 const INSERT_COLUMNS =
   "id, group_id, date, description, merchant_id, raw_descriptor, source_file_id, source_page, debit_account_id, credit_account_id, amount";
 
-function insertParams(id: string, merchantId: string | null, input: TransactionInput): any[] {
+function insertParams(id: string, merchantId: string | null, input: TransactionInput): unknown[] {
   return [
     id,
     input.group_id ?? null,
@@ -192,8 +194,9 @@ const LIST_FROM = `FROM transactions t
    LEFT JOIN accounts ca ON ca.id = t.credit_account_id
    LEFT JOIN merchants m ON m.id = t.merchant_id`;
 
-/** `currency` reads off the debit account only; the cross-ledger trigger guarantees
- *  the credit side matches. Same projection as `accountCurrencySQL` (accounts.ts). */
+/** `currency` reads off the debit account only: the cross-ledger insert
+ *  trigger guarantees the credit side matches. Same projection as
+ *  `accountCurrencySQL` (accounts.ts). */
 const ROW_SELECT = `SELECT t.id, t.group_id, t.date, t.description, t.merchant_id,
         t.raw_descriptor, t.source_file_id, t.source_page,
         t.debit_account_id, t.credit_account_id, t.amount,
@@ -247,9 +250,9 @@ type ListFilters = Pick<
 
 // Shared by listTransactions/countTransactions so a filtered count matches the list.
 // `params` align positionally with the `?` placeholders in `whereSql`.
-function buildListWhere(opts: ListFilters): { whereSql: string; params: any[] } {
+function buildListWhere(opts: ListFilters): { whereSql: string; params: unknown[] } {
   const conditions: string[] = [];
-  const params: any[] = [];
+  const params: unknown[] = [];
 
   if (!opts.includeVoid) conditions.push("t.void_of IS NULL");
   if (opts.account) {
@@ -365,6 +368,9 @@ interface BulkRecategorizeSet {
 /** Spot-check sample, not the full id list. */
 const RECATEGORIZE_SAMPLE_LIMIT = 10;
 
+/** Comfortably under libsql's ~32.7k bound-parameter cap (4 fixed params + one per id). */
+const RECATEGORIZE_UPDATE_CHUNK_SIZE = 10_000;
+
 interface BulkRecategorizeResult {
   affected: number;
   /** Rows skipped because moving them would make debit == credit. */
@@ -394,11 +400,11 @@ export function bulkRecategorize(
     throw new Error("bulkRecategorize: set.accountId equals filter.accountId (no-op).");
   }
   if (!accountExists(db, to)) {
-    throw new Error(`bulkRecategorize: target account "${to}" does not exist.`);
+    throw new Error(`account "${to}" not found`);
   }
 
   const whereSql = "(t.debit_account_id = ? OR t.credit_account_id = ?)";
-  const params: any[] = [from, from];
+  const params: unknown[] = [from, from];
 
   let affected = 0;
   let skipped = 0;
@@ -428,15 +434,17 @@ export function bulkRecategorize(
     if (toUpdate.length === 0) return;
 
     sample = toUpdate.slice(0, RECATEGORIZE_SAMPLE_LIMIT);
-    const placeholders = toUpdate.map(() => "?").join(",");
-    affected = db
-      .prepare(
-        `UPDATE transactions
-           SET debit_account_id  = CASE WHEN debit_account_id  = ? THEN ? ELSE debit_account_id  END,
-               credit_account_id = CASE WHEN credit_account_id = ? THEN ? ELSE credit_account_id END
-         WHERE id IN (${placeholders})`,
-      )
-      .run(from, to, from, to, ...toUpdate).changes;
+    for (const batch of chunk(toUpdate, RECATEGORIZE_UPDATE_CHUNK_SIZE)) {
+      const placeholders = batch.map(() => "?").join(",");
+      affected += db
+        .prepare(
+          `UPDATE transactions
+             SET debit_account_id  = CASE WHEN debit_account_id  = ? THEN ? ELSE debit_account_id  END,
+                 credit_account_id = CASE WHEN credit_account_id = ? THEN ? ELSE credit_account_id END
+           WHERE id IN (${placeholders})`,
+        )
+        .run(from, to, from, to, ...batch).changes;
+    }
   });
   tx();
   return {
@@ -590,14 +598,9 @@ export interface DuplicateTransactionRow {
   credit_account_name: string | null;
 }
 
-/**
- * Adjustments legitimately repeat on one account/amount/day and aren't
- * duplicate statement rows. The `adjustments` literal duplicates
- * `STRUCTURAL_ACCOUNTS.adjustments` (src/accounts/accounts.ts) — layering
- * forbids importing it here, so keep both in sync by hand.
- */
-const NOT_ADJUSTMENT = `t.debit_account_id NOT LIKE '%:equity:adjustments'
-          AND t.credit_account_id NOT LIKE '%:equity:adjustments'`;
+/** Adjustments legitimately repeat on one account/amount/day and aren't duplicate statement rows. */
+const NOT_ADJUSTMENT = `t.debit_account_id NOT LIKE '%:${STRUCTURAL_SUFFIX.adjustments}'
+          AND t.credit_account_id NOT LIKE '%:${STRUCTURAL_SUFFIX.adjustments}'`;
 
 /** Live, non-adjustment rows eligible for duplicate detection; clustering them
  *  lives beside its caller in `src/ingest/clustering.ts`. */

@@ -335,7 +335,7 @@ describe("bulkRecategorize", () => {
 
   it("throws when the target account does not exist", () => {
     expect(() => bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "thb:expense:nope" })).toThrow(
-      /does not exist/,
+      /account "thb:expense:nope" not found/,
     );
   });
 
@@ -344,6 +344,30 @@ describe("bulkRecategorize", () => {
       /no-op/,
     );
   });
+
+  it("moves every row past the 10k chunk boundary and keeps the sample to the first ids", () => {
+    // One past the chunk size, so the UPDATE genuinely spans two chunks; a
+    // build that deleted the chunking (single IN (...) list) would still pass
+    // a 25-row seed, so this pins the boundary itself.
+    const BEYOND_CHUNK = 10_001;
+    const seed = db.transaction((): void => {
+      for (let i = 0; i < BEYOND_CHUNK; i++) {
+        insertTransaction(db, tf({
+          id: `tx:batch${i}`,
+          debit_account_id: "thb:expense:food",
+          credit_account_id: "thb:asset:cash",
+          amount: 100 + (i % 5000),
+        }));
+      }
+    });
+    seed();
+
+    const res = bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "thb:expense:transport" });
+    expect(res.affected).toBe(BEYOND_CHUNK + 2); // the seeded rows plus tx:d and tx:c from beforeEach
+    expect(res.sample_transaction_ids).toHaveLength(10);
+    expect(findTransactionById(db, "tx:batch0")?.debit_account_id).toBe("thb:expense:transport");
+    expect(findTransactionById(db, `tx:batch${BEYOND_CHUNK - 1}`)?.debit_account_id).toBe("thb:expense:transport");
+  }, 10_000);
 
   it("pre-filters rows whose other side sits on another ledger, before the cross-ledger trigger would abort the statement", () => {
     seedAccount(db, { id: "usd:asset:cash", name: "Cash (USD)" });

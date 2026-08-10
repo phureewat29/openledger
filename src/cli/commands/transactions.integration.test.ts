@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "libsql";
 import {
   createSandbox,
   writeConfig,
@@ -391,7 +392,7 @@ describe("transactions CLI integration (subprocess)", () => {
       expect(missing.code).toBe(5);
       const err = JSON.parse(missing.stderr.trim()).error;
       expect(err.code).toBe("E_NOT_FOUND");
-      expect(err.message).toMatch(/does not exist/);
+      expect(err.message).toMatch(/not found/);
     },
     45000,
   );
@@ -652,6 +653,40 @@ describe("transactions CLI integration (subprocess)", () => {
   );
 
   it(
+    "merchants update validates --default-account before renaming or claiming the alias",
+    async () => {
+      const upserted = await runCLI(["merchants", "upsert", "--name", "Validate First", "--json"]);
+      expect(upserted.code).toBe(0);
+      const merchantId = parseOne(upserted.stdout).id;
+
+      const result = await runCLI([
+        "merchants", "update",
+        "--merchant", merchantId,
+        "--name", "Renamed Too Late",
+        "--alias", "renamed-too-late-alias",
+        "--default-account", "thb:expense:does-not-exist",
+        "--json",
+      ]);
+      expect(result.code).toBe(5); // EXIT.NOT_FOUND
+      expect(result.stdout.trim()).toBe("");
+
+      const still = parseNdjson((await runCLI(["merchants", "list", "--json"])).stdout);
+      const row = still.find((m) => m.id === merchantId);
+      expect(row?.canonical_name).toBe("Validate First");
+
+      const resolved = parseOne(
+        (
+          await runCLI([
+            "merchants", "resolve", "--descriptor", "renamed-too-late-alias", "--json",
+          ])
+        ).stdout,
+      );
+      expect(resolved.found).toBe(false);
+    },
+    45000,
+  );
+
+  it(
     "accounts update: name only, metadata only, and none (USAGE)",
     async () => {
       const create = await runCLI([
@@ -701,6 +736,45 @@ describe("transactions CLI integration (subprocess)", () => {
       const none = await runCLI(["accounts", "update", "thb:asset:wallet", "--json"]);
       expect(none.code).toBe(2);
       expect(JSON.parse(none.stderr.trim()).error.code).toBe("E_USAGE");
+    },
+    45000,
+  );
+
+  it(
+    "accounts update rolls back the rename when the metadata patch throws",
+    async () => {
+      const create = await runCLI([
+        "accounts", "create",
+        "--id", "thb:asset:corrupt-meta",
+        "--name", "Before Rename",
+        "--type", "asset",
+        "--parent", "thb:asset",
+        "--json",
+      ]);
+      expect(create.code).toBe(0);
+
+      // No CLI path writes non-JSON here; corrupting the column directly is the only
+      // way to trip updateAccountMetadata's parse guard.
+      const db = new Database(sandbox.dbPath);
+      db.prepare(`UPDATE accounts SET metadata_json = ? WHERE id = ?`).run(
+        "{not json",
+        "thb:asset:corrupt-meta",
+      );
+      db.close();
+
+      const result = await runCLI([
+        "accounts", "update", "thb:asset:corrupt-meta",
+        "--name", "After Rename",
+        "--metadata", '{"points_note":"test"}',
+        "--json",
+      ]);
+      expect(result.code).toBe(6); // EXIT.INVALID
+      expect(result.stdout.trim()).toBe("");
+
+      const show = parseOne(
+        (await runCLI(["accounts", "show", "thb:asset:corrupt-meta", "--json"])).stdout,
+      );
+      expect(show.name).toBe("Before Rename");
     },
     45000,
   );
