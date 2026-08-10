@@ -4,7 +4,7 @@ import { resolve } from "path";
 import chalk from "chalk";
 import type { Command } from "commander";
 import { requireConfig } from "./config.js";
-import { currentMode, emit, runAction } from "../output.js";
+import { emit, renderByMode, runAction } from "../output.js";
 
 const OPENERS: Partial<Record<NodeJS.Platform, string>> = {
   darwin: "open",
@@ -36,25 +36,24 @@ async function openDataDir(_opts: Record<string, unknown>, command: Command): Pr
     ? await spawnOpener(cmd, dataDir)
     : `don't know how to open the file manager on ${process.platform}`;
 
-  const mode = currentMode();
-  if (mode.json) {
-    const result: { path: string; spawn_error?: string } = { path: dataDir };
-    if (spawnError) result.spawn_error = spawnError;
-    emit(result);
-    return;
-  }
-
-  if (!mode.tty) {
-    process.stdout.write(dataDir + "\n");
-    return;
-  }
-
-  console.log(chalk.dim(`Data folder: ${dataDir}`));
-  if (spawnError) {
-    console.log(
-      chalk.yellow(`Couldn't open the folder automatically: ${spawnError}. Open it manually with the path above.`),
-    );
-  }
+  renderByMode({
+    json: () => {
+      const result: { path: string; spawn_error?: string } = { path: dataDir };
+      if (spawnError) result.spawn_error = spawnError;
+      emit(result);
+    },
+    tty: () => {
+      console.log(chalk.dim(`Data folder: ${dataDir}`));
+      if (spawnError) {
+        console.log(
+          chalk.yellow(`Couldn't open the folder automatically: ${spawnError}. Open it manually with the path above.`),
+        );
+      }
+    },
+    plain: () => {
+      process.stdout.write(dataDir + "\n");
+    },
+  });
 }
 
 export function registerOpen(program: Command): void {

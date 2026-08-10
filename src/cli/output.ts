@@ -22,7 +22,7 @@ export const EXIT = {
 
 export type ExitCode = keyof typeof EXIT;
 
-// Not exported: fail() is the only construction site for CLIError.
+// Not exported: outside this module, fail() is the only construction site for CLIError.
 class CLIError extends Error {
   readonly code: ExitCode;
   readonly hint?: string;
@@ -51,13 +51,17 @@ export function fail(
 export interface OutputMode {
   /** --json was set anywhere in the command chain. */
   json: boolean;
-  /** color is suppressed (--no-color, NO_COLOR env, non-TTY, or --json). */
-  noColor: boolean;
   tty: boolean;
   color: boolean;
+  kind: "json" | "tty" | "plain";
 }
 
-// ORs flags across the ancestor chain: commander leaves a global flag wherever it was consumed.
+function deriveKind(json: boolean, tty: boolean): OutputMode["kind"] {
+  return json ? "json" : tty ? "tty" : "plain";
+}
+
+// Defensive walk: commander binds a global flag's value on the root, not the
+// subcommand that declared it, but nothing in its API guarantees that.
 function resolveMode(cmd?: Command): OutputMode {
   let json = false;
   let noColorFlag = false;
@@ -71,7 +75,14 @@ function resolveMode(cmd?: Command): OutputMode {
   const tty = !!process.stdout.isTTY;
   const envNoColor = !!process.env.NO_COLOR;
   const noColor = json || noColorFlag || envNoColor || !tty;
-  return { json, noColor, tty, color: !noColor };
+  return { json, tty, color: !noColor, kind: deriveKind(json, tty) };
+}
+
+/** `oled ingest commit` for the `commit` sub-command of `ingest`. */
+export function commandPath(cmd: Command): string {
+  const names: string[] = [];
+  for (let c: Command | null = cmd; c; c = c.parent) names.unshift(c.name());
+  return names.join(" ");
 }
 
 let current: OutputMode | null = null;
@@ -123,17 +134,19 @@ export interface Column<T = unknown> {
   align?: "left" | "right";
 }
 
+export function renderByMode(handlers: Record<OutputMode["kind"], () => void>): void {
+  handlers[currentMode().kind]();
+}
+
 export function emitList<T>(rows: T[], columns: Column<T>[]): void {
   const m = currentMode();
-  if (m.json) {
-    for (const row of rows) writeLine(process.stdout, row);
-    return;
-  }
-  if (m.tty) {
-    renderTable(rows, columns, m.color);
-    return;
-  }
-  renderPlain(rows, columns);
+  renderByMode({
+    json: () => {
+      for (const row of rows) writeLine(process.stdout, row);
+    },
+    tty: () => renderTable(rows, columns, m.color),
+    plain: () => renderPlain(rows, columns),
+  });
 }
 
 /** Human/plain output is tab-separated key/value lines, ANSI-free so it stays stable when piped. */
@@ -208,7 +221,7 @@ export async function readStdinBatch(inputPath?: string): Promise<unknown[]> {
     try {
       source = decodeUserText(readFileSync(inputPath));
     } catch (err) {
-      fail("NOT_FOUND", `cannot read --input file: ${(err as Error).message}`, {
+      fail("NOT_FOUND", `cannot read --input file: ${errorMessage(err)}`, {
         hint: "pass a readable NDJSON (or JSON array) file path",
       });
     }
@@ -225,7 +238,7 @@ export async function readStdinBatch(inputPath?: string): Promise<unknown[]> {
     try {
       return JSON.parse(source) as unknown[];
     } catch (err) {
-      fail("USAGE", `${from}: invalid JSON array: ${(err as Error).message}`);
+      fail("USAGE", `${from}: invalid JSON array: ${errorMessage(err)}`);
     }
   }
 
@@ -237,7 +250,7 @@ export async function readStdinBatch(inputPath?: string): Promise<unknown[]> {
     try {
       out.push(JSON.parse(line));
     } catch (err) {
-      fail("USAGE", `${from}: invalid JSON on line ${i + 1}: ${(err as Error).message}`, {
+      fail("USAGE", `${from}: invalid JSON on line ${i + 1}: ${errorMessage(err)}`, {
         details: { line: i + 1 },
       });
     }
@@ -251,11 +264,13 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-export function toCLIError(err: unknown): CLIError {
+export function toCLIError(err: unknown, cmd?: Command): CLIError {
   if (err instanceof CLIError) return err;
   if (err instanceof ValidationError) {
     return new CLIError("USAGE", err.message, {
-      hint: "append --help to the command for its flags and usage",
+      hint: cmd
+        ? `run \`${commandPath(cmd)} --help\` for its flags and usage`
+        : "append --help to the command for its flags and usage",
     });
   }
   if (err instanceof DBNotReadyError) {
@@ -289,8 +304,8 @@ export function mapNotFoundError(err: unknown): never {
   fail("INVALID", message);
 }
 
-function reportError(err: unknown): number {
-  const cliErr = toCLIError(err);
+function reportError(err: unknown, cmd?: Command): number {
+  const cliErr = toCLIError(err, cmd);
   if (currentMode().json) {
     const payload: Record<string, unknown> = {
       code: `E_${cliErr.code}`,
@@ -312,7 +327,9 @@ export function jsonRequested(): boolean {
 }
 
 export function reportParseError(err: unknown): void {
-  current = { json: jsonRequested(), noColor: true, tty: !!process.stdout.isTTY, color: false };
+  const json = jsonRequested();
+  const tty = !!process.stdout.isTTY;
+  current = { json, tty, color: false, kind: deriveKind(json, tty) };
   process.exitCode = reportError(err);
 }
 
@@ -322,11 +339,12 @@ export function runAction<A extends unknown[]>(
 ): (...args: A) => Promise<void> {
   return async (...args: A): Promise<void> => {
     const last = args[args.length - 1];
-    getOutputMode(last instanceof Command ? last : undefined);
+    const cmd = last instanceof Command ? last : undefined;
+    getOutputMode(cmd);
     try {
       await fn(...args);
     } catch (err) {
-      process.exitCode = reportError(err);
+      process.exitCode = reportError(err, cmd);
     }
   };
 }
