@@ -207,9 +207,7 @@ export function adjustAccountBalance(
     );
   }
 
-  const currentMinor =
-    getAccountBalances(db, { idOrParent: account.id }).find((b) => b.id === account.id)
-      ?.balance_minor ?? 0;
+  const currentMinor = getAccountBalanceMinor(db, account.id) ?? 0;
   const targetMinor = toMinorUnits(opts.targetAmount, currency);
   const deltaMinor = targetMinor - currentMinor;
   if (deltaMinor === 0) return { transactionId: null, delta: 0 };

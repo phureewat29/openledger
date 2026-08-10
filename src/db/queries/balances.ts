@@ -32,7 +32,7 @@ export function getAccountLegSums(
   db: Database.Database,
   opts: AccountLegSumsOptions = {},
 ): AccountLegSums[] {
-  const params: any[] = [];
+  const params: unknown[] = [];
   const where: string[] = [];
   if (opts.type) {
     where.push("a.type = ?");
