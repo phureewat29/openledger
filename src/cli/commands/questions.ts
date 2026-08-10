@@ -1,10 +1,12 @@
 import type { Command } from "commander";
+import { uniq } from "es-toolkit";
 import {
   listQuestions as queryQuestions,
   countQuestions,
   clampQuestionsLimit,
   closeQuestion,
   deferQuestion as deferQuestionRow,
+  findQuestionById,
   type QuestionRow,
 } from "../../db/queries/questions.js";
 import { applyRedaction } from "../../privacy/redactor.js";
@@ -91,13 +93,12 @@ async function listQuestions(opts: ListQuestionsOpts, command: Command): Promise
   // One filter object for both queries, so `total` counts what the list filtered.
   const filter = { batch_id: parsed.batch, includeDeferred: !!opts.includeDeferred };
   const rows = queryQuestions(db, { ...filter, limit: parsed.limit, offset: parsed.offset });
-  let listRows = rows.map(toListRow);
-  if (redactionEnabled(opts)) {
-    listRows = applyRedaction(listRows, true, QUESTION_REDACT_FIELDS, {
-      userName: config.userName,
-      contextPath: config.contextPath,
-    });
-  }
+  const listRows = applyRedaction(
+    rows.map(toListRow),
+    redactionEnabled(opts),
+    QUESTION_REDACT_FIELDS,
+    config,
+  );
   emitList(listRows, LIST_COLUMNS);
   const total = countQuestions(db, filter);
   emitCappedSummary(
@@ -122,17 +123,30 @@ async function answerQuestion(
   const also: string[] = parsed.also
     ? parsed.also.split(",").map((s) => s.trim()).filter(Boolean)
     : [];
-  const ids = [id, ...also];
+  // Deduped: a repeated id (e.g. the primary id echoed back into --also) must
+  // answer once, not delete once and then fail NOT_FOUND on its own second pass.
+  const ids = uniq([id, ...also]);
 
   const config = requireConfig(command);
   const db = await openDb(config.dbPath);
 
-  const results: AnsweredRow[] = [];
-  for (const qid of ids) {
-    const closed = closeQuestion(db, qid, parsed.answer);
-    if (!closed) fail("NOT_FOUND", `question "${qid}" not found`);
-    results.push({ id: qid, kind: closed.kind, answer: closed.answer, rule_key: closed.rule_key });
+  // Resolve every id before deleting any: closeQuestion is irreversible, so a
+  // bogus id partway through the list must not cost the ids that came before it.
+  const missing = ids.filter((qid) => !findQuestionById(db, qid));
+  if (missing.length > 0) {
+    const found = ids.filter((qid) => !missing.includes(qid));
+    fail(
+      "NOT_FOUND",
+      `question(s) not found: ${missing.map((m) => `"${m}"`).join(", ")}`,
+      found.length ? { hint: `these ids do exist: ${found.join(", ")}` } : undefined,
+    );
   }
+
+  const results: AnsweredRow[] = ids.map((qid) => {
+    const closed = closeQuestion(db, qid, parsed.answer);
+    if (!closed) throw new Error(`question "${qid}" vanished mid-answer`);
+    return { id: qid, kind: closed.kind, answer: closed.answer, rule_key: closed.rule_key };
+  });
   emitList(results, ANSWERED_COLUMNS);
 }
 
@@ -178,7 +192,7 @@ export function registerQuestions(program: Command): void {
     .option("--no-redact", "skip PII redaction (on by default)")
     .addHelpText(
       "after",
-      "\nThe summary row carries total/returned/has_more: raise --limit when has_more is true.",
+      "\nThe summary row carries total/returned/has_more: while has_more is true, repeat with offset += returned.",
     )
     .action(runAction(listQuestions));
 
@@ -187,6 +201,16 @@ export function registerQuestions(program: Command): void {
     .description("Answer a question")
     .option("--answer <text>", "the answer text")
     .option("--also <ids>", "additional question ids to answer")
+    .addHelpText(
+      "after",
+      [
+        "",
+        "Behavior: records the answer and closes the question. Closing is final; there is no reopen.",
+        "  Make the ledger fix first (recategorize, merge, upsert), then answer to record what you did.",
+        "  --also takes a comma-separated list: --also cn:aaa,cn:bbb. Every id must exist or nothing closes.",
+        'Example: oled questions answer cn:abc --answer "booked to thb:expense:pet:grooming" --json',
+      ].join("\n"),
+    )
     .action(runAction(answerQuestion));
 
   questions
