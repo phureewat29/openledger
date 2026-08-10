@@ -12,7 +12,7 @@ import { openDb } from "../db.js";
 import { getVersion } from "../../setup/install.js";
 import { SKILL_DIRS, SKILL_PACK_DIR } from "../../setup/locations.js";
 import { EXIT, currentMode, emit, emitList, runAction, type Column } from "../output.js";
-import { errorMessage } from "../../lib/result.js";
+import { tryExecute } from "../../lib/result.js";
 import {
   pickServedModel,
   probeOcrEndpoint,
@@ -53,12 +53,9 @@ async function dbOpenCheck(cfg: ResolvedConfig): Promise<{ check: Check; db: Dat
   if (!existsSync(cfg.dbPath)) {
     return { check: { name: "db_open", ok: false, detail: `no ledger yet: ${INIT_HINT}` }, db: null };
   }
-  try {
-    const db = await openDb(cfg.dbPath);
-    return { check: { name: "db_open", ok: true }, db };
-  } catch (err) {
-    return { check: { name: "db_open", ok: false, detail: errorMessage(err) }, db: null };
-  }
+  const opened = await tryExecute(() => openDb(cfg.dbPath));
+  if (!opened.ok) return { check: { name: "db_open", ok: false, detail: opened.error }, db: null };
+  return { check: { name: "db_open", ok: true }, db: opened.value };
 }
 
 function dataDirWritableCheck(cfg: ResolvedConfig): Check {
@@ -66,39 +63,33 @@ function dataDirWritableCheck(cfg: ResolvedConfig): Check {
   if (!existsSync(dir)) {
     return { name: "data_dir_writable", ok: false, detail: `missing: ${INIT_HINT}` };
   }
-  try {
+  const probed = tryExecute(() => {
     const probe = join(dir, `.doctor-probe-${randomUUID()}`);
     writeFileSync(probe, "ok");
     rmSync(probe, { force: true });
-    return { name: "data_dir_writable", ok: true };
-  } catch (err) {
-    return { name: "data_dir_writable", ok: false, detail: errorMessage(err) };
-  }
+  });
+  if (!probed.ok) return { name: "data_dir_writable", ok: false, detail: probed.error };
+  return { name: "data_dir_writable", ok: true };
 }
 
 async function mupdfCheck(): Promise<Check> {
-  try {
-    await import("mupdf");
-    return { name: "mupdf_loads", ok: true };
-  } catch (err) {
-    return { name: "mupdf_loads", ok: false, detail: errorMessage(err) };
-  }
+  const loaded = await tryExecute(() => import("mupdf"));
+  if (!loaded.ok) return { name: "mupdf_loads", ok: false, detail: loaded.error };
+  return { name: "mupdf_loads", ok: true };
 }
 
 function schemaTablesCheck(db: Database.Database | null): Check {
   const name = "schema_tables_present";
   if (!db) return { name, ok: false, detail: "database not open" };
 
-  try {
-    const missing = listMissingTables(db, REQUIRED_TABLES);
-    return {
-      name,
-      ok: missing.length === 0,
-      detail: missing.length ? `missing: ${missing.join(", ")}` : undefined,
-    };
-  } catch (err) {
-    return { name, ok: false, detail: errorMessage(err) };
-  }
+  const checked = tryExecute(() => listMissingTables(db, REQUIRED_TABLES));
+  if (!checked.ok) return { name, ok: false, detail: checked.error };
+  const missing = checked.value;
+  return {
+    name,
+    ok: missing.length === 0,
+    detail: missing.length ? `missing: ${missing.join(", ")}` : undefined,
+  };
 }
 
 export async function ocrEndpointCheck(source: OCRConfigSource): Promise<Check> {
