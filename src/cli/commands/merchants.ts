@@ -62,7 +62,7 @@ async function listMerchants(opts: ListMerchantsOpts, command: Command): Promise
     queryMerchants(db, { limit: parsed.limit, offset: parsed.offset }),
     redactionEnabled(opts),
     MERCHANT_REDACT_FIELDS,
-    { userName: config.userName, contextPath: config.contextPath },
+    config,
   );
   emitList(rows, MERCHANT_COLUMNS);
   emitCappedSummary(
@@ -136,6 +136,7 @@ async function updateMerchant(opts: Record<string, unknown>, command: Command): 
   const db = await openDb(config.dbPath);
   const current = findMerchantById(db, parsed.merchant);
   if (!current) fail("NOT_FOUND", `merchant "${parsed.merchant}" not found`);
+  if (parsed.default_account) requireAccount(db, parsed.default_account);
 
   const result: Record<string, unknown> = { merchant_id: parsed.merchant };
   const noise = noiseTokens(config.country);
@@ -161,7 +162,6 @@ async function updateMerchant(opts: Record<string, unknown>, command: Command): 
   }
 
   if (parsed.default_account) {
-    requireAccount(db, parsed.default_account);
     const set = setMerchantDefaultAccount(db, parsed.merchant, parsed.default_account);
     result.default_account = set.after;
   }
@@ -177,7 +177,8 @@ const SET_DEFAULT_SPEC = z.object({
 
 async function setMerchantDefault(opts: Record<string, unknown>, command: Command): Promise<void> {
   const parsed = parseInput(SET_DEFAULT_SPEC, opts);
-  if (!!parsed.account === !!parsed.clear) {
+  const account = parsed.account;
+  if (!!account === !!parsed.clear) {
     fail("USAGE", "exactly one of --account or --clear is required");
   }
 
@@ -187,16 +188,16 @@ async function setMerchantDefault(opts: Record<string, unknown>, command: Comman
     fail("NOT_FOUND", `merchant "${parsed.merchant}" not found`);
   }
 
-  if (parsed.clear) {
-    const result = clearMerchantDefaultAccount(db, parsed.merchant);
-    if (!result) fail("NOT_FOUND", `merchant "${parsed.merchant}" not found`);
-    emitObject({ merchant_id: parsed.merchant, before: result.before, after: null });
+  if (account) {
+    requireAccount(db, account);
+    const result = setMerchantDefaultAccount(db, parsed.merchant, account);
+    emitObject({ merchant_id: parsed.merchant, before: result.before, after: result.after });
     return;
   }
 
-  requireAccount(db, parsed.account!);
-  const result = setMerchantDefaultAccount(db, parsed.merchant, parsed.account!);
-  emitObject({ merchant_id: parsed.merchant, before: result.before, after: result.after });
+  const result = clearMerchantDefaultAccount(db, parsed.merchant);
+  if (!result) fail("NOT_FOUND", `merchant "${parsed.merchant}" not found`);
+  emitObject({ merchant_id: parsed.merchant, before: result.before, after: null });
 }
 
 const MERGE_MERCHANTS_SPEC = z.object({

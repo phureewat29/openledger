@@ -31,10 +31,12 @@ interface ListNotesOpts {
 async function listNotes(opts: ListNotesOpts, command: Command): Promise<void> {
   const config = requireConfig(command);
   const db = await openDb(config.dbPath);
-  const rows = applyRedaction(queryNotes(db), redactionEnabled(opts), NOTE_REDACT_FIELDS, {
-    userName: config.userName,
-    contextPath: config.contextPath,
-  });
+  const rows = applyRedaction(
+    queryNotes(db),
+    redactionEnabled(opts),
+    NOTE_REDACT_FIELDS,
+    config,
+  );
   emitList(rows, NOTE_COLUMNS);
   emitSummary({ total: rows.length, returned: rows.length });
 }
