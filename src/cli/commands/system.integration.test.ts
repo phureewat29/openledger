@@ -174,9 +174,21 @@ describe("system CLI integration (subprocess)", () => {
           hint: "run `oled --help` for the list of commands",
         },
         {
+          // A near-miss root noun gets a suggestion instead of the bare fallback.
+          args: ["account"],
+          message: "unknown command 'account'",
+          hint: "try `oled accounts`, or run `oled --help` for the list of commands",
+        },
+        {
           args: ["ingest", "bogus"],
           message: "unknown command 'bogus'",
           hint: "run `oled ingest --help` for its flags and usage",
+        },
+        {
+          // A near-miss subcommand: candidates are the parent's own commands.
+          args: ["ingest", "comit"],
+          message: "unknown command 'comit'",
+          hint: "try `oled ingest commit`, or run `oled ingest --help` for its flags and usage",
         },
         {
           args: ["transactions", "show"],
@@ -188,6 +200,12 @@ describe("system CLI integration (subprocess)", () => {
           args: ["files"],
           message: "oled files needs a subcommand",
           hint: "one of: list, show, drop",
+        },
+        {
+          // A ValidationError's hint now names the command that raised it, not a flat generic line.
+          args: ["questions", "answer", "q1"],
+          message: "--answer required",
+          hint: "run `oled questions answer --help` for its flags and usage",
         },
       ];
 

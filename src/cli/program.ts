@@ -1,7 +1,9 @@
 import { Command, Help, type CommanderError } from "commander";
+import { minBy } from "es-toolkit";
 import { createRequire } from "module";
 import { helpScreen } from "./format.js";
-import { fail, jsonRequested, runAction } from "./output.js";
+import { commandPath, fail, jsonRequested, runAction } from "./output.js";
+import { levenshtein } from "../lib/distance.js";
 
 import { registerStatus, showStatus } from "./commands/status.js";
 import { registerDoctor } from "./commands/doctor.js";
@@ -35,10 +37,14 @@ function rootHelpDesc(cmd: Command): string {
   return hint ? `${cmd.description()} ${hint}` : cmd.description();
 }
 
-function commandPath(cmd: Command): string {
-  const names: string[] = [];
-  for (let c: Command | null = cmd; c; c = c.parent) names.unshift(c.name());
-  return names.join(" ");
+/** Closest name among `commands` to `input`, within 2 edits and half of
+ *  `input`'s length: loose enough for `account` to find `accounts`, tight
+ *  enough that `bogus` finds nothing. */
+export function nearestCommand(input: string, commands: readonly Command[]): string | null {
+  const scored = commands
+    .map((c) => ({ name: c.name(), dist: levenshtein(input, c.name()) }))
+    .filter((s) => s.dist <= 2 && s.dist <= input.length / 2);
+  return minBy(scored, (s) => s.dist)?.name ?? null;
 }
 
 // Parse failures never reach runAction; map them onto the same error contract here.
@@ -53,8 +59,21 @@ function parseFailureHandler(cmd: Command): (err: CommanderError) => void {
       });
     }
     if (err.code === "commander.excessArguments" && !cmd.parent) {
-      fail("USAGE", `unknown command '${cmd.args[0]}'`, {
-        hint: "run `oled --help` for the list of commands",
+      const input = cmd.args[0];
+      const match = nearestCommand(input, cmd.commands);
+      const suggestion = match ? `try \`oled ${match}\`, or ` : "";
+      fail("USAGE", `unknown command '${input}'`, {
+        hint: `${suggestion}run \`oled --help\` for the list of commands`,
+      });
+    }
+    // A nested subcommand miss (e.g. `oled ingest comit`); candidates are the parent's own subcommands.
+    if (err.code === "commander.unknownCommand") {
+      const input = cmd.args[0];
+      const match = nearestCommand(input, cmd.commands);
+      const path = commandPath(cmd);
+      const suggestion = match ? `try \`${path} ${match}\`, or ` : "";
+      fail("USAGE", `unknown command '${input}'`, {
+        hint: `${suggestion}run \`${path} --help\` for its flags and usage`,
       });
     }
     fail("USAGE", err.message.replace(/^error:\s*/, ""), {
@@ -103,6 +122,9 @@ export function buildProgram(): Command {
       cmd.option("--config <path>", "Config file to use (default ~/.oled/config.json)");
     }
     cmd
+      // Commander's own suggestion embeds a newline that breaks the one-line
+      // error contract; nearestCommand is the only suggester.
+      .showSuggestionAfterError(false)
       .exitOverride(parseFailureHandler(cmd))
       // Under --json, the CLIError contract is the only thing allowed on stderr.
       .configureOutput({
