@@ -67,23 +67,20 @@ function extractSectionLines(context: string, heading: string): string[] {
     .filter((text) => text.length > 0 && !text.startsWith("("));
 }
 
-function applyRule(rule: SectionRule, context: string, userName: string, push: (real: string, token: string) => void) {
-  for (const line of extractSectionLines(context, rule.heading)) {
-    if (rule.skipIfUser && line.toLowerCase() === userName.toLowerCase()) continue;
-    for (const pattern of rule.patterns) {
-      const match = line.match(pattern);
-      if (!match) continue;
-      let name = match[1].trim();
-      if (rule.stripParen) name = name.replace(/\s*\(.*\)/, "").trim();
-      if (!name) break;
-      if (rule.skipIfUser && name.toLowerCase() === userName.toLowerCase()) break;
-      // "user" must never become a redaction term: it seeds context.md's Family
-      // section, and would rewrite the literal word elsewhere (e.g. file paths).
-      if (name.toLowerCase() === "user") break;
-      push(name, rule.token);
-      break;
-    }
+function nameFrom(rule: SectionRule, line: string, userName: string): string | null {
+  for (const pattern of rule.patterns) {
+    const match = line.match(pattern);
+    if (!match) continue;
+    let name = match[1].trim();
+    if (rule.stripParen) name = name.replace(/\s*\(.*\)/, "").trim();
+    if (!name) return null;
+    if (rule.skipIfUser && name.toLowerCase() === userName.toLowerCase()) return null;
+    // "user" must never become a redaction term: it seeds context.md's Family
+    // section, and would rewrite the literal word elsewhere (e.g. file paths).
+    if (name.toLowerCase() === "user") return null;
+    return name;
   }
+  return null;
 }
 
 function buildRedactions(source: RedactionSource): RedactionEntry[] {
@@ -112,7 +109,11 @@ function buildRedactions(source: RedactionSource): RedactionEntry[] {
   const context = readContext(source.contextPath);
   if (context) {
     for (const rule of SECTION_RULES) {
-      applyRule(rule, context, userName, push);
+      for (const line of extractSectionLines(context, rule.heading)) {
+        if (rule.skipIfUser && line.toLowerCase() === userName.toLowerCase()) continue;
+        const name = nameFrom(rule, line, userName);
+        if (name) push(name, rule.token);
+      }
     }
   }
 
