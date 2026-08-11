@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-    OpenLedger is the harness that keeps your AI from hallucinating your money. It turns scattered bank and credit-card statements into a source of truth your AI can build any financial app on.
+    OpenLedger is the harness that keeps your AI from hallucinating your money. It turns scattered bank and credit-card statements into a source of truth you can build any financial AI agent on.
 </p>
 
 <p align="center">
@@ -32,7 +32,7 @@ Everything stays on your machine, and what the harness returns to your AI has PI
 
 The harness carries the bookkeeping, so the model doesn't have to be huge: flash-tier models for everyday-use, can run a full loop through cleanly.
 
-By using this harness, your AI can build the app you never found: a budget tracker that fits your lifestyle, a subscription auditor, a retirement planner, a personal money coach. Your finance app is now yours to reimagine.
+On top of this harness, you can build the financial AI agent you never found: a budget tracker that fits your lifestyle, a subscription auditor, a retirement planner, a personal money coach. Your financial AI agent is now yours to build.
 
 ## Use OpenLedger with your Coding Agents
 
@@ -50,7 +50,7 @@ This repo supports [Agent Plugins](https://agent-plugins.org) package, so compli
    Configure OpenLedger to use my local OCR at http://localhost:1234/v1 (model typhoon-ocr1.5), then run `oled doctor` to confirm.
    ```
 
-   Any variant works, 2B or 3B, GGUF or not: the CLI matches `typhoon-ocr1.5` to the id the server serves. Only scans and photos need OCR; PDFs with a text layer are read directly.
+   Any variant works, 2B or 3B, GGUF or not: the CLI matches `typhoon-ocr1.5` to the id the server serves. Only scanned documents and photos need OCR; PDFs with a text layer are read directly. Recommended if you plan to handle many payment slip photos in your project.
 
 3. Add the skill:
 
