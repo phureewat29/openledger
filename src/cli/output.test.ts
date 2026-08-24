@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { Command } from "commander";
 import { ValidationError } from "../lib/validate.js";
-import { DBNotReadyError } from "../db/errors.js";
+import { DBBusyError, DBNotReadyError } from "../db/errors.js";
 import type { AccountFailure } from "../accounts/accounts.js";
 import {
   EXIT,
@@ -123,6 +123,37 @@ describe("toCLIError: classification", () => {
     expect(EXIT[result.code]).toBe(3);
     expect(result.message).toBe(message);
     expect(result.hint).toBe("run `oled config --init` to configure the harness");
+  });
+
+  const BUSY_HINT = "another oled process is using the ledger; re-run the same command in a moment";
+
+  it("maps a DBBusyError to BUSY (exit 8) with the re-run hint", () => {
+    const message = "The ledger at /tmp/db.sqlite is in use by another process and did not free up in time.";
+    const result = toCLIError(new DBBusyError(message));
+    expect(result.code).toBe("BUSY");
+    expect(EXIT[result.code]).toBe(8);
+    expect(result.message).toBe(message);
+    expect(result.hint).toBe(BUSY_HINT);
+  });
+
+  // A lock lost after the open arrives as libsql's own error; only `code` tells it apart.
+  const BUSY_CODES = ["SQLITE_BUSY", "SQLITE_BUSY_RECOVERY", "SQLITE_BUSY_SNAPSHOT"];
+
+  it.each(BUSY_CODES)("maps a %s-coded error to BUSY (exit 8)", (code) => {
+    const result = toCLIError(Object.assign(new Error("database is locked"), { code }));
+    expect(result.code).toBe("BUSY");
+    expect(EXIT[result.code]).toBe(8);
+    expect(result.hint).toBe(BUSY_HINT);
+  });
+
+  const DAMAGED_CODES = ["SQLITE_CORRUPT", "SQLITE_NOTADB"];
+
+  it.each(DAMAGED_CODES)("maps a %s-coded error to NOT_READY (exit 3) with the restore hint", (code) => {
+    const result = toCLIError(Object.assign(new Error("file is not a database"), { code }));
+    expect(result.code).toBe("NOT_READY");
+    expect(EXIT[result.code]).toBe(3);
+    expect(result.message).toBe(`The ledger file is damaged (${code}): file is not a database`);
+    expect(result.hint).toContain(".bak");
   });
 
   // Matching by wording would let a reword silently move an exit code; the type is the only signal.
@@ -284,6 +315,7 @@ const EXIT_TABLE: [keyof typeof EXIT, number][] = [
   ["NOT_FOUND", 5],
   ["INVALID", 6],
   ["PARTIAL", 7],
+  ["BUSY", 8],
 ];
 
 describe("EXIT table", () => {
@@ -291,7 +323,7 @@ describe("EXIT table", () => {
     expect(EXIT[name]).toBe(code);
   });
 
-  it("contains exactly the eight documented codes", () => {
+  it("contains exactly the nine documented codes", () => {
     expect(Object.keys(EXIT)).toEqual(EXIT_TABLE.map(([name]) => name));
   });
 });

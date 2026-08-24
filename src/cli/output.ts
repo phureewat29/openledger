@@ -6,21 +6,12 @@ import { visibleLength, ANSI_RE } from "./format.js";
 import { decodeUserText } from "../lib/text.js";
 import { ValidationError } from "../lib/validate.js";
 import { errorMessage } from "../lib/result.js";
-import { DBNotReadyError } from "../db/errors.js";
+import { DBBusyError, DBNotReadyError, isBusyError, sqliteErrorCode } from "../db/errors.js";
 import type { AccountFailure } from "../accounts/accounts.js";
+import { EXIT, type ExitCode } from "../contract/exit.js";
 
-export const EXIT = {
-  OK: 0,
-  GENERIC: 1,
-  USAGE: 2,
-  NOT_READY: 3,
-  INPUT_REQUIRED: 4,
-  NOT_FOUND: 5,
-  INVALID: 6,
-  PARTIAL: 7,
-} as const;
-
-export type ExitCode = keyof typeof EXIT;
+export { EXIT };
+export type { ExitCode };
 
 // Not exported: outside this module, fail() is the only construction site for CLIError.
 class CLIError extends Error {
@@ -264,6 +255,11 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+const BUSY_HINT = "another oled process is using the ledger; re-run the same command in a moment";
+
+// Page-body damage never reaches the open pragma; it surfaces at the query that reads the page.
+const DAMAGED_DB_CODES = ["SQLITE_CORRUPT", "SQLITE_NOTADB"];
+
 export function toCLIError(err: unknown, cmd?: Command): CLIError {
   if (err instanceof CLIError) return err;
   if (err instanceof ValidationError) {
@@ -277,6 +273,19 @@ export function toCLIError(err: unknown, cmd?: Command): CLIError {
     return new CLIError("NOT_READY", err.message, {
       hint: "run `oled config --init` to configure the harness",
     });
+  }
+  if (err instanceof DBBusyError) return new CLIError("BUSY", err.message, { hint: BUSY_HINT });
+  // A lock lost past the open (a write that waited out its busy timeout) says the same thing.
+  if (isBusyError(err)) {
+    return new CLIError("BUSY", "The ledger is in use by another process.", { hint: BUSY_HINT });
+  }
+  const sqliteCode = sqliteErrorCode(err);
+  if (DAMAGED_DB_CODES.includes(sqliteCode)) {
+    return new CLIError(
+      "NOT_READY",
+      `The ledger file is damaged (${sqliteCode}): ${errorMessage(err)}`,
+      { hint: "restore the newest `<db>.<stamp>.bak` beside it, or move the file aside and re-ingest" },
+    );
   }
   return new CLIError("GENERIC", errorMessage(err));
 }
