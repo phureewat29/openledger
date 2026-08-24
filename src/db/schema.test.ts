@@ -629,6 +629,50 @@ describe("applyMigrations runner", () => {
     expect(versions(db)).toEqual([1, 2]);
   });
 
+  /**
+   * Stands in for the winner of an open race: by the time the loser's second transaction
+   * takes the write lock, version 2 is already stamped and its table already built.
+   */
+  const winnerRacesAhead: Migration = {
+    up: (db) => {
+      db.exec(`CREATE TABLE t1 (id INTEGER PRIMARY KEY); CREATE TABLE t2 (id INTEGER PRIMARY KEY)`);
+      db.prepare(`INSERT INTO schema_migrations (version) VALUES (2)`).run();
+    },
+  };
+
+  it("skips a migration another process applied while it waited for the lock", () => {
+    const db = freshDb();
+
+    // The version read before the lock is stale, so without the re-read under it the loser
+    // re-runs m2 over the winner's table and stamps a version already recorded.
+    expect(() => applyMigrations(db, [winnerRacesAhead, m2])).not.toThrow();
+
+    expect(versions(db)).toEqual([1, 2]);
+    expect(rowCount(db, "schema_migrations")).toBe(2);
+    // Skipping is safe only because the winner's work landed.
+    expect(tableNames(db)).toEqual(expect.arrayContaining(["t1", "t2"]));
+  });
+
+  /**
+   * Stands in for a winner running a newer build: by the time the loser's second transaction
+   * takes the write lock, a version beyond this build's own 2-migration manifest is stamped.
+   */
+  const winnerRacesAheadOfBuild: Migration = {
+    up: (db) => {
+      db.exec(`CREATE TABLE t1 (id INTEGER PRIMARY KEY)`);
+      db.prepare(`INSERT INTO schema_migrations (version) VALUES (3)`).run();
+    },
+  };
+
+  it("throws newer-than-build, rather than silently skipping, when a race leaves the DB ahead of this build's manifest", () => {
+    // The re-read under the lock sees version 3 against a 2-long manifest; the "already
+    // applied" skip below it must not swallow that the same way it safely skips version 2.
+    expect(() => applyMigrations(freshDb(), [winnerRacesAheadOfBuild, m2])).toThrow(
+      /newer than this build/i,
+    );
+    expect(() => applyMigrations(freshDb(), [winnerRacesAheadOfBuild, m2])).toThrow(DBNotReadyError);
+  });
+
   it("throws when the DB version is newer than the build", () => {
     const db = freshDb();
     applyMigrations(db, [m1, m2]);

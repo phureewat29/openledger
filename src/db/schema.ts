@@ -19,42 +19,71 @@ export function applyMigrations(
 ): void {
   const current = currentVersion(db);
 
-  if (current > migrations.length) {
-    throw new DBNotReadyError(
-      `Database schema version ${current} is newer than this build supports ` +
-        `(${migrations.length}). Upgrade OpenLedger to open this database.`,
-    );
-  }
+  if (current > migrations.length) throw newerThanBuildError(current, migrations.length);
+  // The path every open after the first takes, before any write lock or file copy.
   if (current === migrations.length) return;
-
-  // Every migration is CREATE TABLE IF NOT EXISTS, so a foreign database would otherwise be half-adopted in silence.
-  if (current === 0 && hasUserTables(db)) {
-    const at = dbPath ? ` at ${dbPath}` : "";
-    throw new DBNotReadyError(
-      `This database${at} is not an OpenLedger database. Your data has not been ` +
-        `touched. Back up the file, then remove it to start fresh.`,
-    );
-  }
 
   // A version-0 database that reaches here is empty; only an upgrade has anything worth copying.
   if (dbPath && current >= 1) backupDatabase(db, dbPath);
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      version INTEGER PRIMARY KEY,
-      applied_at TEXT NOT NULL DEFAULT (${ISO_NOW_SQL})
-    );
-  `);
-
   for (let i = current; i < migrations.length; i++) {
-    const version = i + 1;
-    const migration = migrations[i];
-    const apply = db.transaction((): void => {
-      migration.up(db);
-      db.prepare(`INSERT INTO schema_migrations (version) VALUES (?)`).run(version);
-    });
-    apply();
+    applyMigration(db, migrations[i], i + 1, migrations.length, dbPath);
   }
+}
+
+/** Shared by the pre-lock guard and the in-transaction re-check below, so the two cannot drift. */
+function newerThanBuildError(current: number, manifestLength: number): DBNotReadyError {
+  return new DBNotReadyError(
+    `Database schema version ${current} is newer than this build supports ` +
+      `(${manifestLength}). Upgrade OpenLedger to open this database.`,
+  );
+}
+
+/**
+ * IMMEDIATE so a concurrent opener waits for the write lock instead of failing on the
+ * first write, and the version is re-read under that lock: the waiter must see the
+ * winner's rows and skip a migration already applied, or its stamp collides on the
+ * schema_migrations primary key. That re-read can also land past this build's own
+ * manifest (a newer-build winner stamped a version this build has no migration for),
+ * which must throw rather than fall into the "already applied" skip below it.
+ */
+function applyMigration(
+  db: Database.Database,
+  migration: Migration,
+  version: number,
+  manifestLength: number,
+  dbPath?: string,
+): void {
+  const apply = db.transaction((): void => {
+    const applied = currentVersion(db);
+    if (applied > manifestLength) throw newerThanBuildError(applied, manifestLength);
+    if (applied >= version) return;
+    if (applied === 0) refuseForeignDatabase(db, dbPath);
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (${ISO_NOW_SQL})
+      );
+    `);
+    migration.up(db);
+    db.prepare(`INSERT INTO schema_migrations (version) VALUES (?)`).run(version);
+  });
+  apply.immediate();
+}
+
+/**
+ * Every migration is CREATE TABLE IF NOT EXISTS, so a foreign database would otherwise be
+ * half-adopted in silence. It runs under the migration's write lock because outside one a
+ * concurrent opener's freshly committed tables read as somebody else's database.
+ */
+function refuseForeignDatabase(db: Database.Database, dbPath?: string): void {
+  if (!hasUserTables(db)) return;
+  const at = dbPath ? ` at ${dbPath}` : "";
+  throw new DBNotReadyError(
+    `This database${at} is not an OpenLedger database. Your data has not been ` +
+      `touched. Back up the file, then remove it to start fresh.`,
+  );
 }
 
 function currentVersion(db: Database.Database): number {
@@ -90,8 +119,14 @@ function hasUserTables(db: Database.Database): boolean {
   return !!row;
 }
 
-// Folds the WAL into the main file first, or the copy would miss every committed row still
-// in it. A rollback-journal database has no WAL and the checkpoint is a no-op there.
+/**
+ * Folds the WAL into the main file first, or the copy would miss every committed row still in
+ * it. A rollback-journal database has no WAL and the checkpoint is a no-op there. SQLite never
+ * throws BUSY from this pragma: a concurrent reader makes it return a `busy: 1` row instead, so
+ * the copy then reflects the last checkpointed state, older than the live database but never
+ * torn. A thrown error here is a real failure (disk full, I/O) and must abort the upgrade rather
+ * than let copyFileSync produce a backup that is silently missing rows.
+ */
 function backupDatabase(db: Database.Database, dbPath: string): void {
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   copyFileSync(dbPath, `${dbPath}.${backupStamp()}.bak`);
