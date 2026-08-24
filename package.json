@@ -31,8 +31,15 @@
     "datasets/",
     "plugin.json"
   ],
+  "exports": {
+    "./contract": {
+      "types": "./dist/contract/index.d.ts",
+      "default": "./dist/contract/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "scripts": {
-    "build": "rm -rf dist && tsc && chmod +x dist/cli/index.js",
+    "build": "rm -rf dist && tsc && tsc -p tsconfig.contract.json && chmod +x dist/cli/index.js",
     "test": "vitest run --typecheck --typecheck.tsconfig ./tsconfig.typecheck.json",
     "dev": "tsx src/cli/index.ts",
     "release": "tsx scripts/release.ts",
