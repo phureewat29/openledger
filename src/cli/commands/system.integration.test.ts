@@ -391,11 +391,15 @@ describe("system CLI integration (subprocess)", () => {
       expect(answer.code).toBe(0);
       expect(parseNdjson(answer.stdout)).toEqual([
         { id: q1, kind: "uncategorized", answer: "thb:expense:food:groceries", rule_key: "merchant:acme-foodmart" },
+        { type: "summary", answered: 1, closed_siblings: 0 },
       ]);
 
       const defer = await runCLI(["questions", "defer", q2, "--days", "5", "--json"]);
       expect(defer.code).toBe(0);
-      expect(parseNdjson(defer.stdout)).toEqual([{ id: q2, days: 5 }]);
+      expect(parseNdjson(defer.stdout)).toEqual([
+        { id: q2, days: 5 },
+        { type: "summary", deferred: 1 },
+      ]);
 
       // Verify the underlying effect directly rather than spending another spawn.
       const raw2 = new Database(dbPath);
@@ -426,8 +430,9 @@ describe("system CLI integration (subprocess)", () => {
       ]);
       expect(add.code).toBe(0);
       const added = parseNdjson(add.stdout);
-      expect(added).toHaveLength(1);
+      expect(added).toHaveLength(2);
       expect(added[0]).toMatchObject({ content: "Prefers window seats on flights", category: "preference" });
+      expect(added[1]).toEqual({ type: "summary", added: 1 });
       const noteId = added[0].id as number;
 
       const list = await runCLI(["notes", "list", "--json"]);
@@ -438,6 +443,7 @@ describe("system CLI integration (subprocess)", () => {
       expect(rm.code).toBe(0);
       expect(parseNdjson(rm.stdout)).toEqual([
         expect.objectContaining({ id: noteId, content: "Prefers window seats on flights" }),
+        { type: "summary", removed: 1 },
       ]);
 
       const raw = new Database(dbPath);

@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { createSandbox, makeRunCLI, type CLIRunner, type Sandbox } from "../fixtures/sandbox.js";
+import {
+  createSandbox,
+  makeRunCLI,
+  parseNdjson,
+  type CLIResult,
+  type CLIRunner,
+  type Sandbox,
+} from "../fixtures/sandbox.js";
 
 let sandbox: Sandbox;
 let runCLI: CLIRunner;
@@ -81,6 +88,15 @@ function lastLine(stream: string): string {
   return lines[lines.length - 1] ?? "";
 }
 
+/** The same uniform wire contract SURFACE_CASES asserts, for a case that had to be driven by hand. */
+function expectListShape(label: string, result: CLIResult): void {
+  expect(result.code, `${label} stderr: ${result.stderr}`).toBe(0);
+  expect(nonObjectLines(result.stdout), `${label}: stdout lines that are not one JSON object`).toEqual([]);
+  expect(nonObjectLines(result.stderr), `${label}: stderr lines that are not one JSON object`).toEqual([]);
+  expect(result.stdout, `${label}: ANSI escape bytes on stdout`).not.toMatch(ESC);
+  expect(JSON.parse(lastLine(result.stdout)).type, `${label}: last stdout line`).toBe("summary");
+}
+
 describe("money aggregates on a virgin ledger (dist subprocess)", () => {
   // Every aggregate is a map keyed by ISO currency code, never a scalar to add across
   // currencies; a virgin ledger has no postings at all, which is what an empty map means.
@@ -160,4 +176,77 @@ describe("CLI surface on a virgin ledger (dist subprocess)", () => {
     },
     20000,
   );
+});
+
+/**
+ * The four writes that stream rows the same way a list read does. They need a
+ * row to act on, so they take their own ledger: the sweep above asserts a
+ * virgin one and must stay that way.
+ */
+describe("row-streaming writes end with a summary too (dist subprocess)", () => {
+  let writeSandbox: Sandbox;
+  let runWrite: CLIRunner;
+  let questionIds: string[] = [];
+
+  beforeAll(async () => {
+    writeSandbox = createSandbox("oled-e2e-write-");
+    runWrite = makeRunCLI(writeSandbox, "dist");
+    const init = await runWrite(["config", "--init", "--json"]);
+    if (init.code !== 0) throw new Error(`config --init failed: ${init.stderr}`);
+
+    // Neither row names a placeable debit account, so each lands in
+    // uncategorized and opens exactly one question about it.
+    const rows = [0, 1]
+      .map((i) =>
+        JSON.stringify({
+          date: `2026-05-0${i + 1}`,
+          description: `Needs a category ${i}`,
+          debit_account: "mysterious",
+          credit_account: "thb:equity:opening",
+          amount: 10 + i,
+        }),
+      )
+      .join("\n");
+    const committed = await runWrite(["ingest", "commit", "--json"], { stdin: rows });
+    if (committed.code !== 0) throw new Error(`seeding commit failed: ${committed.stderr}`);
+
+    const listed = await runWrite(["questions", "list", "--json"]);
+    questionIds = parseNdjson(listed.stdout)
+      .filter((row) => row.type !== "summary")
+      .map((row) => row.id as string);
+    if (questionIds.length < 2) {
+      throw new Error(`seeding raised ${questionIds.length} questions, needed 2`);
+    }
+  }, 60000);
+
+  afterAll(() => {
+    writeSandbox.cleanup();
+  });
+
+  it("oled questions defer exits 0 with NDJSON-only, ANSI-free output on both streams", async () => {
+    expectListShape(
+      "questions defer",
+      await runWrite(["questions", "defer", questionIds[0], "--days", "3", "--json"]),
+    );
+  }, 20000);
+
+  it("oled questions answer exits 0 with NDJSON-only, ANSI-free output on both streams", async () => {
+    expectListShape(
+      "questions answer",
+      await runWrite(["questions", "answer", questionIds[1], "--answer", "confirmed", "--json"]),
+    );
+  }, 20000);
+
+  it("oled notes add exits 0 with NDJSON-only, ANSI-free output on both streams", async () => {
+    expectListShape(
+      "notes add",
+      await runWrite(["notes", "add", "--content", "surface probe", "--json"]),
+    );
+  }, 20000);
+
+  it("oled notes rm exits 0 with NDJSON-only, ANSI-free output on both streams", async () => {
+    const listed = await runWrite(["notes", "list", "--json"]);
+    const noteId = parseNdjson(listed.stdout).find((row) => row.type !== "summary")?.id;
+    expectListShape("notes rm", await runWrite(["notes", "rm", String(noteId), "--yes", "--json"]));
+  }, 20000);
 });

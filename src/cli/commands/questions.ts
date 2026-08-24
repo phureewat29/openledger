@@ -10,26 +10,30 @@ import {
   type QuestionRow,
 } from "../../db/queries/questions.js";
 import { applyRedaction } from "../../privacy/redactor.js";
-import { emitCappedSummary, emitList, fail, redactionEnabled, runAction, type Column } from "../output.js";
+import {
+  emitCappedSummary,
+  emitList,
+  emitSummary,
+  fail,
+  redactionEnabled,
+  runAction,
+  type Column,
+} from "../output.js";
 import { clampOffset } from "../../lib/limit.js";
 import { openDb } from "../db.js";
 import { requireConfig } from "./config.js";
 import * as z from "zod";
 import { parseInput, str, int } from "../../lib/validate.js";
 import { parseJsonOrNull } from "../../lib/json.js";
+import type {
+  AnsweredQuestion,
+  DeferredQuestion,
+  Question,
+  QuestionsAnswerSummary,
+  QuestionsDeferSummary,
+} from "../../contract/questions.js";
 
-interface QuestionListRow {
-  id: string;
-  kind: string | null;
-  prompt: string;
-  transaction_id: string | null;
-  account_id: string | null;
-  context: unknown;
-  file_id: string | null;
-  created_at: string;
-}
-
-function toListRow(row: QuestionRow): QuestionListRow {
+function toListRow(row: QuestionRow): Question {
   return {
     id: row.id,
     kind: row.kind,
@@ -45,7 +49,7 @@ function toListRow(row: QuestionRow): QuestionListRow {
 // `prompt` is the only free-text field; context is structured JSON the agent needs verbatim.
 const QUESTION_REDACT_FIELDS = ["prompt"] as const;
 
-const LIST_COLUMNS: Column<QuestionListRow>[] = [
+const LIST_COLUMNS: Column<Question>[] = [
   { header: "ID", value: (r) => r.id },
   { header: "Kind", value: (r) => r.kind ?? "" },
   { header: "Prompt", value: (r) => r.prompt },
@@ -56,21 +60,14 @@ const LIST_COLUMNS: Column<QuestionListRow>[] = [
   { header: "Created At", value: (r) => r.created_at },
 ];
 
-interface AnsweredRow {
-  id: string;
-  kind: string | null;
-  answer: string;
-  rule_key: string | null;
-}
-
-const ANSWERED_COLUMNS: Column<AnsweredRow>[] = [
+const ANSWERED_COLUMNS: Column<AnsweredQuestion>[] = [
   { header: "ID", value: (r) => r.id },
   { header: "Kind", value: (r) => r.kind ?? "" },
   { header: "Answer", value: (r) => r.answer },
   { header: "Rule Key", value: (r) => r.rule_key ?? "" },
 ];
 
-const DEFER_COLUMNS: Column<{ id: string; days: number }>[] = [
+const DEFER_COLUMNS: Column<DeferredQuestion>[] = [
   { header: "ID", value: (r) => r.id },
   { header: "Days", value: (r) => String(r.days) },
 ];
@@ -142,12 +139,18 @@ async function answerQuestion(
     );
   }
 
-  const results: AnsweredRow[] = ids.map((qid) => {
+  const results: AnsweredQuestion[] = ids.map((qid) => {
     const closed = closeQuestion(db, qid, parsed.answer);
     if (!closed) throw new Error(`question "${qid}" vanished mid-answer`);
     return { id: qid, kind: closed.kind, answer: closed.answer, rule_key: closed.rule_key };
   });
   emitList(results, ANSWERED_COLUMNS);
+  // `ids` is deduped, so the siblings are whatever --also added beyond the named id.
+  const summary: Omit<QuestionsAnswerSummary, "type"> = {
+    answered: results.length,
+    closed_siblings: results.length - 1,
+  };
+  emitSummary(summary);
 }
 
 const DEFER_SPEC = z.object({
@@ -165,6 +168,8 @@ async function deferQuestion(
   const ok = deferQuestionRow(db, id, parsed.days);
   if (!ok) fail("NOT_FOUND", `question "${id}" not found`);
   emitList([{ id, days: parsed.days }], DEFER_COLUMNS);
+  const summary: Omit<QuestionsDeferSummary, "type"> = { deferred: 1 };
+  emitSummary(summary);
 }
 
 export function registerQuestions(program: Command): void {

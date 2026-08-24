@@ -11,6 +11,11 @@ import { openDb } from "../db.js";
 import { requireConfig } from "./config.js";
 import * as z from "zod";
 import { parseInput, str, num } from "../../lib/validate.js";
+import type {
+  NotesAddSummary,
+  NotesListSummary,
+  NotesRemoveSummary,
+} from "../../contract/notes.js";
 
 const VALID_CATEGORIES = ["rule", "preference", "fact"] as const;
 
@@ -38,7 +43,8 @@ async function listNotes(opts: ListNotesOpts, command: Command): Promise<void> {
     config,
   );
   emitList(rows, NOTE_COLUMNS);
-  emitSummary({ total: rows.length, returned: rows.length });
+  const summary: Omit<NotesListSummary, "type"> = { total: rows.length, returned: rows.length };
+  emitSummary(summary);
 }
 
 const ADD_NOTE_SPEC = z.object({
@@ -52,6 +58,8 @@ async function addNote(opts: Record<string, unknown>, command: Command): Promise
   const db = await openDb(config.dbPath);
   const saved = addNoteRow(db, parsed.content, parsed.category);
   emitList([saved], NOTE_COLUMNS);
+  const summary: Omit<NotesAddSummary, "type"> = { added: 1 };
+  emitSummary(summary);
 }
 
 // Positional `<id>` args aren't commander opts; parsed through the same spec API with an ad hoc object.
@@ -67,6 +75,8 @@ async function removeNote(id: string, opts: { yes?: boolean }, command: Command)
   const deleted = deleteNoteRow(db, parsed.id);
   if (!deleted) fail("NOT_FOUND", `note "${id}" not found`);
   emitList([deleted], NOTE_COLUMNS);
+  const summary: Omit<NotesRemoveSummary, "type"> = { removed: 1 };
+  emitSummary(summary);
 }
 
 export function registerNotes(program: Command): void {

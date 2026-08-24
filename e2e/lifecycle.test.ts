@@ -267,7 +267,10 @@ describe("lifecycle against a local ledger (dist subprocess)", () => {
       const answered = parseNdjson(
         (await ok(["questions", "answer", rows[0].id, "--answer", "confirmed"])).stdout,
       );
-      expect(answered).toEqual([expect.objectContaining({ id: rows[0].id })]);
+      expect(answered).toEqual([
+        expect.objectContaining({ id: rows[0].id }),
+        { type: "summary", answered: 1, closed_siblings: 0 },
+      ]);
     },
     30000,
   );

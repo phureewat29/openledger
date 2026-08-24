@@ -105,9 +105,11 @@ describe("questions answer --also (subprocess)", () => {
       "--json",
     ]);
     expect(result.code).toBe(0);
-    const rows = parseNdjson(result.stdout);
+    const objs = parseNdjson(result.stdout);
+    const rows = objs.filter((o) => o.type !== "summary");
     expect(rows.map((r) => r.id)).toEqual([good1, good2]);
     expect(rows.every((r) => r.answer === "thb:expense:groceries")).toBe(true);
+    expect(objs.at(-1)).toEqual({ type: "summary", answered: 2, closed_siblings: 1 });
 
     const db = readDb();
     const remaining = db
@@ -137,8 +139,10 @@ describe("questions answer --also (subprocess)", () => {
       "--json",
     ]);
     expect(result.code).toBe(0);
-    const rows = parseNdjson(result.stdout);
-    expect(rows.map((r) => r.id)).toEqual([good1, good2]);
+    const objs = parseNdjson(result.stdout);
+    expect(objs.filter((o) => o.type !== "summary").map((r) => r.id)).toEqual([good1, good2]);
+    // The repeat is dropped before anything closes, so it costs no sibling either.
+    expect(objs.at(-1)).toEqual({ type: "summary", answered: 2, closed_siblings: 1 });
 
     const db = readDb();
     const remaining = db
