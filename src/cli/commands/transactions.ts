@@ -32,7 +32,6 @@ import {
   type ListTransactionsOptions,
   type TransactionRow,
   type TransactionCluster,
-  type DuplicateTransactionRow,
 } from "../../db/queries/transactions.js";
 import {
   commitTransaction,
@@ -53,6 +52,20 @@ import { applyRedaction, type RedactionSource } from "../../privacy/redactor.js"
 import { todayIso } from "../../lib/date.js";
 import * as z from "zod";
 import { parseInput, str, num } from "../../lib/validate.js";
+import type {
+  TransactionView,
+  TransactionClusterView,
+  TransactionShowView,
+  TransactionAddResult,
+  TransactionAddResolveResult,
+  TransactionUpdateResult,
+  TransactionDeleteResult,
+  TransactionRecategorizeResult,
+  TransactionDuplicateRow,
+  TransactionDedupeSummary,
+  TransactionMergeResult,
+  TransactionMergeAlreadyVoidResult,
+} from "../../contract/transactions.js";
 
 // Amounts are minor units in the DB; this module converts to/from decimals at the CLI boundary.
 
@@ -64,8 +77,6 @@ const TRANSACTION_REDACT_FIELDS = [
   "debit_account_name",
   "credit_account_name",
 ] as const;
-
-type TransactionView = Omit<TransactionRow, "amount"> & { amount: number };
 
 function presentTransaction(row: TransactionRow): TransactionView {
   return { ...row, amount: fromMinorUnits(row.amount, row.currency) };
@@ -148,12 +159,12 @@ async function listTransactions(opts: ListTransactionsOpts, command: Command): P
     TRANSACTION_REDACT_FIELDS,
     config,
   );
-  emitList(rows, LIST_COLUMNS);
+  emitList<TransactionView>(rows, LIST_COLUMNS);
   emitCappedSummary(total, rows.length, limit, offset);
 }
 
 function emitClusters(clusters: TransactionCluster[], redact: boolean, source: RedactionSource): void {
-  const raw = clusters.map((c) => ({
+  const raw: TransactionClusterView[] = clusters.map((c) => ({
     group_id: c.group_id,
     transactions: c.transactions.map(presentTransaction),
   }));
@@ -184,19 +195,14 @@ async function showTransaction(
   const detail = findTransactionById(db, id);
   if (!detail) fail("NOT_FOUND", `transaction "${id}" not found`);
 
-  const view: Record<string, unknown> = presentTransaction(detail);
+  const view: TransactionShowView = presentTransaction(detail);
   if (detail.group) view.group = detail.group.map(presentTransaction);
   emitObject(
     applyRedaction(view, redactionEnabled(opts), TRANSACTION_REDACT_FIELDS, config),
   );
 }
 
-type DuplicateRow = Omit<DuplicateTransactionRow, "amount"> & {
-  amount: number;
-  group: number;
-};
-
-const DUPLICATE_COLUMNS: Column<DuplicateRow>[] = [
+const DUPLICATE_COLUMNS: Column<TransactionDuplicateRow>[] = [
   { header: "Group", value: (r) => String(r.group), align: "right" },
   { header: "ID", value: (r) => r.id },
   { header: "Date", value: (r) => r.date },
@@ -224,7 +230,7 @@ async function dedupeTransactions(
   }
 
   const groups = findDuplicateTransactions(db);
-  const rows: DuplicateRow[] = applyRedaction(
+  const rows: TransactionDuplicateRow[] = applyRedaction(
     groups.flatMap((group, i) =>
       group.map((t) => ({ ...t, amount: fromMinorUnits(t.amount, t.currency), group: i })),
     ),
@@ -233,8 +239,8 @@ async function dedupeTransactions(
     config,
   );
 
-  emitList(rows, DUPLICATE_COLUMNS);
-  emitSummary({
+  emitList<TransactionDuplicateRow>(rows, DUPLICATE_COLUMNS);
+  const summary: Omit<TransactionDedupeSummary, "type"> = {
     groups: groups.length,
     ...(autoMerged !== undefined ? { auto_merged: autoMerged } : {}),
     ...(!opts.autoMerge && groups.length > 0
@@ -244,7 +250,8 @@ async function dedupeTransactions(
             "or collapse cross-statement mirrors with --auto-merge",
         }
       : {}),
-  });
+  };
+  emitSummary(summary);
 }
 
 const MERGE_TRANSACTIONS_SPEC = z.object({
@@ -272,10 +279,17 @@ async function mergeTransactions(opts: MergeTransactionsOpts, command: Command):
   }
 
   if (result.alreadyVoid) {
-    emitObject({ from: parsed.from, to: parsed.to, voided: false, already_void: true });
+    const view: TransactionMergeAlreadyVoidResult = {
+      from: parsed.from,
+      to: parsed.to,
+      voided: false,
+      already_void: true,
+    };
+    emitObject(view);
     return;
   }
-  emitObject({ from: parsed.from, to: parsed.to, voided: true });
+  const view: TransactionMergeResult = { from: parsed.from, to: parsed.to, voided: true };
+  emitObject(view);
 }
 
 interface AddTransactionOpts {
@@ -342,12 +356,13 @@ function addViaResolve(db: Database.Database, config: ResolvedConfig, raw: RawTr
     }
     fail("INVALID", outcome.message);
   }
-  emitObject({
+  const view: TransactionAddResolveResult = {
     transaction_id: outcome.transactionId,
     duplicate: outcome.duplicate,
     raised_questions: outcome.raisedQuestions,
     currency_overridden: outcome.currencyOverridden,
-  });
+  };
+  emitObject(view);
 }
 
 function addStrict(db: Database.Database, config: ResolvedConfig, raw: RawTransactionInput): void {
@@ -384,7 +399,8 @@ function addStrict(db: Database.Database, config: ResolvedConfig, raw: RawTransa
   } catch (err) {
     fail("INVALID", (err as Error).message);
   }
-  emitObject({ transaction_id: result.id, duplicate: result.duplicate });
+  const view: TransactionAddResult = { transaction_id: result.id, duplicate: result.duplicate };
+  emitObject(view);
 }
 
 async function addTransaction(opts: AddTransactionOpts, command: Command): Promise<void> {
@@ -417,7 +433,8 @@ async function updateTransaction(
   const db = await openDb(config.dbPath);
   const changes = updateTransactionMeta(db, id, fields);
   if (changes === 0) fail("NOT_FOUND", `transaction "${id}" not found`);
-  emitObject({ transaction_id: id, updated: true });
+  const view: TransactionUpdateResult = { transaction_id: id, updated: true };
+  emitObject(view);
 }
 
 async function deleteTransaction(
@@ -431,7 +448,8 @@ async function deleteTransaction(
   const { deleted, unvoided } = deleteTransactionRow(db, id);
   if (!deleted) fail("NOT_FOUND", `transaction "${id}" not found`);
   // Deleting a survivor puts its mirrors back into balance derivation.
-  emitObject({ transaction_id: id, deleted: true, unvoided });
+  const view: TransactionDeleteResult = { transaction_id: id, deleted: true, unvoided };
+  emitObject(view);
 }
 
 const RECATEGORIZE_SPEC = z.object({
@@ -470,12 +488,13 @@ async function recategorizeTransactions(
   } catch (err) {
     mapNotFoundError(err);
   }
-  emitObject({
+  const view: TransactionRecategorizeResult = {
     affected: result.affected,
     skipped_self_transaction: result.skipped_self_transaction,
     skipped_currency_mismatch: result.skipped_currency_mismatch,
     sample_transaction_ids: result.sample_transaction_ids,
-  });
+  };
+  emitObject(view);
 }
 
 export function registerTransactions(program: Command): void {

@@ -6,6 +6,7 @@ import { requireConfig } from "./config.js";
 import { currentMode, emit, fail, runAction } from "../output.js";
 import { toDecimalTotals } from "../currency.js";
 import { ISO_DATE_RE } from "../../lib/date.js";
+import type { ReportResult } from "../../contract/report.js";
 
 interface ShowReportOpts {
   from?: string;
@@ -30,7 +31,7 @@ async function showReport(opts: ShowReportOpts, command: Command): Promise<void>
   const totals = getPeriodTotals(db, opts.from, opts.to);
   // Net is taken in minor units per currency before anything becomes decimal; a THB
   // income and a USD expense share no common net.
-  const result = {
+  const result: ReportResult = {
     from: opts.from,
     to: opts.to,
     income: toDecimalTotals(totals.income),

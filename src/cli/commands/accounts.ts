@@ -53,11 +53,22 @@ import { applyRedaction } from "../../privacy/redactor.js";
 import { tryExecute } from "../../lib/result.js";
 import * as z from "zod";
 import { parseInput, safeParse, str, num, int, json } from "../../lib/validate.js";
+import type {
+  Account as PresentedAccount,
+  AccountTreeNode as PresentedTreeNode,
+  AccountMatch,
+  CreateAccountResult,
+  CreateAccountBatchCreated,
+  CreateAccountBatchDuplicate,
+  CreateAccountBatchFailure,
+  MergeAccountsResult,
+  DeleteAccountResult,
+  AdjustAccountResult,
+  UpdateAccountResult,
+} from "../../contract/accounts.js";
 
 // Only `name` is free text; id/parent_id/type/currency and balances are structured, left verbatim.
 const ACCOUNT_REDACT_FIELDS = ["name"] as const;
-
-type PresentedAccount = Omit<AccountBalanceMinor, "balance_minor">;
 
 function presentAccount(a: AccountBalanceMinor): PresentedAccount {
   const { balance_minor: _bm, debits_posted, credits_posted, ...rest } = a;
@@ -85,16 +96,6 @@ const MATCH_COLUMNS: Column<FuzzyAccountMatch>[] = [
   { header: "Type", value: (m) => m.account.type },
   { header: "Similarity", value: (m) => m.similarity.toFixed(3), align: "right" },
 ];
-
-interface PresentedTreeNode {
-  id: string;
-  name: string;
-  type: string;
-  currency: string;
-  balance: number;
-  rollup: Record<string, number>;
-  children: PresentedTreeNode[];
-}
 
 function presentTreeNode(node: BalanceTreeNode): PresentedTreeNode {
   return {
@@ -329,16 +330,22 @@ async function createSingleAccount(opts: Record<string, unknown>, command: Comma
   const db = await openDb(config.dbPath);
   const outcome = createOneAccount(db, parsed);
   if (!outcome.ok) failReason(outcome);
-  emitObject({
+  const result: CreateAccountResult = {
     id: outcome.id,
     created: true,
     created_parents: outcome.created_parents,
     ...maskedResultField(outcome),
-  });
+  };
+  emitObject(result);
 }
 
 // color is a global flag, not a per-account option; json never lands here (see output.ts's resolveMode).
 const NON_ACCOUNT_FLAG_KEYS = new Set(["input", "color"]);
+
+type AccountsCreateBatchRow =
+  | CreateAccountBatchCreated
+  | CreateAccountBatchDuplicate
+  | CreateAccountBatchFailure;
 
 /**
  * One result row per item plus a summary row; exits PARTIAL on any failure.
@@ -346,12 +353,12 @@ const NON_ACCOUNT_FLAG_KEYS = new Set(["input", "color"]);
  * item becomes that item's failure row instead of aborting the batch.
  */
 export function createAccountsBatch(db: Database.Database, items: unknown[]): void {
-  const results: Record<string, unknown>[] = [];
+  const results: AccountsCreateBatchRow[] = [];
   let created = 0;
   let duplicates = 0;
   let failed = 0;
 
-  function failedRow(index: number, message: string): Record<string, unknown> {
+  function failedRow(index: number, message: string): CreateAccountBatchFailure {
     failed++;
     return { type: "result", index, ok: false, message };
   }
@@ -377,7 +384,7 @@ export function createAccountsBatch(db: Database.Database, items: unknown[]): vo
     const one = attempt.value;
     if (one.ok) {
       created++;
-      results.push({
+      const row: CreateAccountBatchCreated = {
         type: "result",
         index,
         ok: true,
@@ -385,12 +392,20 @@ export function createAccountsBatch(db: Database.Database, items: unknown[]): vo
         created: true,
         created_parents: one.created_parents,
         ...maskedResultField(one),
-      });
+      };
+      results.push(row);
       continue;
     }
     if (one.reason === "account_exists") {
       duplicates++;
-      results.push({ type: "result", index, ok: true, id: parsed.value.id, duplicate: true });
+      const row: CreateAccountBatchDuplicate = {
+        type: "result",
+        index,
+        ok: true,
+        id: parsed.value.id,
+        duplicate: true,
+      };
+      results.push(row);
       continue;
     }
     results.push(failedRow(index, one.message));
@@ -443,20 +458,21 @@ async function mergeAccounts(opts: MergeAccountsOpts, command: Command): Promise
   requireYes(opts, "merging accounts");
   const config = requireConfig(command);
   const db = await openDb(config.dbPath);
-  let result;
+  let merged;
   try {
-    result = mergeAccountRows(db, parsed.from, parsed.to);
+    merged = mergeAccountRows(db, parsed.from, parsed.to);
   } catch (err) {
     // A cross-ledger merge's message matches neither not-found pattern, so it maps to INVALID.
     mapNotFoundError(err);
   }
-  emitObject({
+  const result: MergeAccountsResult = {
     from: parsed.from,
     to: parsed.to,
-    moved: result.moved,
-    deleted_self_transactions: result.deletedSelfTransactions,
-    moved_merchant_defaults: result.movedMerchantDefaults,
-  });
+    moved: merged.moved,
+    deleted_self_transactions: merged.deletedSelfTransactions,
+    moved_merchant_defaults: merged.movedMerchantDefaults,
+  };
+  emitObject(result);
 }
 
 async function deleteAccount(id: string, opts: { yes?: boolean }, command: Command): Promise<void> {
@@ -469,7 +485,8 @@ async function deleteAccount(id: string, opts: { yes?: boolean }, command: Comma
   } catch (err) {
     mapNotFoundError(err);
   }
-  emitObject({ id, deleted: true });
+  const result: DeleteAccountResult = { id, deleted: true };
+  emitObject(result);
 }
 
 const ADJUST_ACCOUNT_SPEC = z.object({
@@ -487,9 +504,9 @@ async function adjustAccount(
 
   const config = requireConfig(command);
   const db = await openDb(config.dbPath);
-  let result;
+  let outcome;
   try {
-    result = adjustAccountBalance(db, {
+    outcome = adjustAccountBalance(db, {
       accountId: id,
       targetAmount: parsed.to,
       reason: parsed.reason,
@@ -498,7 +515,8 @@ async function adjustAccount(
   } catch (err) {
     mapNotFoundError(err);
   }
-  emitObject({ transaction_id: result.transactionId, delta: result.delta });
+  const result: AdjustAccountResult = { transaction_id: outcome.transactionId, delta: outcome.delta };
+  emitObject(result);
 }
 
 const MATCH_ACCOUNTS_SPEC = z.object({
@@ -509,7 +527,7 @@ async function matchAccounts(opts: Record<string, unknown>, command: Command): P
   const parsed = parseInput(MATCH_ACCOUNTS_SPEC, opts);
   const config = requireConfig(command);
   const db = await openDb(config.dbPath);
-  const matches = findAccountsByFuzzyName(db, parsed.query);
+  const matches: AccountMatch[] = findAccountsByFuzzyName(db, parsed.query);
   emitList(matches, MATCH_COLUMNS);
   emitSummary({ returned: matches.length });
 }
@@ -558,8 +576,8 @@ async function updateAccount(
   const db = await openDb(config.dbPath);
 
   // One transaction: a metadata patch that throws must not leave the rename committed.
-  const result = db.transaction((): Record<string, unknown> => {
-    const out: Record<string, unknown> = { id };
+  const result = db.transaction((): UpdateAccountResult => {
+    const out: UpdateAccountResult = { id };
 
     if (name !== undefined) {
       const changes = renameAccount(db, id, name);

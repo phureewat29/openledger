@@ -43,6 +43,7 @@ import {
   type TransactionSide,
 } from "./questions.js";
 import { noiseTokens } from "../datasets/noise.js";
+import type { CommitMerchant, CommitSide } from "../contract/ingest.js";
 
 /** Decorates a merchant hint with its country's noise tokens, or passes null through. */
 export function withNoiseTokens(
@@ -98,29 +99,6 @@ interface CommitDrop {
   unopenedLedger?: string;
 }
 
-type SideHow =
-  | "exact"
-  | "similar_account"
-  | "placeholder_created"
-  | "uncategorized_fallback"
-  | "as_committed";
-
-/** Callers emit these fields verbatim: declared key order is the NDJSON key order. */
-interface CommittedSide {
-  side: TransactionSide;
-  requested: string;
-  resolved: string;
-  how: SideHow;
-  similar_to?: string;
-}
-
-/** `unknown` means the row named a merchant id no merchant here answers to and
- *  nothing else linked one in its place. */
-interface CommittedMerchant {
-  how: "none" | "unknown" | "linked";
-  merchant_id?: string;
-}
-
 type TransactionCommitOutcome =
   | {
       ok: true;
@@ -129,8 +107,8 @@ type TransactionCommitOutcome =
       raisedQuestions: number;
       currencyOverridden: boolean;
       /** Debit first, then credit. */
-      sides: CommittedSide[];
-      merchant: CommittedMerchant;
+      sides: CommitSide[];
+      merchant: CommitMerchant;
     }
   | CommitDrop;
 
@@ -143,7 +121,7 @@ type LinkedTransactionsOutcome =
       raisedQuestions: number;
       /** True when any leg stated a currency its accounts overruled. */
       currencyOverridden: boolean;
-      merchant: CommittedMerchant;
+      merchant: CommitMerchant;
     }
   | CommitDrop;
 
@@ -424,7 +402,7 @@ interface HintDispatchArgs {
 }
 
 interface SideOutcome {
-  how: SideHow;
+  how: CommitSide["how"];
   similar_to?: string;
   raised: number;
 }
@@ -513,9 +491,9 @@ function applyTransactionHints(
   ctx: TransactionCommitContext,
   transactionId: string,
   prepared: PreparedTransaction,
-): { sides: CommittedSide[]; raisedQuestions: number } {
+): { sides: CommitSide[]; raisedQuestions: number } {
   let raised = 0;
-  const sides: CommittedSide[] = [];
+  const sides: CommitSide[] = [];
   for (const { side, requested, resolved, hint } of prepared.sides) {
     const outcome = hint
       ? HINT_DISPATCH[hint.type](hint as never, { db, ctx, side, transactionId })
@@ -538,7 +516,7 @@ function applyTransactionHints(
 function committedMerchant(
   prepared: PreparedTransaction,
   committedId: () => string | null,
-): CommittedMerchant {
+): CommitMerchant {
   const { raw, merchant } = prepared;
   if (!raw.merchant && !raw.merchant_id) return { how: "none" };
   const id = merchant.merchantId ?? committedId();
@@ -553,9 +531,9 @@ function reportStoredRow(
   db: Database.Database,
   transactionId: string,
   prepared: PreparedTransaction,
-): { sides: CommittedSide[]; merchant: CommittedMerchant } {
+): { sides: CommitSide[]; merchant: CommitMerchant } {
   const stored = findTransactionById(db, transactionId);
-  const sides: CommittedSide[] = [
+  const sides: CommitSide[] = [
     {
       side: "debit",
       requested: prepared.raw.debit_account_id,

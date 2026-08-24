@@ -35,6 +35,14 @@ import {
   type PrepareFailure,
   type PrepareSuccess,
 } from "../../ingest/prepare.js";
+import type {
+  IngestDoneResult,
+  IngestFailResult,
+  IngestFile,
+  IngestListSummary,
+  PrepareResult,
+  Reconciliation,
+} from "../../contract/ingest.js";
 
 const INGEST_COLUMNS: Column<IngestEntry>[] = [
   { header: "Status", value: (r) => r.status },
@@ -46,6 +54,19 @@ const INGEST_COLUMNS: Column<IngestEntry>[] = [
 
 interface ListIngestOpts {
   regex?: string;
+}
+
+function toIngestFile(entry: IngestEntry): IngestFile {
+  return {
+    type: "file",
+    path: entry.path,
+    rel_path: entry.relPath,
+    hash: entry.hash,
+    file_id: entry.fileId,
+    status: entry.status,
+    encrypted: entry.encrypted,
+    note: entry.note ?? null,
+  };
 }
 
 async function listIngest(opts: ListIngestOpts, command: Command): Promise<void> {
@@ -74,19 +95,9 @@ async function listIngest(opts: ListIngestOpts, command: Command): Promise<void>
 
   const mode = currentMode();
   if (mode.json) {
-    for (const e of entries) {
-      emit({
-        type: "file",
-        path: e.path,
-        rel_path: e.relPath,
-        hash: e.hash,
-        file_id: e.fileId,
-        status: e.status,
-        encrypted: e.encrypted,
-        note: e.note ?? null,
-      });
-    }
-    emitSummary({ ...counts, total });
+    for (const e of entries) emit(toIngestFile(e));
+    const summary: Omit<IngestListSummary, "type"> = { ...counts, total };
+    emitSummary(summary);
     return;
   }
 
@@ -133,20 +144,33 @@ const PREPARE_FAILURES: Record<PrepareFailure, { code: ExitCode; hint: string }>
   },
 };
 
-/** What each route adds to the shared head: a document to read, or page images. */
-const PREPARE_PAYLOAD: {
+/** What each route emits: a document to read, or one path per page image. */
+const PREPARE_LINE: {
   [K in PrepareSuccess["kind"]]: (
     result: Extract<PrepareSuccess, { kind: K }>,
-  ) => Record<string, unknown>;
+  ) => Extract<PrepareResult, { kind: K }>;
 } = {
   text: (result) => ({
+    file_id: result.fileId,
+    kind: "text",
+    source: result.source,
+    text_layer: result.textLayer,
+    page_count: result.pageCount,
     ...(result.model ? { ocr_model: result.model } : {}),
     document: result.document,
     pages: result.pages,
     // Only the OCR route reads page by page, so only it can lose one.
     ...(result.source === "ocr" ? { failed_pages: result.failedPages } : {}),
   }),
-  images: (result) => ({ ...(result.dpi ? { dpi: result.dpi } : {}), pages: result.pages }),
+  images: (result) => ({
+    file_id: result.fileId,
+    kind: "images",
+    source: result.source,
+    text_layer: result.textLayer,
+    page_count: result.pageCount,
+    ...(result.dpi ? { dpi: result.dpi } : {}),
+    pages: result.pages,
+  }),
 };
 
 async function prepareIngest(
@@ -168,14 +192,7 @@ async function prepareIngest(
     fail(code, result.message, { hint });
   }
 
-  emitObject({
-    file_id: result.fileId,
-    kind: result.kind,
-    source: result.source,
-    text_layer: result.textLayer,
-    page_count: result.pageCount,
-    ...PREPARE_PAYLOAD[result.kind](result as never),
-  });
+  emitObject(PREPARE_LINE[result.kind](result as never));
 
   // A page the endpoint could not read is a hole in the document, not a failed run.
   if (result.kind === "text" && result.failedPages.length > 0) process.exitCode = EXIT.PARTIAL;
@@ -192,10 +209,6 @@ type DoneFlags = z.infer<typeof DONE_FLAGS_SPEC>;
 interface ReconcileTarget {
   account: string;
   closing: number;
-}
-
-interface Reconciliation extends ReconcileTarget {
-  balance: number;
 }
 
 /** Flag arity only, so a half-given pair is refused before any ledger opens. */
@@ -262,12 +275,13 @@ async function completeIngest(
 
   markFileIngested(db, id, { source: flags.agent ?? "external" });
   const { removed } = cleanCache(config.cacheDir, id);
-  emitObject({
+  const result: IngestDoneResult = {
     file_id: id,
     status: "ingested",
     cache_removed: removed,
     ...(reconciliation ? { reconciliation } : {}),
-  });
+  };
+  emitObject(result);
 }
 
 interface FailIngestOpts {
@@ -288,7 +302,8 @@ async function failIngest(id: string, opts: FailIngestOpts, command: Command): P
   markFileFailed(db, id, { source: opts.agent ?? "external", error: opts.error });
 
   const { removed } = cleanCache(config.cacheDir, id);
-  emitObject({ file_id: id, status: "failed", cache_removed: removed });
+  const result: IngestFailResult = { file_id: id, status: "failed", cache_removed: removed };
+  emitObject(result);
 }
 
 export function registerIngest(program: Command): void {

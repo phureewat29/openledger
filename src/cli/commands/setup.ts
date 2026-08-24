@@ -7,6 +7,7 @@ import {
   type InstallOptions,
 } from "../../setup/install.js";
 import { DEFAULT_SKILLS_DIR } from "../../setup/locations.js";
+import type { SetupInstallResult } from "../../contract/setup.js";
 
 interface SetupOpts {
   global?: boolean;
@@ -55,7 +56,8 @@ async function setupSkill(opts: SetupOpts): Promise<void> {
 
   const mode = currentMode();
   if (mode.json) {
-    emit({ installed: [target] });
+    const result: SetupInstallResult = { installed: [target] };
+    emit(result);
   } else {
     process.stdout.write(`${target.path}\t${target.version}\n`);
   }

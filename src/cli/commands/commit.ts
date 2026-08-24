@@ -7,8 +7,15 @@ import {
   type RawTransactionInput,
   type LinkedTransactionHeader,
   type LinkedTransactionLeg,
-  type TransactionDropReason,
 } from "../../ingest/commit.js";
+import type {
+  CommitCompoundResult,
+  CommitFailureReason,
+  CommitFailureResult,
+  CommitResult,
+  CommitStandaloneResult,
+  CommitSummary,
+} from "../../contract/ingest.js";
 import { EXIT, asRecord, currentMode, emit, emitObject, emitSummary, fail, readStdinBatch } from "../output.js";
 import { openDb } from "../db.js";
 import { requireConfig } from "./config.js";
@@ -82,18 +89,20 @@ interface RowContext {
 }
 
 // A pre-pipeline reject (bad JSON shape) never throws: it reuses the per-row failure shape.
-function failRow(counters: Counters, index: number, message: string): Record<string, unknown> {
+function failRow(counters: Counters, index: number, message: string): CommitFailureResult {
   return failOutcome(counters, index, { reason: "dirty_input", message, raisedQuestions: 0 });
 }
-
-// The batch loop's own catch adds `unexpected_error`, unreachable from the ingest layer.
-type RowFailureReason = TransactionDropReason | "unexpected_error";
 
 function failOutcome(
   counters: Counters,
   index: number,
-  outcome: { reason: RowFailureReason; message: string; raisedQuestions: number; unopenedLedger?: string },
-): Record<string, unknown> {
+  outcome: {
+    reason: CommitFailureReason;
+    message: string;
+    raisedQuestions: number;
+    unopenedLedger?: string;
+  },
+): CommitFailureResult {
   counters.failed++;
   return {
     type: "result",
@@ -113,7 +122,7 @@ function commitCompoundRow(
   counters: Counters,
   row: RowContext,
   linked: unknown[],
-): Record<string, unknown> {
+): CommitCompoundResult | CommitFailureResult {
   const parsedHeader = safeParse(LINKED_HEADER_SPEC, row.record);
   if (!parsedHeader.ok) return failRow(counters, row.index, parsedHeader.error);
   const header: LinkedTransactionHeader = { ...parsedHeader.value, source_file_id: row.fileId };
@@ -153,7 +162,7 @@ function commitStandaloneRow(
   db: Database.Database,
   counters: Counters,
   row: RowContext,
-): Record<string, unknown> {
+): CommitStandaloneResult | CommitFailureResult {
   const parsed = safeParse(STANDALONE_SPEC, row.record, { aliases: LEG_ALIASES });
   if (!parsed.ok) return failRow(counters, row.index, parsed.error);
   // Cast is a lie for malformed rows: validateRawTransaction rejects those.
@@ -208,7 +217,7 @@ function commitRow(
   batch: BatchContext,
   item: unknown,
   index: number,
-): Record<string, unknown> {
+): CommitResult {
   const record = asRecord(item);
   if (!record) return failRow(counters, index, "each transaction must be a JSON object.");
 
@@ -248,7 +257,7 @@ export async function commitIngest(opts: CommitIngestOpts, command: Command): Pr
   // Must be non-null: raise() no-ops when batchId is null, silently dropping every question.
   const batchId = newBatchId();
   const counters: Counters = { posted: 0, duplicates: 0, failed: 0, raisedTotal: 0 };
-  const results: Record<string, unknown>[] = [];
+  const results: CommitResult[] = [];
 
   const batch: BatchContext = {
     batchId,
@@ -280,36 +289,36 @@ export async function commitIngest(opts: CommitIngestOpts, command: Command): Pr
       : null;
 
   // Queried after the row loop so the cumulative figures include this batch.
-  const fileTransactionCount = fileRow ? countTransactionsBySourceFile(db, fileRow.id) : null;
-  const fileOpenQuestionCount = fileRow ? countQuestions(db, { file_id: fileRow.id }) : null;
+  const fileFacts = fileRow
+    ? {
+        file_id: fileRow.id,
+        file_status: fileRow.status,
+        file_transaction_count: countTransactionsBySourceFile(db, fileRow.id),
+        file_open_question_count: countQuestions(db, { file_id: fileRow.id }),
+      }
+    : null;
 
   const mode = currentMode();
   if (mode.json) {
     for (const r of results) emit(r);
-    emitSummary({
+    const summary: Omit<CommitSummary, "type"> = {
       batch_id: batchId,
       posted: counters.posted,
       duplicates: counters.duplicates,
       failed: counters.failed,
       raised_questions: counters.raisedTotal,
-      ...(fileRow
-        ? {
-            file_id: fileRow.id,
-            file_status: fileRow.status,
-            file_transaction_count: fileTransactionCount,
-            file_open_question_count: fileOpenQuestionCount,
-          }
-        : {}),
+      ...(fileFacts ?? {}),
       ...(pendingHint ? { hint: pendingHint } : {}),
-    });
+    };
+    emitSummary(summary);
   } else {
     for (const r of results) emitObject(r);
     process.stdout.write(
       `\nbatch ${batchId}: ${counters.posted} posted, ${counters.duplicates} duplicate(s), ${counters.failed} failed, ${counters.raisedTotal} question(s) raised\n`,
     );
-    if (fileRow) {
+    if (fileFacts) {
       process.stdout.write(
-        `file ${fileRow.id}: ${fileTransactionCount} transactions, ${fileOpenQuestionCount} open questions\n`,
+        `file ${fileFacts.file_id}: ${fileFacts.file_transaction_count} transactions, ${fileFacts.file_open_question_count} open questions\n`,
       );
     }
     if (pendingHint) process.stdout.write(`${pendingHint}\n`);

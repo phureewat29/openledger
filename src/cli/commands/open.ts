@@ -5,6 +5,7 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import { requireConfig } from "./config.js";
 import { emit, renderByMode, runAction } from "../output.js";
+import type { OpenResult } from "../../contract/open.js";
 
 const OPENERS: Partial<Record<NodeJS.Platform, string>> = {
   darwin: "open",
@@ -38,7 +39,7 @@ async function openDataDir(_opts: Record<string, unknown>, command: Command): Pr
 
   renderByMode({
     json: () => {
-      const result: { path: string; spawn_error?: string } = { path: dataDir };
+      const result: OpenResult = { path: dataDir };
       if (spawnError) result.spawn_error = spawnError;
       emit(result);
     },

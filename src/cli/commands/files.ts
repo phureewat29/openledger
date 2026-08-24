@@ -14,15 +14,20 @@ import {
   FILE_STATUSES,
   deleteFile,
   listFiles as queryFiles,
-  type FileRow,
   type FileStatus,
 } from "../../db/queries/files.js";
 import { countTransactionsBySourceFile } from "../../db/queries/transactions.js";
 import { countQuestions } from "../../db/queries/questions.js";
 import { cleanCache } from "../../ingest/files.js";
 import { requireFile } from "../files.js";
+import type {
+  FileDetail,
+  FileDropResult,
+  FileRecord,
+  FilesListSummary,
+} from "../../contract/files.js";
 
-const FILE_COLUMNS: Column<FileRow>[] = [
+const FILE_COLUMNS: Column<FileRecord>[] = [
   { header: "Status", value: (r) => r.status },
   { header: "ID", value: (r) => r.id },
   { header: "Source", value: (r) => r.source ?? "-" },
@@ -46,14 +51,15 @@ async function listFiles(opts: ListFilesOpts, command: Command): Promise<void> {
   const rows = queryFiles(db);
   const shown = status ? rows.filter((r) => r.status === status) : rows;
   emitList(shown, FILE_COLUMNS);
-  emitSummary({
+  const summary: Omit<FilesListSummary, "type"> = {
     total: rows.length,
     returned: shown.length,
     // Empty must not read as "nothing to do": registration happens at ingest, not here.
     ...(rows.length === 0
       ? { hint: "files lists what ingest already registered; new statements in the data dir appear with `oled ingest list`" }
       : {}),
-  });
+  };
+  emitSummary(summary);
 }
 
 async function showFile(id: string, _opts: Record<string, unknown>, command: Command): Promise<void> {
@@ -61,12 +67,13 @@ async function showFile(id: string, _opts: Record<string, unknown>, command: Com
   const db = await openDb(config.dbPath);
   const row = requireFile(db, id, "run `oled files list --json` for the ids");
 
-  emitObject({
+  const detail: FileDetail = {
     type: "file_detail",
     ...row,
     transaction_count: countTransactionsBySourceFile(db, id),
     open_question_count: countQuestions(db, { file_id: id }),
-  });
+  };
+  emitObject(detail);
 }
 
 interface DropFileOpts {
@@ -82,13 +89,14 @@ async function dropFile(id: string, opts: DropFileOpts, command: Command): Promi
 
   // Same cache purge `ingest done`/`fail` do: nothing can reach the extracted text once the row is gone.
   const { removed } = cleanCache(config.cacheDir, id);
-  emitObject({
+  const dropped: FileDropResult = {
     file_id: id,
     removed_transactions: res.removedTransactions,
     removed_questions: res.removedQuestions,
     unvoided: res.unvoided,
     cache_removed: removed,
-  });
+  };
+  emitObject(dropped);
 }
 
 export function registerFiles(program: Command): void {

@@ -25,9 +25,16 @@ import {
   setMerchantDefaultAccount,
   clearMerchantDefaultAccount,
   mergeMerchants as mergeMerchantRows,
-  type MerchantRow,
   type MerchantUpsertInput,
 } from "../../db/queries/merchants.js";
+import type {
+  Merchant,
+  MerchantDefaultResult,
+  MerchantMergeResult,
+  MerchantResolveResult,
+  MerchantUpdateResult,
+  MerchantUpsertResult,
+} from "../../contract/merchants.js";
 import { requireAccount } from "../accounts.js";
 import { noiseTokens } from "../../datasets/noise.js";
 import { applyRedaction } from "../../privacy/redactor.js";
@@ -38,7 +45,7 @@ import { clampOffset } from "../../lib/limit.js";
 // `canonical_name` is the only free-text field; ids and the default-account link are structured data left verbatim.
 const MERCHANT_REDACT_FIELDS = ["canonical_name"] as const;
 
-const MERCHANT_COLUMNS: Column<MerchantRow & { alias_count: number }>[] = [
+const MERCHANT_COLUMNS: Column<Merchant>[] = [
   { header: "ID", value: (m) => m.id },
   { header: "Name", value: (m) => m.canonical_name },
   { header: "Default Account", value: (m) => m.default_account_id ?? "" },
@@ -80,16 +87,15 @@ async function resolveMerchant(opts: Record<string, unknown>, command: Command):
   const config = requireConfig(command);
   const db = await openDb(config.dbPath);
   const match = findMerchantByAlias(db, parsed.descriptor, noiseTokens(config.country));
-  if (!match) {
-    emitObject({ found: false });
-    return;
-  }
-  emitObject({
-    found: true,
-    merchant_id: match.id,
-    canonical_name: match.canonical_name,
-    default_account_id: match.default_account_id,
-  });
+  const resolved: MerchantResolveResult = match
+    ? {
+        found: true,
+        merchant_id: match.id,
+        canonical_name: match.canonical_name,
+        default_account_id: match.default_account_id,
+      }
+    : { found: false };
+  emitObject(resolved);
 }
 
 const UPSERT_MERCHANT_SPEC = z.object({
@@ -110,7 +116,7 @@ async function upsertMerchant(opts: Record<string, unknown>, command: Command): 
   if (parsed.default_account) input.default_account_id = parsed.default_account;
 
   const merchant = upsertMerchantRow(db, input, noiseTokens(config.country));
-  const payload: Record<string, unknown> = {
+  const payload: MerchantUpsertResult = {
     id: merchant.id,
     canonical_name: merchant.canonical_name,
     default_account_id: merchant.default_account_id,
@@ -138,7 +144,7 @@ async function updateMerchant(opts: Record<string, unknown>, command: Command): 
   if (!current) fail("NOT_FOUND", `merchant "${parsed.merchant}" not found`);
   if (parsed.default_account) requireAccount(db, parsed.default_account);
 
-  const result: Record<string, unknown> = { merchant_id: parsed.merchant };
+  const result: MerchantUpdateResult = { merchant_id: parsed.merchant };
   const noise = noiseTokens(config.country);
 
   if (parsed.name) {
@@ -190,14 +196,24 @@ async function setMerchantDefault(opts: Record<string, unknown>, command: Comman
 
   if (account) {
     requireAccount(db, account);
-    const result = setMerchantDefaultAccount(db, parsed.merchant, account);
-    emitObject({ merchant_id: parsed.merchant, before: result.before, after: result.after });
+    const set = setMerchantDefaultAccount(db, parsed.merchant, account);
+    const payload: MerchantDefaultResult = {
+      merchant_id: parsed.merchant,
+      before: set.before,
+      after: set.after,
+    };
+    emitObject(payload);
     return;
   }
 
   const result = clearMerchantDefaultAccount(db, parsed.merchant);
   if (!result) fail("NOT_FOUND", `merchant "${parsed.merchant}" not found`);
-  emitObject({ merchant_id: parsed.merchant, before: result.before, after: null });
+  const payload: MerchantDefaultResult = {
+    merchant_id: parsed.merchant,
+    before: result.before,
+    after: null,
+  };
+  emitObject(payload);
 }
 
 const MERGE_MERCHANTS_SPEC = z.object({
@@ -222,7 +238,7 @@ async function mergeMerchants(opts: MergeMerchantsOpts, command: Command): Promi
   } catch (err) {
     mapNotFoundError(err);
   }
-  const payload: Record<string, unknown> = {
+  const payload: MerchantMergeResult = {
     from: parsed.from,
     to: parsed.to,
     moved_transactions: result.moved_transactions,
