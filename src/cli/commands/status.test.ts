@@ -1,11 +1,21 @@
-import { describe, expect, it } from "vitest";
-import { renderTty, type StatusReport } from "./status.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import type { LoadedConfig } from "../../config.js";
+import { buildReport, renderTty } from "./status.js";
+import type { StatusReport } from "../../contract/status.js";
+import { CONTRACT_VERSION } from "../../contract/version.js";
+import { getVersion } from "../../setup/install.js";
 
 function report(over: Partial<StatusReport> = {}): StatusReport {
   return {
     type: "status",
+    contract_version: CONTRACT_VERSION,
+    version: getVersion(),
     configured: true,
     config_path: "/tmp/none/config.json",
+    config_problem: null,
     data_dir: "/tmp/none/data",
     locale: "th-TH",
     currency: "THB",
@@ -89,5 +99,66 @@ describe("renderTty (the only surface that formats money for humans)", () => {
     // An existing-but-unopenable db is a diagnosis job, not an init job.
     const corrupt = capture(() => renderTty(unreachable, false, false));
     expect(corrupt).toContain("oled doctor");
+  });
+
+  it("shows a dim unusable-config line only when the default profile's file is broken", () => {
+    const clean = capture(() => renderTty(report(), false));
+    expect(clean).not.toContain("unusable");
+
+    const broken = capture(() =>
+      renderTty(report({ config_problem: "Unexpected token o in JSON at position 1" }), false),
+    );
+    expect(broken).toContain("unusable: Unexpected token o in JSON at position 1");
+  });
+});
+
+describe("buildReport: the default profile's own problem", () => {
+  let dir: string;
+
+  beforeAll(() => {
+    dir = mkdtempSync(resolve(tmpdir(), "oled-status-report-"));
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Paths deliberately point at nothing under `dir`: buildReport must thread `problem`
+  // through on its no-ledger-yet path without needing a reachable db.
+  function fixtureConfig(): LoadedConfig["config"] {
+    return {
+      country: "TH",
+      displayLocale: "th-TH",
+      displayCurrency: "THB",
+      dbPath: join(dir, "db.sqlite"),
+      dataDir: join(dir, "data"),
+      cacheDir: join(dir, "cache"),
+      userName: "User",
+      ocrBaseUrl: "",
+      ocrModel: "test-model",
+      ocrApiKey: "",
+      configPath: join(dir, "config.json"),
+      contextPath: join(dir, "context.md"),
+      exists: true,
+    };
+  }
+
+  it("carries a broken default file's problem into the report without failing", async () => {
+    const loaded: LoadedConfig = {
+      config: fixtureConfig(),
+      fileValues: {},
+      problem: "it does not hold a JSON object",
+    };
+
+    const built = await buildReport(loaded);
+    expect(built.config_problem).toBe("it does not hold a JSON object");
+    // A broken file still resolves to defaults, so `configured` reads the same as any other run.
+    expect(built.configured).toBe(true);
+  });
+
+  it("carries config_problem:null when the file is fine", async () => {
+    const loaded: LoadedConfig = { config: fixtureConfig(), fileValues: {}, problem: null };
+    const built = await buildReport(loaded);
+    expect(built.config_problem).toBeNull();
   });
 });

@@ -19,6 +19,7 @@ import { printKeyValues } from "../format.js";
 import { currentMode, emit, fail, runAction, type OutputMode } from "../output.js";
 import * as z from "zod";
 import { parseInput, str, bool } from "../../lib/validate.js";
+import type { ConfigShowResult, ConfigConvergeResult } from "../../contract/config.js";
 
 /** The root's argv scan consumes the flag wherever it appears; the ancestor walk reads it from any command node (same walk as resolveMode). */
 function resolveConfigPath(cmd: Command): string | undefined {
@@ -29,9 +30,11 @@ function resolveConfigPath(cmd: Command): string | undefined {
   return undefined;
 }
 
-/** For commands that operate on the ledger: no config file, no ledger. */
-export function requireConfig(cmd: Command): ResolvedConfig {
-  const { config, problem } = loadConfig(resolveConfigPath(cmd));
+/** Fails NOT_READY on a config that can't back a command: an unusable file, or a path with
+ *  nothing at it. Shared by `requireConfig` (always) and `inspectConfig` (only once a
+ *  `--config` was actually named). */
+function assertUsable(loaded: LoadedConfig): ResolvedConfig {
+  const { config, problem } = loaded;
   if (problem) {
     fail("NOT_READY", `config file ${config.configPath} is unusable: ${problem}`, {
       hint: "fix or remove it, then run `oled config --init`",
@@ -45,9 +48,23 @@ export function requireConfig(cmd: Command): ResolvedConfig {
   return config;
 }
 
-/** Loads config without requiring the file to exist or parse cleanly. */
-export function lenientConfig(cmd: Command): LoadedConfig {
-  return loadConfig(resolveConfigPath(cmd));
+/** For commands that operate on the ledger: no config file, no ledger. */
+export function requireConfig(cmd: Command): ResolvedConfig {
+  return assertUsable(loadConfig(resolveConfigPath(cmd)));
+}
+
+/**
+ * For commands that report on a profile rather than operate on one (`status`, `doctor`): an
+ * absent DEFAULT config is itself a state worth describing, not a failure, so it loads
+ * leniently. But a --config the caller actually named must still resolve: otherwise the
+ * report would silently describe the default profile's ledger instead of the one asked for.
+ */
+export function inspectConfig(cmd: Command): LoadedConfig {
+  const named = resolveConfigPath(cmd);
+  const loaded = loadConfig(named);
+  // An explicit empty path still counts as "named"; only true absence stays lenient.
+  if (named !== undefined) assertUsable(loaded);
+  return loaded;
 }
 
 type SecretKey = (typeof CONFIG_SECRETS)[number];
@@ -71,7 +88,7 @@ function configValues(cfg: ResolvedConfig): OpenLedgerConfig {
   return values;
 }
 
-function showPayload(loaded: LoadedConfig): Record<string, unknown> {
+function showPayload(loaded: LoadedConfig): ConfigShowResult {
   const cfg = loaded.config;
   return {
     ...redactConfig(configValues(cfg)),
@@ -186,12 +203,13 @@ async function convergeConfig(flags: SettingFlags, loaded: LoadedConfig): Promis
   // createContextTemplate no-ops if the file exists, so this never clobbers edits.
   createContextTemplate(loaded.config.contextPath, merged.userName);
 
-  printConfig(currentMode(), {
+  const result: ConfigConvergeResult = {
     ...redactConfig(merged),
     config_path: configPath,
     context_path: loaded.config.contextPath,
     created: { config: configPath, db: merged.dbPath, data_dir: merged.dataDir },
-  });
+  };
+  printConfig(currentMode(), result);
 }
 
 /** `--init` asserts a fresh setup; a missing db or data dir is a recovery case it may rebuild. */

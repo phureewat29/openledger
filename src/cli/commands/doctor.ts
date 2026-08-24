@@ -7,7 +7,7 @@ import { homedir } from "os";
 import { join, resolve } from "path";
 import type { LoadedConfig, ResolvedConfig } from "../../config.js";
 import { listMissingTables } from "../../db/schema.js";
-import { lenientConfig } from "./config.js";
+import { inspectConfig } from "./config.js";
 import { openDb } from "../db.js";
 import { getVersion } from "../../setup/install.js";
 import { SKILL_DIRS, SKILL_PACK_DIR } from "../../setup/locations.js";
@@ -19,12 +19,7 @@ import {
   resolveOcr,
   type OCRConfigSource,
 } from "../../extract/ocr.js";
-
-interface Check {
-  name: string;
-  ok: boolean;
-  detail?: string;
-}
+import type { DoctorCheck as Check, DoctorReport } from "../../contract/doctor.js";
 
 const HARD_CHECKS = new Set(["db_open", "schema_tables_present"]);
 const REQUIRED_TABLES = ["accounts", "transactions", "questions"];
@@ -172,12 +167,13 @@ const CHECK_COLUMNS: Column<Check>[] = [
 ];
 
 async function diagnoseEnvironment(_opts: Record<string, unknown>, command: Command): Promise<void> {
-  const checks = await runChecks(lenientConfig(command));
+  const checks = await runChecks(inspectConfig(command));
   const ok = checks.filter((c) => HARD_CHECKS.has(c.name)).every((c) => c.ok);
 
   const mode = currentMode();
   if (mode.json) {
-    emit({ checks, ok });
+    const result: DoctorReport = { checks, ok };
+    emit(result);
   } else {
     emitList(checks, CHECK_COLUMNS);
     const failed = checks.some((c) => !c.ok);

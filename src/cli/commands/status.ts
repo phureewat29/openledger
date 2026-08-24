@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { uniq } from "es-toolkit";
 import { getNetWorth } from "../../accounts/balances.js";
-import type { ResolvedConfig } from "../../config.js";
+import type { LoadedConfig } from "../../config.js";
 import { countAccounts } from "../../db/queries/accounts.js";
 import { countFiles } from "../../db/queries/files.js";
 import { countMerchants } from "../../db/queries/merchants.js";
@@ -17,52 +17,29 @@ import { formatAmount, toDecimalTotals } from "../currency.js";
 import { banner, visibleLength, ANSI_RE, formatInt } from "../format.js";
 import { currentMode, emit, redactionEnabled, renderByMode, runAction } from "../output.js";
 import { tryExecute } from "../../lib/result.js";
-import { lenientConfig } from "./config.js";
+import { inspectConfig } from "./config.js";
 import { openDb } from "../db.js";
-
-interface Counts {
-  accounts: number;
-  transactions: number;
-  merchants: number;
-  notes: number;
-}
-
-export interface StatusReport {
-  type: "status";
-  configured: boolean;
-  config_path: string;
-  data_dir: string;
-  locale: string;
-  currency: string;
-  user_name: string;
-  db: {
-    path: string;
-    reachable: boolean;
-    error: string | null;
-  };
-  counts: Counts | null;
-  /** Always present: `new` counts unregistered data-dir files, the "is there work waiting?" answer. */
-  files: { new: number; ingested: number; pending: number; failed: number };
-  questions: { open: number; deferred: number } | null;
-  // Keyed by currencies with an asset or liability account, so an untouched ledger still reports {"THB":0}.
-  net_worth: {
-    assets: Record<string, number>;
-    liabilities: Record<string, number>;
-    net_worth: Record<string, number>;
-  } | null;
-}
+import { getVersion } from "../../setup/install.js";
+import { CONTRACT_VERSION } from "../../contract/version.js";
+import type { StatusReport } from "../../contract/status.js";
 
 /** `status` never creates the ledger, so a missing db file is reported, not opened. */
 const NO_LEDGER = "no ledger yet";
 
-async function buildReport(cfg: ResolvedConfig): Promise<StatusReport> {
+// Exported for tests: lets the default-profile-problem path be pinned directly, without a
+// subprocess or a real ~/.oled to leave a broken file in.
+export async function buildReport(loaded: LoadedConfig): Promise<StatusReport> {
+  const cfg = loaded.config;
   const report: StatusReport = {
     type: "status",
+    contract_version: CONTRACT_VERSION,
+    version: getVersion(),
     // `configured` means a converge has run (`oled config --init`); a db file alone doesn't imply that.
     configured: cfg.exists,
     // Home-relative so no output carries the OS account name; `--config` expands
     // `~` back, so what status prints is still usable as input.
     config_path: homeRelative(cfg.configPath),
+    config_problem: loaded.problem,
     data_dir: homeRelative(cfg.dataDir),
     locale: cfg.displayLocale,
     currency: cfg.displayCurrency,
@@ -115,13 +92,15 @@ async function buildReport(cfg: ResolvedConfig): Promise<StatusReport> {
   return report;
 }
 
-// Paths are home-relativized facts, not free text; only error prose and user_name can still carry PII.
-const STATUS_REDACT_FIELDS = ["error", "user_name"] as const;
+// Paths are home-relativized facts, not free text; only error prose, user_name, and a
+// broken file's parse message can still carry PII.
+const STATUS_REDACT_FIELDS = ["error", "user_name", "config_problem"] as const;
 
 // Redaction defaults on, so bare `oled` (no --no-redact flag) masks the same fields `status` does.
 export async function showStatus(opts: { redact?: boolean }, command: Command): Promise<void> {
-  const { config: cfg } = lenientConfig(command);
-  let report = await buildReport(cfg);
+  const loaded = inspectConfig(command);
+  const cfg = loaded.config;
+  let report = await buildReport(loaded);
   // Decided before redaction: paths and error prose are display strings, not facts to branch on.
   const ledgerMissing = !report.db.reachable && !existsSync(cfg.dbPath);
   if (redactionEnabled(opts)) {
@@ -139,13 +118,16 @@ function renderPlain(r: StatusReport): void {
   const lines: [string, string | number | boolean][] = [
     ["configured", r.configured],
     ["config_path", r.config_path],
+  ];
+  if (r.config_problem) lines.push(["config_problem", r.config_problem]);
+  lines.push(
     ["data_dir", r.data_dir],
     ["locale", r.locale],
     ["currency", r.currency],
     ["user_name", r.user_name],
     ["db_path", r.db.path],
     ["db_reachable", r.db.reachable],
-  ];
+  );
   if (r.db.error) lines.push(["db_error", r.db.error]);
   if (r.counts) {
     lines.push(
@@ -197,8 +179,9 @@ export function renderTty(r: StatusReport, color: boolean, ledgerMissing = false
 
   process.stdout.write("\n" + (color ? banner() : stripBanner()) + "\n\n");
 
-  section("System", [
-    ["Configured", r.configured ? "yes" : dim("no")],
+  const system: [string, string][] = [["Configured", r.configured ? "yes" : dim("no")]];
+  if (r.config_problem) system.push(["Config", dim(`unusable: ${r.config_problem}`)]);
+  system.push(
     ["User", dim(r.user_name)],
     ["Locale", dim(r.locale)],
     ["Currency", dim(r.currency)],
@@ -207,9 +190,11 @@ export function renderTty(r: StatusReport, color: boolean, ledgerMissing = false
       "Database",
       r.db.reachable ? "ready" : dim(r.db.error ? `not ready: ${r.db.error}` : "not ready"),
     ],
-  ]);
+  );
+  section("System", system);
 
-  // status always exits 0, so an unreachable db needs its own pointer to what resolves it.
+  // Bare status always exits 0; a named --config that fails to resolve exits NOT_READY
+  // before a report is ever built. An unreachable db still needs its own pointer here.
   if (!r.db.reachable) {
     const next = ledgerMissing
       ? "run `oled config --init` to create one"
