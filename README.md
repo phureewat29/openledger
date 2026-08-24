@@ -104,6 +104,21 @@ oled datasets       # Reference datasets: institutions for the US, Japan, Thaila
 oled open           # Open the data folder in file explorer
 ```
 
+## The Typed Contract
+
+Every command speaks NDJSON under `--json`: one JSON object per line, lists ending in a `{"type":"summary"}` row, and failures as a single `{"error":{...}}` line on stderr whose `code` matches the exit code. That wire format ships as code. `@aquartier/openledger/contract` exports a zod schema and a TypeScript type for every line each command can print, plus the `EXIT` table, the `ErrorEnvelope` schema, and `CONTRACT_VERSION`:
+
+```ts
+import { StatusReport, CONTRACT_VERSION } from "@aquartier/openledger/contract";
+
+const status = StatusReport.parse(JSON.parse(line)); // line from `oled status --json`
+if (status.contract_version !== CONTRACT_VERSION) {
+  // Built against a different wire format: read the release notes before trusting shapes.
+}
+```
+
+`oled status --json` stamps `contract_version` (currently 1), and it bumps whenever any command's JSON shape changes, additive or not. Exit codes are data too: `EXIT.BUSY` (8) means another process held the ledger and the same command is safe to re-run.
+
 ## Security & Privacy
 
 - All financial data stays on your machine; default `~/.oled/db.sqlite`. Both it and the config file are written with `0600` permissions.

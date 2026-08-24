@@ -4,6 +4,9 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 import { buildProgram } from "./program.js";
+import { EXIT } from "./output.js";
+import { EXIT as CONTRACT_EXIT } from "../contract/exit.js";
+import { CONTRACT_VERSION } from "../contract/version.js";
 
 // buildProgram() only builds the commander tree: no argv parsing, no action run.
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
@@ -176,6 +179,19 @@ describe("docs consistency (no subprocesses)", () => {
   // The frontmatter's own shape is pinned harder in src/setup/install.test.ts.
   it("SKILL.md carries no references/ pointer", () => {
     expect(SKILL.includes("references/")).toBe(false);
+  });
+});
+
+describe("machine contract wiring", () => {
+  it("output.ts's EXIT is the same object as contract/exit.ts's, not a copy", () => {
+    expect(EXIT).toBe(CONTRACT_EXIT);
+  });
+
+  it("SKILL.md's contract_version clause names the current CONTRACT_VERSION", () => {
+    const idx = SKILL.indexOf("contract_version");
+    expect(idx, "SKILL.md is missing a contract_version clause").toBeGreaterThan(-1);
+    const nearby = SKILL.slice(idx, idx + 200);
+    expect(nearby).toContain(String(CONTRACT_VERSION));
   });
 });
 
