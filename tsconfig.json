@@ -11,6 +11,7 @@
     "rootDir": "src",
     "skipLibCheck": true,
     "resolveJsonModule": true,
+    "types": ["node"],
     "declaration": false
   },
   "include": ["src/**/*"],
