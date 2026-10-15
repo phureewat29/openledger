@@ -6,9 +6,9 @@ import {
   findAccountById,
   listLedgerCurrencies,
   type AccountType,
-} from "../db/queries/accounts.js";
-import { findMerchantById, upsertMerchant } from "../db/queries/merchants.js";
-import { insertTransaction } from "../db/queries/transactions.js";
+} from "./queries.js";
+import { findMerchantById, upsertMerchant } from "../merchants/queries.js";
+import { insertTransaction } from "../transactions/queries.js";
 import {
   createAccount,
   deleteAccount,

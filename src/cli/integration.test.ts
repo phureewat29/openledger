@@ -4,7 +4,7 @@ import { createSandbox, makeRunCLI, writeConfig, type CLIRunner, type Sandbox } 
 import { buildProgram } from "./program.js";
 import { migrate } from "../db/schema.js";
 import { ensureLedgerRoot } from "../accounts/accounts.js";
-import { insertTransaction } from "../db/queries/transactions.js";
+import { insertTransaction } from "../transactions/queries.js";
 
 let sandbox: Sandbox;
 let runCLI: CLIRunner;

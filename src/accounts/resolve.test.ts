@@ -4,7 +4,7 @@ import {
   countAccounts,
   findAccountById,
   listLedgerCurrencies,
-} from "../db/queries/accounts.js";
+} from "./queries.js";
 import {
   shouldPlaceAccount,
   ensureUncategorizedFallback,

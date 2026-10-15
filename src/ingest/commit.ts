@@ -19,7 +19,7 @@ import {
   validateTransactionFields,
   type TransactionInput,
   type ValidateTransactionResult,
-} from "../db/queries/transactions.js";
+} from "../transactions/queries.js";
 import {
   currencyOf,
   deriveTransactionId,
@@ -29,8 +29,8 @@ import {
   newGroupId,
 } from "../lib/ids.js";
 import { toMinorUnits } from "../lib/money.js";
-import { ledgerExists } from "../db/queries/accounts.js";
-import type { MerchantUpsertInput } from "../db/queries/merchants.js";
+import { ledgerExists } from "../accounts/queries.js";
+import type { MerchantUpsertInput } from "../merchants/queries.js";
 import {
   closeRowRefusal,
   raiseCurrencyMismatch,

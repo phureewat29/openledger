@@ -13,8 +13,8 @@ import {
   findAccountById,
   ledgerExists,
   type AccountType,
-} from "../db/queries/accounts.js";
-import { merchantExists } from "../db/queries/merchants.js";
+} from "./queries.js";
+import { merchantExists } from "../merchants/queries.js";
 import { currencyOf, isLedgerScopedId, typeFromId } from "../lib/ids.js";
 import { findAccountsByFuzzyName } from "./matching.js";
 

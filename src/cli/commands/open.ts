@@ -3,7 +3,7 @@ import { existsSync, mkdirSync } from "fs";
 import { resolve } from "path";
 import chalk from "chalk";
 import type { Command } from "commander";
-import { requireConfig } from "./config.js";
+import { requireConfig } from "../../config/cli.js";
 import { emit, renderByMode, runAction } from "../output.js";
 import type { OpenResult } from "../../contract/open.js";
 

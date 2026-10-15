@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { LoadedConfig } from "../../config.js";
+import type { LoadedConfig } from "../../config/config.js";
 import { buildReport, renderTty } from "./status.js";
 import type { StatusReport } from "../../contract/status.js";
 import { CONTRACT_VERSION } from "../../contract/version.js";

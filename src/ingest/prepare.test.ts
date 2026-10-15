@@ -16,9 +16,9 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type Database from "libsql";
 import { createAccount } from "../accounts/accounts.js";
-import { upsertMerchant } from "../db/queries/merchants.js";
-import { insertTransaction, countTransactionsBySourceFile } from "../db/queries/transactions.js";
-import { findFileById } from "../db/queries/files.js";
+import { upsertMerchant } from "../merchants/queries.js";
+import { insertTransaction, countTransactionsBySourceFile } from "../transactions/queries.js";
+import { findFileById } from "../files/queries.js";
 import { PAGE_RENDER } from "../extract/extract.js";
 import { MAX_SOURCE_BYTES, loadSource, type LoadedSource } from "../extract/source.js";
 import {
@@ -38,7 +38,7 @@ import {
   requireLiveOcr,
   requireLiveOcrSource,
 } from "../../fixtures/ocr.js";
-import { registerPendingFile } from "./files.js";
+import { registerPendingFile } from "../files/files.js";
 import { discoverFiles, prepareFile, type PrepareConfig } from "./prepare.js";
 
 let dataDir: string;

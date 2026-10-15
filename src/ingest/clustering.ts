@@ -1,5 +1,5 @@
 import { groupBy, range } from "es-toolkit";
-import type { DuplicateTransactionRow } from "../db/queries/transactions.js";
+import type { DuplicateTransactionRow } from "../transactions/queries.js";
 
 /** Candidate duplicates share an amount and an account pair. */
 export function bucketDuplicateCandidates(

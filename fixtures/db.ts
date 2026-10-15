@@ -2,7 +2,7 @@ import Database from "libsql";
 import { migrate } from "../src/db/schema.js";
 import { createAccount, ensureLedgerRoot, isLedgerRootId } from "../src/accounts/accounts.js";
 import { humanizeSegment } from "../src/accounts/resolve.js";
-import type { AccountType, CreateAccountInput } from "../src/db/queries/accounts.js";
+import type { AccountType, CreateAccountInput } from "../src/accounts/queries.js";
 import { currencyOf, typeFromId } from "../src/lib/ids.js";
 
 /** Foreign keys are ON: sqlite defaults them off, and the schema's cascades are what many of these tests assert. */

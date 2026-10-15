@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { getPeriodTotals, subtractTotals } from "../../accounts/balances.js";
 import { printKeyValues } from "../format.js";
 import { openDb } from "../db.js";
-import { requireConfig } from "./config.js";
+import { requireConfig } from "../../config/cli.js";
 import { currentMode, emit, fail, runAction } from "../output.js";
 import { toDecimalTotals } from "../currency.js";
 import { ISO_DATE_RE } from "../../lib/date.js";

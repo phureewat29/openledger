@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
-import { findAccountById } from "../db/queries/accounts.js";
+import { findAccountById } from "./queries.js";
 import { createAccount } from "./accounts.js";
 import {
   getAccountBalances,
@@ -18,7 +18,7 @@ import {
   insertTransaction,
   voidTransactionAsMirror,
   type TransactionInput,
-} from "../db/queries/transactions.js";
+} from "../transactions/queries.js";
 import { todayIso } from "../lib/date.js";
 import { freshDb } from "../../fixtures/db.js";
 

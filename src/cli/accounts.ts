@@ -1,5 +1,5 @@
 import type Database from "libsql";
-import { findAccountById, ledgerExists, listLedgerCurrencies, type AccountRow } from "../db/queries/accounts.js";
+import { findAccountById, ledgerExists, listLedgerCurrencies, type AccountRow } from "../accounts/queries.js";
 import { isLedgerScopedId } from "../lib/ids.js";
 import { fail } from "./output.js";
 

@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
-import { countAccounts, findAccountById, ledgerExists } from "../db/queries/accounts.js";
+import { countAccounts, findAccountById, ledgerExists } from "../accounts/queries.js";
 import { createAccount, mergeAccounts } from "../accounts/accounts.js";
 import { getAccountBalances } from "../accounts/balances.js";
-import { bulkRecategorize, countTransactions, findTransactionById } from "../db/queries/transactions.js";
-import { findMerchantByName, upsertMerchant } from "../db/queries/merchants.js";
+import { bulkRecategorize, countTransactions, findTransactionById } from "../transactions/queries.js";
+import { findMerchantByName, upsertMerchant } from "../merchants/queries.js";
 import { deriveTransactionId, deriveGroupId } from "../lib/ids.js";
-import { listQuestions, countQuestions, closeQuestion, deferQuestion } from "../db/queries/questions.js";
+import { listQuestions, countQuestions, closeQuestion, deferQuestion } from "../questions/queries.js";
 import {
   commitTransaction,
   commitLinkedTransactions,

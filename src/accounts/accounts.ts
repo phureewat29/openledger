@@ -8,9 +8,9 @@ import {
   insertStructuralAccount,
   type AccountType,
   type CreateAccountInput,
-} from "../db/queries/accounts.js";
-import { accountHasTransactions, repointTransactions } from "../db/queries/transactions.js";
-import { repointMerchantDefaultAccount } from "../db/queries/merchants.js";
+} from "./queries.js";
+import { accountHasTransactions, repointTransactions } from "../transactions/queries.js";
+import { repointMerchantDefaultAccount } from "../merchants/queries.js";
 import { currencyOf, typeFromId } from "../lib/ids.js";
 import { STRUCTURAL_SUFFIX } from "../lib/structural.js";
 

@@ -7,17 +7,17 @@ import { levenshtein } from "../lib/distance.js";
 
 import { registerStatus, showStatus } from "./commands/status.js";
 import { registerDoctor } from "./commands/doctor.js";
-import { registerSetup } from "./commands/setup.js";
-import { registerConfig } from "./commands/config.js";
-import { registerIngest } from "./commands/ingest.js";
-import { registerFiles } from "./commands/files.js";
-import { registerTransactions } from "./commands/transactions.js";
-import { registerAccounts } from "./commands/accounts.js";
-import { registerMerchants } from "./commands/merchants.js";
-import { registerQuestions } from "./commands/questions.js";
+import { registerSetup } from "../setup/cli.js";
+import { registerConfig } from "../config/cli.js";
+import { registerIngest } from "../ingest/cli.js";
+import { registerFiles } from "../files/cli.js";
+import { registerTransactions } from "../transactions/cli.js";
+import { registerAccounts } from "../accounts/cli.js";
+import { registerMerchants } from "../merchants/cli.js";
+import { registerQuestions } from "../questions/cli.js";
 import { registerReport } from "./commands/report.js";
-import { registerNotes } from "./commands/notes.js";
-import { registerDatasets } from "./commands/datasets.js";
+import { registerNotes } from "../notes/cli.js";
+import { registerDatasets } from "../datasets/cli.js";
 import { registerOpen } from "./commands/open.js";
 
 const GLOBAL_OPTIONS = [

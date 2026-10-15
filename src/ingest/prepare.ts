@@ -1,8 +1,8 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type Database from "libsql";
-import type { OpenLedgerConfig } from "../config.js";
-import { findFileByHash, replaceFile, type FileStatus } from "../db/queries/files.js";
+import type { OpenLedgerConfig } from "../config/config.js";
+import { findFileByHash, replaceFile, type FileStatus } from "../files/queries.js";
 import { extractFile, type Extraction, type TextPage } from "../extract/extract.js";
 import { resolveOcr, type OCRConfigSource } from "../extract/ocr.js";
 import { isEncryptedPdf, unlockPdf, type UnlockFailureReason } from "../extract/pdf.js";
@@ -18,7 +18,7 @@ import {
   resolveEntryPath,
   walkFiles,
   type WalkedFile,
-} from "./files.js";
+} from "../files/files.js";
 
 type IngestStatus = FileStatus | "new" | "unreadable";
 

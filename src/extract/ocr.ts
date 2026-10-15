@@ -1,5 +1,5 @@
 import * as z from "zod";
-import type { OpenLedgerConfig } from "../config.js";
+import type { OpenLedgerConfig } from "../config/config.js";
 import { tryExecute, type Result } from "../lib/result.js";
 import type { PageImage, RenderSpec } from "./pdf.js";
 import { modelCardFor, type ModelCardName, type OCRParams } from "./cards/index.js";

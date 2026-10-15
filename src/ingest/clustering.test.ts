@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { DuplicateTransactionRow } from "../db/queries/transactions.js";
+import type { DuplicateTransactionRow } from "../transactions/queries.js";
 import {
   bucketDuplicateCandidates,
   proximityComponents,

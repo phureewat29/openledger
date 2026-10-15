@@ -3,8 +3,8 @@ import { existsSync, writeFileSync } from "node:fs";
 import Database from "libsql";
 import { migrate } from "../../db/schema.js";
 import { createAccount } from "../../accounts/accounts.js";
-import { insertTransaction } from "../../db/queries/transactions.js";
-import { recordQuestion } from "../../db/queries/questions.js";
+import { insertTransaction } from "../../transactions/queries.js";
+import { recordQuestion } from "../../questions/queries.js";
 import {
   createSandbox,
   writeConfig,

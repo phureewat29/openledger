@@ -3,8 +3,8 @@ import {
   deleteQuestionsByRowKey,
   findQuestionByRowKey,
   recordQuestion,
-} from "../db/queries/questions.js";
-import { ACCOUNT_TYPES, type AccountType } from "../db/queries/accounts.js";
+} from "../questions/queries.js";
+import { ACCOUNT_TYPES, type AccountType } from "../accounts/queries.js";
 import { typeFromId } from "../lib/ids.js";
 
 export type TransactionSide = "debit" | "credit";

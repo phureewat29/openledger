@@ -1,6 +1,6 @@
 import { round } from "es-toolkit";
 import type Database from "libsql";
-import { listAccounts, type AccountRow, type AccountType } from "../db/queries/accounts.js";
+import { listAccounts, type AccountRow, type AccountType } from "./queries.js";
 import { accountNumberKey, tailAfterMask } from "../lib/masked.js";
 import { levenshtein } from "../lib/distance.js";
 

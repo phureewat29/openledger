@@ -1,5 +1,5 @@
 import { escapeRegExp } from "es-toolkit";
-import { readContext } from "../context.js";
+import { readContext } from "../config/context.js";
 
 /** Where redaction terms come from: the configured user plus their context.md. */
 export interface RedactionSource {

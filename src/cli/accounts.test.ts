@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type Database from "libsql";
 import { freshDb } from "../../fixtures/db.js";
-import { insertAccount } from "../db/queries/accounts.js";
+import { insertAccount } from "../accounts/queries.js";
 import { failAccountNotFound } from "./accounts.js";
 
 interface ThrownCLIError {
