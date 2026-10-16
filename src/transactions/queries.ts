@@ -3,10 +3,9 @@ import { chunk } from "es-toolkit";
 import { accountCurrencySQL, accountExists } from "../accounts/queries.js";
 import { upsertMerchant, type MerchantUpsertInput } from "../merchants/queries.js";
 import { buildPatch, type PatchField } from "../lib/patch.js";
-import { currencyOf, newGroupId, newTransactionId } from "../lib/ids.js";
+import { STRUCTURAL_SUFFIX, currencyOf, newGroupId, newTransactionId } from "../lib/ids.js";
 import { clampLimit, clampOffset } from "../lib/limit.js";
 import { ISO_DATE_RE } from "../lib/date.js";
-import { STRUCTURAL_SUFFIX } from "../lib/structural.js";
 
 /** `noise_tokens` lives here, not on `TransactionInput`, so only rows claiming an alias carry one. */
 interface TransactionMerchantInput extends MerchantUpsertInput {
@@ -603,7 +602,7 @@ const NOT_ADJUSTMENT = `t.debit_account_id NOT LIKE '%:${STRUCTURAL_SUFFIX.adjus
           AND t.credit_account_id NOT LIKE '%:${STRUCTURAL_SUFFIX.adjustments}'`;
 
 /** Live, non-adjustment rows eligible for duplicate detection; clustering them
- *  lives beside its caller in `src/ingest/clustering.ts`. */
+ *  lives beside its caller in `src/transactions/duplicates.ts`. */
 export function listDuplicateCandidateTransactions(
   db: Database.Database,
   opts: { minAmount?: number } = {},

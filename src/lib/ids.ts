@@ -22,7 +22,7 @@ export function deriveGroupId(fileHash: string, page: number, rowIndex: number):
 
 /**
  * Account ids are `<currency>:<type>(:<segment>)*`, lowercase. Mirrors the
- * `upper(substr(a.id,1,3))` projection (db/queries/accounts.ts) and the
+ * `upper(substr(a.id,1,3))` projection (accounts/queries.ts) and the
  * trigger's `substr(id,1,4)` compare — change them together.
  */
 export function currencyOf(accountId: string): string {
@@ -58,3 +58,10 @@ export function newTransactionId(): string {
 export function newGroupId(): string {
   return `tg:${randomUUID()}`;
 }
+
+/** `<type>:<segment>` id suffix, after the currency head, of each ledger's system-owned accounts. */
+export const STRUCTURAL_SUFFIX = {
+  uncategorized: "expense:uncategorized",
+  adjustments: "equity:adjustments",
+  opening: "equity:opening",
+} as const satisfies Record<string, `${"expense" | "equity"}:${string}`>;

@@ -11,8 +11,7 @@ import {
 } from "./queries.js";
 import { accountHasTransactions, repointTransactions } from "../transactions/queries.js";
 import { repointMerchantDefaultAccount } from "../merchants/queries.js";
-import { currencyOf, typeFromId } from "../lib/ids.js";
-import { STRUCTURAL_SUFFIX } from "../lib/structural.js";
+import { STRUCTURAL_SUFFIX, currencyOf, typeFromId } from "../lib/ids.js";
 
 /** The DDL only GLOB-checks the currency head and the type position; this
  *  module owns the rest of the grammar. */
