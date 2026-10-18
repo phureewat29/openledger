@@ -1,12 +1,13 @@
 import type { Command } from "commander";
-import { emitList, emitSummary, fail, runAction, type Column } from "../cli/output.js";
+import { emitList, emitSummary, runAction, type Column } from "../cli/output.js";
+import { fail } from "../cli/errors.js";
 import {
   listDatasets as queryDatasets,
   readDataset,
   listDatasetNames,
   datasetHasKinds,
   type DatasetSummary,
-} from "./index.js";
+} from "./datasets.js";
 import type { DatasetRow } from "./loader.js";
 
 const DATASET_COLUMNS: Column<DatasetSummary>[] = [

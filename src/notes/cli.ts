@@ -6,8 +6,10 @@ import {
   type NoteRow,
 } from "./queries.js";
 import { applyRedaction } from "../privacy/redactor.js";
-import { emitList, emitSummary, fail, redactionEnabled, requireYes, runAction, type Column } from "../cli/output.js";
-import { openDb } from "../cli/db.js";
+import { emitList, emitSummary, runAction, type Column } from "../cli/output.js";
+import { fail } from "../cli/errors.js";
+import { redactionEnabled, requireYes } from "../cli/input.js";
+import { openDb } from "../db/connection.js";
 import { requireConfig } from "../config/cli.js";
 import * as z from "zod";
 import { parseInput, str, num } from "../lib/validate.js";

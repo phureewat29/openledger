@@ -1,10 +1,18 @@
 /** Every target receives the checked-in skills/openledger/SKILL.md verbatim: no templating, no per-agent wrapper. */
 
-import { createRequire } from "module";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join, resolve } from "path";
-import { DEFAULT_SKILLS_DIR, SKILL_PACK_DIR } from "./locations.js";
+import { getVersion } from "../lib/version.js";
+
+/** Default skills dir `setup` writes to when no `--dir` is given; callers name their own dir rather than picking a host id from a registry. */
+export const DEFAULT_SKILLS_DIR = ".agents/skills";
+
+/** The pack's own directory name inside a skills dir; agents discover it by name. */
+export const SKILL_PACK_DIR = "openledger";
+
+/** Directories `doctor` probes for an installed pack; diagnostic only, `setup` never resolves a path from here. */
+export const SKILL_DIRS: readonly string[] = [DEFAULT_SKILLS_DIR, ".claude/skills", ".skills"];
 
 interface InstalledTarget {
   path: string;
@@ -36,14 +44,6 @@ export class SkillPackVersionError extends Error {
     this.cliVersion = args.cliVersion;
     this.path = args.path;
   }
-}
-
-// Compiles to dist/setup/install.js; ../../package.json is the package root from there (same depth as src/cli/index.ts).
-const require = createRequire(import.meta.url);
-
-export function getVersion(): string {
-  const { version } = require("../../package.json") as { version: string };
-  return version;
 }
 
 export function skillMd(): string {

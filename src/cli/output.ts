@@ -1,43 +1,12 @@
 import chalk from "chalk";
 import { omit } from "es-toolkit";
-import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { visibleLength, ANSI_RE } from "./format.js";
-import { decodeUserText } from "../lib/text.js";
-import { ValidationError } from "../lib/validate.js";
-import { errorMessage } from "../lib/result.js";
-import { DBBusyError, DBNotReadyError, isBusyError, sqliteErrorCode } from "../db/errors.js";
-import type { AccountFailure } from "../accounts/accounts.js";
+import { toCLIError } from "./errors.js";
 import { EXIT, type ExitCode } from "../contract/exit.js";
 
 export { EXIT };
 export type { ExitCode };
-
-// Not exported: outside this module, fail() is the only construction site for CLIError.
-class CLIError extends Error {
-  readonly code: ExitCode;
-  readonly hint?: string;
-  readonly details?: unknown;
-  constructor(
-    code: ExitCode,
-    message: string,
-    opts?: { hint?: string; details?: unknown },
-  ) {
-    super(message);
-    this.name = "CLIError";
-    this.code = code;
-    this.hint = opts?.hint;
-    this.details = opts?.details;
-  }
-}
-
-export function fail(
-  code: ExitCode,
-  message: string,
-  opts?: { hint?: string; details?: unknown },
-): never {
-  throw new CLIError(code, message, opts);
-}
 
 export interface OutputMode {
   /** --json was set anywhere in the command chain. */
@@ -67,13 +36,6 @@ function resolveMode(cmd?: Command): OutputMode {
   const envNoColor = !!process.env.NO_COLOR;
   const noColor = json || noColorFlag || envNoColor || !tty;
   return { json, tty, color: !noColor, kind: deriveKind(json, tty) };
-}
-
-/** `oled ingest commit` for the `commit` sub-command of `ingest`. */
-export function commandPath(cmd: Command): string {
-  const names: string[] = [];
-  for (let c: Command | null = cmd; c; c = c.parent) names.unshift(c.name());
-  return names.join(" ");
 }
 
 let current: OutputMode | null = null;
@@ -178,139 +140,6 @@ function renderTable<T>(rows: T[], columns: Column<T>[], color: boolean): void {
     out.push(columns.map((c, i) => pad(r[i], widths[i], c.align)).join("  ").trimEnd());
   }
   process.stdout.write(out.join("\n") + "\n");
-}
-
-export function requireYes(opts: { yes?: boolean }, what: string): void {
-  if (!opts.yes) {
-    fail("INPUT_REQUIRED", `${what} needs confirmation`, {
-      hint: "re-run with --yes to proceed",
-    });
-  }
-}
-
-// Redaction is on unless --no-redact set opts.redact === false; it's undefined for a
-// direct call, so `!!opts.redact` reads backwards.
-export function redactionEnabled(opts: { redact?: boolean }): boolean {
-  return opts.redact !== false;
-}
-
-/** Empty string when stdin is a TTY (no pipe). */
-async function readStdinToEnd(): Promise<string> {
-  if (process.stdin.isTTY) return "";
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return decodeUserText(Buffer.concat(chunks));
-}
-
-// Auto-detects a JSON array (leading `[`) vs NDJSON; row validation is the caller's job.
-export async function readStdinBatch(inputPath?: string): Promise<unknown[]> {
-  const from = inputPath ?? "stdin";
-  let source: string;
-  if (inputPath) {
-    try {
-      source = decodeUserText(readFileSync(inputPath));
-    } catch (err) {
-      fail("NOT_FOUND", `cannot read --input file: ${errorMessage(err)}`, {
-        hint: "pass a readable NDJSON (or JSON array) file path",
-      });
-    }
-  } else {
-    source = await readStdinToEnd();
-  }
-  const firstNonWs = source.match(/\S/);
-  if (!firstNonWs)
-    fail("USAGE", `${from}: no rows`, {
-      hint: "pass NDJSON rows via --input <file> or pipe them on stdin",
-    });
-
-  if (firstNonWs[0] === "[") {
-    try {
-      return JSON.parse(source) as unknown[];
-    } catch (err) {
-      fail("USAGE", `${from}: invalid JSON array: ${errorMessage(err)}`);
-    }
-  }
-
-  const out: unknown[] = [];
-  const lines = source.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    try {
-      out.push(JSON.parse(line));
-    } catch (err) {
-      fail("USAGE", `${from}: invalid JSON on line ${i + 1}: ${errorMessage(err)}`, {
-        details: { line: i + 1 },
-      });
-    }
-  }
-  return out;
-}
-
-export function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-const BUSY_HINT = "another oled process is using the ledger; re-run the same command in a moment";
-
-// Page-body damage never reaches the open pragma; it surfaces at the query that reads the page.
-const DAMAGED_DB_CODES = ["SQLITE_CORRUPT", "SQLITE_NOTADB"];
-
-export function toCLIError(err: unknown, cmd?: Command): CLIError {
-  if (err instanceof CLIError) return err;
-  if (err instanceof ValidationError) {
-    return new CLIError("USAGE", err.message, {
-      hint: cmd
-        ? `run \`${commandPath(cmd)} --help\` for its flags and usage`
-        : "append --help to the command for its flags and usage",
-    });
-  }
-  if (err instanceof DBNotReadyError) {
-    return new CLIError("NOT_READY", err.message, {
-      hint: "run `oled config --init` to configure the harness",
-    });
-  }
-  if (err instanceof DBBusyError) return new CLIError("BUSY", err.message, { hint: BUSY_HINT });
-  // A lock lost past the open (a write that waited out its busy timeout) says the same thing.
-  if (isBusyError(err)) {
-    return new CLIError("BUSY", "The ledger is in use by another process.", { hint: BUSY_HINT });
-  }
-  const sqliteCode = sqliteErrorCode(err);
-  if (DAMAGED_DB_CODES.includes(sqliteCode)) {
-    return new CLIError(
-      "NOT_READY",
-      `The ledger file is damaged (${sqliteCode}): ${errorMessage(err)}`,
-      { hint: "restore the newest `<db>.<stamp>.bak` beside it, or move the file aside and re-ingest" },
-    );
-  }
-  return new CLIError("GENERIC", errorMessage(err));
-}
-
-// Record<Union, ExitCode> fails the build if a reason case is unhandled.
-export const REASON_EXIT: Record<AccountFailure, ExitCode> = {
-  account_exists: "INVALID",
-  parent_not_found: "NOT_FOUND",
-  invalid_hierarchy: "INVALID",
-};
-
-export function failReason(
-  failure: { reason: AccountFailure; message: string },
-  hint?: string,
-): never {
-  fail(REASON_EXIT[failure.reason], failure.message, hint === undefined ? undefined : { hint });
-}
-
-// Matches error message text, for throw sites that use a plain `Error` instead of a typed reason.
-export function mapNotFoundError(err: unknown): never {
-  const message = errorMessage(err);
-  if (/not found|does not exist/i.test(message)) {
-    fail("NOT_FOUND", message);
-  }
-  fail("INVALID", message);
 }
 
 function reportError(err: unknown, cmd?: Command): number {

@@ -14,7 +14,7 @@ import {
 } from "./balance-queries.js";
 import { insertTransaction } from "../transactions/queries.js";
 import { currencyOf } from "../lib/ids.js";
-import { fromMinorUnits, toMinorUnits } from "../lib/money.js";
+import { fromMinorUnits, toMinorUnits, type CurrencyTotals } from "../lib/money.js";
 import { todayIso, ISO_DATE_RE } from "../lib/date.js";
 import { ensureStructuralAccount, structuralAccountId } from "./accounts.js";
 
@@ -26,10 +26,6 @@ export interface AccountBalanceMinor extends AccountRow {
   balance_minor: number;
   balance: number;
 }
-
-/** Per-currency integer minor units; never summed across keys. Decimals only
- *  appear at the CLI boundary, through `toDecimalTotals`. */
-export type CurrencyTotals = Record<string, number>;
 
 interface NetWorth {
   assets: CurrencyTotals;

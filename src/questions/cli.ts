@@ -10,17 +10,11 @@ import {
   type QuestionRow,
 } from "./queries.js";
 import { applyRedaction } from "../privacy/redactor.js";
-import {
-  emitCappedSummary,
-  emitList,
-  emitSummary,
-  fail,
-  redactionEnabled,
-  runAction,
-  type Column,
-} from "../cli/output.js";
+import { emitCappedSummary, emitList, emitSummary, runAction, type Column } from "../cli/output.js";
+import { fail } from "../cli/errors.js";
+import { redactionEnabled } from "../cli/input.js";
 import { clampOffset } from "../lib/limit.js";
-import { openDb } from "../cli/db.js";
+import { openDb } from "../db/connection.js";
 import { requireConfig } from "../config/cli.js";
 import * as z from "zod";
 import { parseInput, str, int } from "../lib/validate.js";

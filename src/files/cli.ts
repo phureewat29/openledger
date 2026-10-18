@@ -1,31 +1,33 @@
 import type { Command } from "commander";
-import {
-  type Column,
-  emitList,
-  emitObject,
-  emitSummary,
-  fail,
-  requireYes,
-  runAction,
-} from "../cli/output.js";
-import { openDb } from "../cli/db.js";
+import type Database from "libsql";
+import { type Column, emitList, emitObject, emitSummary, runAction } from "../cli/output.js";
+import { fail } from "../cli/errors.js";
+import { requireYes } from "../cli/input.js";
+import { openDb } from "../db/connection.js";
 import { requireConfig } from "../config/cli.js";
 import {
   FILE_STATUSES,
   deleteFile,
+  findFileById,
   listFiles as queryFiles,
+  type FileRow,
   type FileStatus,
 } from "./queries.js";
 import { countTransactionsBySourceFile } from "../transactions/queries.js";
 import { countQuestions } from "../questions/queries.js";
 import { cleanCache } from "./files.js";
-import { requireFile } from "../cli/files.js";
 import type {
   FileDetail,
   FileDropResult,
   FileRecord,
   FilesListSummary,
 } from "../contract/files.js";
+
+export function requireFile(db: Database.Database, id: string, hint?: string): FileRow {
+  const row = findFileById(db, id);
+  if (!row) fail("NOT_FOUND", `no file: ${id}`, hint ? { hint } : undefined);
+  return row;
+}
 
 const FILE_COLUMNS: Column<FileRecord>[] = [
   { header: "Status", value: (r) => r.status },

@@ -1,20 +1,9 @@
 import type { Command } from "commander";
 import type Database from "libsql";
-import {
-  currentMode,
-  emit,
-  emitCappedSummary,
-  emitList,
-  emitObject,
-  emitSummary,
-  fail,
-  mapNotFoundError,
-  redactionEnabled,
-  requireYes,
-  runAction,
-  type Column,
-} from "../cli/output.js";
-import { openDb } from "../cli/db.js";
+import { currentMode, emit, emitCappedSummary, emitList, emitObject, emitSummary, runAction, type Column } from "../cli/output.js";
+import { fail, mapNotFoundError } from "../cli/errors.js";
+import { redactionEnabled, requireYes } from "../cli/input.js";
+import { openDb } from "../db/connection.js";
 import { requireConfig } from "../config/cli.js";
 import type { ResolvedConfig } from "../config/config.js";
 import {
@@ -43,10 +32,9 @@ import {
   type RawTransactionInput,
 } from "../ingest/commit.js";
 import { autoMergeStrictDuplicateTransactions, findDuplicateTransactions } from "./duplicates.js";
-import { requireAccount } from "../cli/accounts.js";
-import { fromMinorUnits, toMinorUnits } from "../lib/money.js";
+import { requireAccount } from "../accounts/cli.js";
+import { formatFixed, fromMinorUnits, toMinorUnits } from "../lib/money.js";
 import { clampOffset } from "../lib/limit.js";
-import { formatFixed } from "../cli/currency.js";
 import { currencyOf, newBatchId } from "../lib/ids.js";
 import { applyRedaction, type RedactionSource } from "../privacy/redactor.js";
 import { todayIso } from "../lib/date.js";

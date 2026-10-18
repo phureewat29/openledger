@@ -16,8 +16,8 @@ function tempDir(): string {
   return dir;
 }
 
-function open(dbPath: string): Database.Database {
-  const db = openDb(dbPath);
+async function open(dbPath: string): Promise<Database.Database> {
+  const db = await openDb(dbPath);
   opened.push(db);
   return db;
 }
@@ -39,8 +39,8 @@ function seedNonWAL(dbPath: string): void {
 }
 
 describe("openDb: lock settings", () => {
-  it("sets busy_timeout so a concurrent write waits instead of failing at once", () => {
-    const db = open(join(tempDir(), "db.sqlite"));
+  it("sets busy_timeout so a concurrent write waits instead of failing at once", async () => {
+    const db = await open(join(tempDir(), "db.sqlite"));
 
     expect(db.pragma("busy_timeout")).toEqual([{ timeout: 5000 }]);
     // libsql ignores `{ simple: true }` and answers with the row anyway; reading a pragma as
@@ -48,43 +48,43 @@ describe("openDb: lock settings", () => {
     expect(db.pragma("busy_timeout", { simple: true })).not.toBe(5000);
   });
 
-  it("converts a rollback-journal database to WAL", () => {
+  it("converts a rollback-journal database to WAL", async () => {
     const dbPath = join(tempDir(), "db.sqlite");
     seedNonWAL(dbPath);
 
-    expect(journalMode(open(dbPath))).toBe("wal");
+    expect(journalMode(await open(dbPath))).toBe("wal");
   });
 
-  it("leaves an existing WAL database in WAL on every later open", () => {
+  it("leaves an existing WAL database in WAL on every later open", async () => {
     const dbPath = join(tempDir(), "db.sqlite");
-    openDb(dbPath).close();
+    (await openDb(dbPath)).close();
 
-    expect(journalMode(open(dbPath))).toBe("wal");
+    expect(journalMode(await open(dbPath))).toBe("wal");
   });
 });
 
 describe("openDb: unusable paths", () => {
-  it("refuses a file that is not a database without calling it corrupt", () => {
+  it("refuses a file that is not a database without calling it corrupt", async () => {
     const dbPath = join(tempDir(), "notes.txt");
     writeFileSync(dbPath, "dear diary, this is not a database\n");
 
     // The open pragma never sees page-body damage, so "corrupt" was always the wrong word
     // here: it coached users into moving a healthy ledger aside.
-    expect(() => open(dbPath)).toThrow(DBNotReadyError);
-    expect(() => open(dbPath)).toThrow(dbPath);
-    expect(() => open(dbPath)).not.toThrow(/corrupt/i);
+    await expect(open(dbPath)).rejects.toThrow(DBNotReadyError);
+    await expect(open(dbPath)).rejects.toThrow(dbPath);
+    await expect(open(dbPath)).rejects.not.toThrow(/corrupt/i);
   });
 
-  it("reports a path that cannot be opened at all as NOT_READY, not a raw driver error", () => {
+  it("reports a path that cannot be opened at all as NOT_READY, not a raw driver error", async () => {
     const dbPath = join(tempDir(), "a-directory");
     mkdirSync(dbPath);
 
     // The constructor throws a plain Error with no `code`; unwrapped it exited 1 with driver text.
-    expect(() => open(dbPath)).toThrow(DBNotReadyError);
-    expect(() => open(dbPath)).toThrow(`Cannot open database at ${dbPath}`);
+    await expect(open(dbPath)).rejects.toThrow(DBNotReadyError);
+    await expect(open(dbPath)).rejects.toThrow(`Cannot open database at ${dbPath}`);
   });
 
-  it("reports a read-only ledger as not writable, not as a file to move aside", (ctx) => {
+  it("reports a read-only ledger as not writable, not as a file to move aside", async (ctx) => {
     // Root and Windows cannot be denied write permission; report that as skipped, never as passed.
     ctx.skip(process.platform === "win32" || process.getuid?.() === 0, "needs an unprivileged posix uid");
 
@@ -93,9 +93,9 @@ describe("openDb: unusable paths", () => {
     chmodSync(dbPath, 0o444);
 
     try {
-      expect(() => open(dbPath)).toThrow(DBNotReadyError);
-      expect(() => open(dbPath)).toThrow(/not writable/);
-      expect(() => open(dbPath)).not.toThrow(/Move it aside/);
+      await expect(open(dbPath)).rejects.toThrow(DBNotReadyError);
+      await expect(open(dbPath)).rejects.toThrow(/not writable/);
+      await expect(open(dbPath)).rejects.not.toThrow(/Move it aside/);
     } finally {
       chmodSync(dbPath, 0o600);
     }
@@ -108,7 +108,7 @@ describe("openDb: contention", () => {
    * case takes seconds by construction: the driver's busy_timeout does the waiting, not a
    * retry loop above it, and this pins DBBusyError once that wait ends (~5.2s, deterministic).
    */
-  it("reports a ledger another process holds as DBBusyError", () => {
+  it("reports a ledger another process holds as DBBusyError", async () => {
     const dbPath = join(tempDir(), "db.sqlite");
     seedNonWAL(dbPath);
     const holder = new Database(dbPath);
@@ -116,7 +116,7 @@ describe("openDb: contention", () => {
 
     let thrown: unknown;
     try {
-      open(dbPath);
+      await open(dbPath);
     } catch (err) {
       thrown = err;
     } finally {

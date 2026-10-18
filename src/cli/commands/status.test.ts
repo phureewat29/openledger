@@ -6,7 +6,7 @@ import type { LoadedConfig } from "../../config/config.js";
 import { buildReport, renderTty } from "./status.js";
 import type { StatusReport } from "../../contract/status.js";
 import { CONTRACT_VERSION } from "../../contract/version.js";
-import { getVersion } from "../../setup/install.js";
+import { getVersion } from "../../lib/version.js";
 
 function report(over: Partial<StatusReport> = {}): StatusReport {
   return {

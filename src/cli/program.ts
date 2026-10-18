@@ -1,9 +1,10 @@
 import { Command, Help, type CommanderError } from "commander";
 import { minBy } from "es-toolkit";
-import { createRequire } from "module";
 import { helpScreen } from "./format.js";
-import { commandPath, fail, jsonRequested, runAction } from "./output.js";
+import { jsonRequested, runAction } from "./output.js";
+import { commandPath, fail } from "./errors.js";
 import { levenshtein } from "../lib/distance.js";
+import { getVersion } from "../lib/version.js";
 
 import { registerStatus, showStatus } from "./commands/status.js";
 import { registerDoctor } from "./commands/doctor.js";
@@ -83,15 +84,12 @@ function parseFailureHandler(cmd: Command): (err: CommanderError) => void {
 }
 
 export function buildProgram(): Command {
-  const require = createRequire(import.meta.url);
-  const { version } = require("../../package.json");
-
   const program = new Command();
 
   program
     .name("oled")
     .description("A reliable, deterministic ledger for your AI")
-    .version(version)
+    .version(getVersion())
     .addHelpCommand(false)
     // Bare `oled` runs the same action as `status`, which redacts by default.
     .action(runAction(showStatus));

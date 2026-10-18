@@ -8,9 +8,9 @@ import { join, resolve } from "path";
 import type { LoadedConfig, ResolvedConfig } from "../../config/config.js";
 import { listMissingTables } from "../../db/schema.js";
 import { inspectConfig } from "../../config/cli.js";
-import { openDb } from "../db.js";
-import { getVersion } from "../../setup/install.js";
-import { SKILL_DIRS, SKILL_PACK_DIR } from "../../setup/locations.js";
+import { openDb } from "../../db/connection.js";
+import { getVersion } from "../../lib/version.js";
+import { SKILL_DIRS, SKILL_PACK_DIR } from "../../setup/install.js";
 import { EXIT, currentMode, emit, emitList, runAction, type Column } from "../output.js";
 import { tryExecute } from "../../lib/result.js";
 import {

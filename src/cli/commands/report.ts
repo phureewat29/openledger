@@ -1,10 +1,11 @@
 import type { Command } from "commander";
 import { getPeriodTotals, subtractTotals } from "../../accounts/balances.js";
 import { printKeyValues } from "../format.js";
-import { openDb } from "../db.js";
+import { openDb } from "../../db/connection.js";
 import { requireConfig } from "../../config/cli.js";
-import { currentMode, emit, fail, runAction } from "../output.js";
-import { toDecimalTotals } from "../currency.js";
+import { currentMode, emit, runAction } from "../output.js";
+import { fail } from "../errors.js";
+import { toDecimalTotals } from "../../lib/money.js";
 import { ISO_DATE_RE } from "../../lib/date.js";
 import type { ReportResult } from "../../contract/report.js";
 

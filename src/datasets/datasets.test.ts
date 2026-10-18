@@ -1,8 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { countryFileSchema, institutionsDataset } from "./institutions.js";
-import { findCountryDefaults, availableCountries } from "./defaults.js";
-import { noiseTokens } from "./noise.js";
-import { listDatasets, readDataset } from "./index.js";
+import {
+  availableCountries,
+  countryFileSchema,
+  findCountryDefaults,
+  institutionsDataset,
+  listDatasets,
+  noiseTokens,
+  readDataset,
+} from "./datasets.js";
 
 describe("institutions dataset", () => {
   it("loads every country's file, tagging and sorting rows by country then code", () => {

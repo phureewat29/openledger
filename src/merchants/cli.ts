@@ -1,16 +1,8 @@
 import type { Command } from "commander";
-import {
-  emitList,
-  emitObject,
-  emitCappedSummary,
-  fail,
-  mapNotFoundError,
-  redactionEnabled,
-  requireYes,
-  runAction,
-  type Column,
-} from "../cli/output.js";
-import { openDb } from "../cli/db.js";
+import { emitList, emitObject, emitCappedSummary, runAction, type Column } from "../cli/output.js";
+import { fail, mapNotFoundError } from "../cli/errors.js";
+import { redactionEnabled, requireYes } from "../cli/input.js";
+import { openDb } from "../db/connection.js";
 import { requireConfig } from "../config/cli.js";
 import {
   listMerchants as queryMerchants,
@@ -35,8 +27,8 @@ import type {
   MerchantUpdateResult,
   MerchantUpsertResult,
 } from "../contract/merchants.js";
-import { requireAccount } from "../cli/accounts.js";
-import { noiseTokens } from "../datasets/noise.js";
+import { requireAccount } from "../accounts/cli.js";
+import { noiseTokens } from "../datasets/datasets.js";
 import { applyRedaction } from "../privacy/redactor.js";
 import * as z from "zod";
 import { parseInput, str, bool, int } from "../lib/validate.js";

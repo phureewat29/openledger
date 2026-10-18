@@ -9,8 +9,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installSkill, getVersion, skillMd, SkillPackVersionError } from "./install.js";
-import { DEFAULT_SKILLS_DIR } from "./locations.js";
+import { DEFAULT_SKILLS_DIR, installSkill, skillMd, SkillPackVersionError } from "./install.js";
+import { getVersion } from "../lib/version.js";
 import {
   createSandbox,
   makeRunCLI,

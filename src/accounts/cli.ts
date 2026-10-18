@@ -1,24 +1,9 @@
 import type { Command } from "commander";
 import type Database from "libsql";
-import {
-  EXIT,
-  asRecord,
-  currentMode,
-  emit,
-  emitList,
-  emitObject,
-  emitSummary,
-  fail,
-  failReason,
-  mapNotFoundError,
-  readStdinBatch,
-  redactionEnabled,
-  renderByMode,
-  requireYes,
-  runAction,
-  type Column,
-} from "../cli/output.js";
-import { openDb } from "../cli/db.js";
+import { EXIT, currentMode, emit, emitList, emitObject, emitSummary, renderByMode, runAction, type Column } from "../cli/output.js";
+import { fail, failReason, mapNotFoundError } from "../cli/errors.js";
+import { asRecord, readStdinBatch, redactionEnabled, requireYes } from "../cli/input.js";
+import { openDb } from "../db/connection.js";
 import { requireConfig } from "../config/cli.js";
 import {
   createAccount as createAccountRow,
@@ -37,18 +22,20 @@ import {
 } from "./balances.js";
 import {
   findAccountById,
+  ledgerExists,
+  listLedgerCurrencies,
   renameAccount,
   updateAccountMetadata,
   ACCOUNT_TYPES,
+  type AccountRow,
   type AccountType,
   type CreateAccountInput,
   type UpdateAccountMetadataPatch,
 } from "./queries.js";
 import { findAccountsByFuzzyName, type FuzzyAccountMatch } from "./matching.js";
 import { ensureAccountAncestors } from "./resolve.js";
-import { failAccountNotFound, requireAccount } from "../cli/accounts.js";
-import { fromMinorUnits } from "../lib/money.js";
-import { formatFixed, toDecimalTotals } from "../cli/currency.js";
+import { isLedgerScopedId } from "../lib/ids.js";
+import { formatFixed, fromMinorUnits, toDecimalTotals } from "../lib/money.js";
 import { applyRedaction } from "../privacy/redactor.js";
 import { tryExecute } from "../lib/result.js";
 import * as z from "zod";
@@ -66,6 +53,26 @@ import type {
   AdjustAccountResult,
   UpdateAccountResult,
 } from "../contract/accounts.js";
+
+// Ledgers are enumerated from the accounts table, never from config, so a bad prefix can't
+// resolve against config state; the caller's own hint applies only once the id names a real ledger.
+export function failAccountNotFound(db: Database.Database, id: string, hint?: string): never {
+  if (isLedgerScopedId(id) && ledgerExists(db, id.slice(0, 3))) {
+    fail("NOT_FOUND", `account "${id}" not found`, { hint });
+  }
+  const ledgers = listLedgerCurrencies(db);
+  fail("NOT_FOUND", `account "${id}" not found`, {
+    hint: ledgers.length
+      ? `account ids start with a currency — existing ledgers: ${ledgers.join(", ")}`
+      : "account ids start with a currency (e.g. thb:expense:food); no ledger exists yet, run `oled config --init`",
+  });
+}
+
+export function requireAccount(db: Database.Database, id: string, hint?: string): AccountRow {
+  const account = findAccountById(db, id);
+  if (!account) failAccountNotFound(db, id, hint);
+  return account;
+}
 
 // Only `name` is free text; id/parent_id/type/currency and balances are structured, left verbatim.
 const ACCOUNT_REDACT_FIELDS = ["name"] as const;

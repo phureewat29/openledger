@@ -42,7 +42,7 @@ import {
   type QuestionContext,
   type TransactionSide,
 } from "./questions.js";
-import { noiseTokens } from "../datasets/noise.js";
+import { noiseTokens } from "../datasets/datasets.js";
 import type { CommitMerchant, CommitSide } from "../contract/ingest.js";
 
 /** Decorates a merchant hint with its country's noise tokens, or passes null through. */
@@ -63,7 +63,7 @@ export const CURRENCY_MISMATCH_HINT =
 export interface TransactionCommitContext extends QuestionContext {
   /** Enables idempotent transaction id derivation. */
   readonly fileHash?: string | null;
-  /** Picks the merchant noise-token dataset; resolved here because db/queries may not read `src/datasets/`. */
+  /** Picks the merchant noise-token dataset; resolved here because store modules (queries.ts) may not read `src/datasets/`. */
   readonly country: string;
 }
 

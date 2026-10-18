@@ -1,4 +1,4 @@
-import Database from "libsql";
+import type Database from "libsql";
 import { DBBusyError, DBNotReadyError, isBusyError, sqliteErrorCode } from "./errors.js";
 import { migrate } from "./schema.js";
 import { dirname } from "path";
@@ -14,13 +14,15 @@ const NOT_WRITABLE_CODES = new Set(["SQLITE_READONLY", "SQLITE_PERM", "SQLITE_CA
 // SQLITE_CORRUPT is folded in on the chance it ever surfaces here too, per prior behavior.
 const NOT_A_DATABASE_CODES = new Set(["SQLITE_NOTADB", "SQLITE_CORRUPT"]);
 
-export function openDb(dbPath: string): Database.Database {
+// libsql loads lazily here so its native binding stays off the startup path of commands that never open the ledger.
+export async function openDb(dbPath: string): Promise<Database.Database> {
   const dir = dirname(dbPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 
   // A path that cannot be opened at all (a directory, a bad mount) throws from the
   // constructor, where there is no connection to close and nothing to diagnose further.
-  const opened = tryExecute(() => new Database(dbPath, { timeout: BUSY_TIMEOUT_MS }));
+  const { default: LibSQL } = await import("libsql");
+  const opened = tryExecute(() => new LibSQL(dbPath, { timeout: BUSY_TIMEOUT_MS }));
   if (!opened.ok) throw new DBNotReadyError(`Cannot open database at ${dbPath}: ${opened.error}`);
   const db = opened.value;
 

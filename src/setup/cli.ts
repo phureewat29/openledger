@@ -1,12 +1,13 @@
 import type { Command } from "commander";
-import { currentMode, emit, fail, runAction } from "../cli/output.js";
+import { currentMode, emit, runAction } from "../cli/output.js";
+import { fail } from "../cli/errors.js";
 import {
+  DEFAULT_SKILLS_DIR,
   installSkill,
   skillMd,
   SkillPackVersionError,
   type InstallOptions,
 } from "./install.js";
-import { DEFAULT_SKILLS_DIR } from "./locations.js";
 import type { SetupInstallResult } from "../contract/setup.js";
 
 interface SetupOpts {

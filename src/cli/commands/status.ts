@@ -13,13 +13,14 @@ import { countNewFiles } from "../../files/files.js";
 import { applyRedaction } from "../../privacy/redactor.js";
 import { existsSync } from "fs";
 import { homeRelative } from "../../lib/path.js";
-import { formatAmount, toDecimalTotals } from "../currency.js";
+import { formatAmount, toDecimalTotals } from "../../lib/money.js";
 import { banner, visibleLength, ANSI_RE, formatInt } from "../format.js";
-import { currentMode, emit, redactionEnabled, renderByMode, runAction } from "../output.js";
+import { currentMode, emit, renderByMode, runAction } from "../output.js";
+import { redactionEnabled } from "../input.js";
 import { tryExecute } from "../../lib/result.js";
 import { inspectConfig } from "../../config/cli.js";
-import { openDb } from "../db.js";
-import { getVersion } from "../../setup/install.js";
+import { openDb } from "../../db/connection.js";
+import { getVersion } from "../../lib/version.js";
 import { CONTRACT_VERSION } from "../../contract/version.js";
 import type { StatusReport } from "../../contract/status.js";
 

@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { existsSync, mkdirSync } from "fs";
-import { openDb } from "../cli/db.js";
+import { openDb } from "../db/connection.js";
 import { STRUCTURAL_ACCOUNTS, ensureStructuralAccount } from "../accounts/accounts.js";
 import {
   CONFIG_SECRETS,
@@ -12,11 +12,12 @@ import {
   type ResolvedConfig,
 } from "./config.js";
 import { expandHome } from "../lib/path.js";
-import { findCountryDefaults, availableCountries } from "../datasets/defaults.js";
+import { findCountryDefaults, availableCountries } from "../datasets/datasets.js";
 import { createContextTemplate } from "./context.js";
 import { DEFAULT_MODEL_ID } from "../extract/cards/index.js";
 import { printKeyValues } from "../cli/format.js";
-import { currentMode, emit, fail, runAction, type OutputMode } from "../cli/output.js";
+import { currentMode, emit, runAction, type OutputMode } from "../cli/output.js";
+import { fail } from "../cli/errors.js";
 import * as z from "zod";
 import { parseInput, str, bool } from "../lib/validate.js";
 import type { ConfigShowResult, ConfigConvergeResult } from "../contract/config.js";

@@ -16,8 +16,10 @@ import type {
   CommitStandaloneResult,
   CommitSummary,
 } from "../contract/ingest.js";
-import { EXIT, asRecord, currentMode, emit, emitObject, emitSummary, fail, readStdinBatch } from "../cli/output.js";
-import { openDb } from "../cli/db.js";
+import { EXIT, currentMode, emit, emitObject, emitSummary } from "../cli/output.js";
+import { fail } from "../cli/errors.js";
+import { asRecord, readStdinBatch } from "../cli/input.js";
+import { openDb } from "../db/connection.js";
 import { requireConfig } from "../config/cli.js";
 import { newBatchId } from "../lib/ids.js";
 import { errorMessage } from "../lib/result.js";
@@ -27,7 +29,7 @@ import { countQuestions } from "../questions/queries.js";
 import * as z from "zod";
 import { safeParse, str, num, json } from "../lib/validate.js";
 import type { MerchantUpsertInput } from "../merchants/queries.js";
-import { requireFile } from "../cli/files.js";
+import { requireFile } from "../files/cli.js";
 
 interface CommitIngestOpts {
   file?: string;

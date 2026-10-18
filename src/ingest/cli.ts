@@ -1,32 +1,21 @@
 import type { Command } from "commander";
 import type Database from "libsql";
-import {
-  EXIT,
-  type Column,
-  type ExitCode,
-  currentMode,
-  emit,
-  emitList,
-  emitObject,
-  emitSummary,
-  fail,
-  runAction,
-} from "../cli/output.js";
-import { openDb } from "../cli/db.js";
+import { EXIT, type Column, type ExitCode, currentMode, emit, emitList, emitObject, emitSummary, runAction } from "../cli/output.js";
+import { fail } from "../cli/errors.js";
+import { openDb } from "../db/connection.js";
 import { requireConfig } from "../config/cli.js";
 import { commitIngest } from "./commit-cli.js";
 import { markFileFailed, markFileIngested } from "../files/queries.js";
 import { getAccountBalanceMinor } from "../accounts/balances.js";
 import { DIRECTION_RULES } from "./commit.js";
-import { formatFixed } from "../cli/currency.js";
 import { currencyOf } from "../lib/ids.js";
-import { fromMinorUnits, toMinorUnits } from "../lib/money.js";
+import { formatFixed, fromMinorUnits, toMinorUnits } from "../lib/money.js";
 import { parseInput, num, str } from "../lib/validate.js";
 import * as z from "zod";
 // source.ts avoids mupdf/libsql, so this import is safe on the startup path.
 import { MAX_SOURCE_BYTES, SUPPORTED_EXTS } from "../extract/source.js";
 import { cleanCache } from "../files/files.js";
-import { requireFile } from "../cli/files.js";
+import { requireFile } from "../files/cli.js";
 // prepare.ts keeps mupdf/libsql lazy internally (getMupdf() in extract/pdf.ts), so this import is safe on the startup path.
 import {
   discoverFiles,
