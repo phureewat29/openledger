@@ -1,5 +1,5 @@
 import * as z from "zod";
-import { uniq } from "es-toolkit";
+import { memoize, uniq } from "es-toolkit";
 import { loadDatasetRows, type DatasetDefinition, type DatasetRow } from "./loader.js";
 
 const INSTITUTION_KINDS = [
@@ -51,8 +51,8 @@ export const defaultsDataset: DatasetDefinition<CountryDefaults> = {
   sortKey: (row) => row.country,
 };
 
-function all(): CountryDefaults[] {
-  return loadDatasetRows("defaults", defaultsDataset) as unknown as CountryDefaults[];
+function all(): readonly CountryDefaults[] {
+  return loadDatasetRows(defaultsDataset) as unknown as readonly CountryDefaults[];
 }
 
 /** Case-insensitive lookup; null when the country has no defaults. */
@@ -80,11 +80,14 @@ export const noiseDataset: DatasetDefinition<NoiseFile> = {
   sortKey: (row) => String(row.token ?? ""),
 };
 
-export function noiseTokens(country: string): string[] {
-  const cc = country.toUpperCase();
-  return loadDatasetRows("noise", noiseDataset)
+const noiseTokensOf = memoize((cc: string): readonly string[] =>
+  loadDatasetRows(noiseDataset)
     .filter((row) => row.country === cc)
-    .map((row) => String(row.token));
+    .map((row) => String(row.token)),
+);
+
+export function noiseTokens(country: string): readonly string[] {
+  return noiseTokensOf(country.toUpperCase());
 }
 
 // `any` only erases each entry's own concrete `DatasetDefinition<...>` file shape, which the registry doesn't need.
@@ -111,7 +114,7 @@ export interface DatasetSummary {
 
 export function listDatasets(): DatasetSummary[] {
   return Object.entries(REGISTRY).map(([name, def]) => {
-    const rows = loadDatasetRows(name, def);
+    const rows = loadDatasetRows(def);
     const countries = uniq(rows.map((r) => r.country)).sort();
     return { name, countries, rows: rows.length };
   });
@@ -126,7 +129,7 @@ export function readDataset(
   if (!def) throw new Error(`unknown dataset "${name}"`);
   const country = filter.country?.toUpperCase();
   const { kind } = filter;
-  return loadDatasetRows(name, def).filter(
+  return loadDatasetRows(def).filter(
     (r) => (!country || r.country === country) && (!kind || r.kind === kind),
   );
 }

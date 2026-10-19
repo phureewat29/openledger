@@ -5,6 +5,8 @@
  */
 
 import * as z from "zod";
+import { memoize } from "es-toolkit";
+import { tryExecute } from "../lib/result.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,23 +26,15 @@ export interface DatasetDefinition<F extends { country: string } = { country: st
   kinds?: readonly string[];
 }
 
-// Memoized per dataset name, so importing a dataset module does no file I/O.
-const cache = new Map<string, DatasetRow[]>();
-
-const parsedFiles = new Map<string, unknown>();
-
-function readJson(file: string): unknown {
+const readJson = memoize((file: string): unknown => {
   const path = resolve(DATASETS_DIR, file);
-  if (parsedFiles.has(path)) return parsedFiles.get(path);
-  try {
-    const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
-    parsedFiles.set(path, raw);
-    return raw;
-  } catch (err) {
-    // A shipped file that won't parse is a packaging defect; surface it loudly rather than degrading to an empty registry.
-    throw new Error(`dataset file ${file} is not valid JSON: ${(err as Error).message}`);
-  }
-}
+  const raw = tryExecute(() => readFileSync(path, "utf8"));
+  if (!raw.ok) throw new Error(`dataset file ${file} could not be read: ${raw.error}`);
+  // A shipped file that won't parse is a packaging defect; surface it loudly rather than degrading to an empty registry.
+  const parsed = tryExecute((): unknown => JSON.parse(raw.value));
+  if (!parsed.ok) throw new Error(`dataset file ${file} is not valid JSON: ${parsed.error}`);
+  return parsed.value;
+});
 
 function readCountryFile<F extends { country: string }>(
   def: DatasetDefinition<F>,
@@ -70,14 +64,7 @@ function loadAll<F extends { country: string }>(def: DatasetDefinition<F>): Data
   return rows;
 }
 
-/** Every row of a named dataset, sorted by country then sort key. Returns the shared memoized array: callers must copy before mutating it. */
-export function loadDatasetRows<F extends { country: string }>(
-  name: string,
-  def: DatasetDefinition<F>,
-): DatasetRow[] {
-  const cached = cache.get(name);
-  if (cached) return cached;
-  const rows = loadAll(def);
-  cache.set(name, rows);
-  return rows;
-}
+/** Every row of a dataset, sorted by country then sort key. Memoized on the definition, so importing a dataset module does no file I/O; the array is shared and read-only. */
+export const loadDatasetRows = memoize(
+  <F extends { country: string }>(def: DatasetDefinition<F>): readonly DatasetRow[] => loadAll(def),
+);
