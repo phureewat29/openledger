@@ -43,7 +43,6 @@ export function deadOcrSettings(over: Partial<OCRSettings> = {}): OCRSettings {
     model: "test-ocr-model",
     apiKey: "",
     timeoutMs: 2_000,
-    modelCard: "typhoon",
     prompt: "read the page",
     params: { temperature: 0, top_p: 1, max_tokens: 256, seed: 7 },
     render: { dpi: 72, maxLongestDimPx: 1024 },

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { PAGE_RENDER, extractFile, type ExtractInput } from "./extract.js";
+import { extractFile, type ExtractInput } from "./extract.js";
+import { DEFAULT_RENDER } from "./pdf.js";
 import { corruptPdf, mixedPdf, pdfOf, scanPdf, textPdf } from "../../fixtures/pdf.js";
 import { samplePng } from "../../fixtures/images.js";
 import {
@@ -54,7 +55,7 @@ describe("extractFile: agent route", () => {
     expect(outcome.value).toMatchObject({
       source: "raster",
       textLayer: "none",
-      dpi: PAGE_RENDER.dpi,
+      dpi: DEFAULT_RENDER.dpi,
     });
     expect(outcome.value.pages).toHaveLength(1);
     expect(outcome.value.pages[0]).toMatchObject({ page: 1, mime: "image/png" });

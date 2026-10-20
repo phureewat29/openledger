@@ -10,7 +10,9 @@ import {
   resolveServedModel,
   type OCRConfigSource,
 } from "./ocr.js";
-import { MODEL_CARDS, MODEL_CARD_NAMES, modelCardFor } from "./cards/index.js";
+import { modelCardFor } from "./cards/index.js";
+import { fallbackModelCard } from "./cards/fallback.js";
+import { typhoonModelCard } from "./cards/typhoon-ocr1.5.js";
 import type { PageImage } from "./pdf.js";
 import { samplePng } from "../../fixtures/images.js";
 import {
@@ -29,8 +31,8 @@ function cfg(over: Partial<OCRConfigSource> = {}): OCRConfigSource {
   return { ocrBaseUrl: "", ocrModel: "", ocrApiKey: "", ...over };
 }
 
-const TYPHOON = MODEL_CARDS.typhoon;
-const FALLBACK = MODEL_CARDS.fallback;
+const TYPHOON = typhoonModelCard;
+const FALLBACK = fallbackModelCard;
 
 describe("resolveOcr", () => {
   it("reads null when no endpoint url is set", () => {
@@ -54,7 +56,6 @@ describe("resolveOcr", () => {
       model: TYPHOON.model,
       apiKey: "sk-test",
       timeoutMs: OCR_TIMEOUT_MS,
-      modelCard: "typhoon",
       prompt: TYPHOON.prompt,
       params: TYPHOON.params,
       render: TYPHOON.render,
@@ -64,8 +65,8 @@ describe("resolveOcr", () => {
   it("keeps a model id from no known family, reading it with the fallback card", () => {
     expect(resolveOcr(cfg({ ocrBaseUrl: "http://x/v1", ocrModel: "test-ocr-model" }))).toMatchObject({
       model: "test-ocr-model",
-      modelCard: "fallback",
       prompt: FALLBACK.prompt,
+      params: FALLBACK.params,
       render: FALLBACK.render,
     });
   });
@@ -75,7 +76,8 @@ describe("resolveOcr", () => {
     const model = `${TYPHOON.model}-preview-v9`;
     expect(resolveOcr(cfg({ ocrBaseUrl: "http://x/v1", ocrModel: model }))).toMatchObject({
       model,
-      modelCard: "typhoon",
+      prompt: TYPHOON.prompt,
+      params: TYPHOON.params,
     });
   });
 
@@ -83,21 +85,15 @@ describe("resolveOcr", () => {
     const model = TYPHOON.model.toUpperCase();
     expect(resolveOcr(cfg({ ocrBaseUrl: "http://x/v1", ocrModel: model }))).toMatchObject({
       model,
-      modelCard: "typhoon",
       prompt: TYPHOON.prompt,
       params: TYPHOON.params,
       render: TYPHOON.render,
     });
   });
 
-  // The fallback card has no id of its own; only cards with one can self-select.
-  it.each(MODEL_CARD_NAMES.filter((name) => MODEL_CARDS[name].model))(
-    "selects model card %s from its own model id",
-    (name) => {
-      const settings = resolveOcr(cfg({ ocrBaseUrl: "http://x/v1", ocrModel: MODEL_CARDS[name].model }));
-      expect(settings).toMatchObject({ modelCard: name });
-    },
-  );
+  it("selects the typhoon card from its own model id", () => {
+    expect(modelCardFor(TYPHOON.model).card).toBe(TYPHOON);
+  });
 });
 
 describe("isServerFailure", () => {
@@ -205,10 +201,9 @@ describe.skipIf(!liveOcr)("ocrPages and probeOcrEndpoint (live OCR endpoint)", (
       const servedId = served.value[0];
 
       const resolved = await resolveServedModel({ ...live, model: servedId.slice(0, -1) });
-      const { name, card } = modelCardFor(servedId);
+      const { card } = modelCardFor(servedId);
       expect(resolved).toMatchObject({
         model: servedId,
-        modelCard: name,
         prompt: card.prompt,
         params: card.params,
         render: card.render,

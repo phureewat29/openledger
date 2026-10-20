@@ -25,12 +25,12 @@ export interface ModelCard {
 export type ModelCardName = "typhoon" | "fallback";
 
 /** Exhaustive by construction: a new ModelCardName breaks the build until it is listed. */
-export const MODEL_CARDS: Record<ModelCardName, ModelCard> = {
+const MODEL_CARDS: Record<ModelCardName, ModelCard> = {
   typhoon: typhoonModelCard,
   fallback: fallbackModelCard,
 };
 
-export const MODEL_CARD_NAMES = Object.keys(MODEL_CARDS) as ModelCardName[];
+const MODEL_CARD_NAMES = Object.keys(MODEL_CARDS) as ModelCardName[];
 
 /** Supplies the model when none is configured. */
 const DEFAULT_MODEL_CARD: ModelCardName = "typhoon";

@@ -1,4 +1,4 @@
-import type { Result } from "../lib/result.js";
+import { map, ok, type Result } from "../lib/result.js";
 import {
   isServerFailure,
   ocrPages,
@@ -15,10 +15,10 @@ import {
   type ProbedPage,
   type RenderSpec,
 } from "./pdf.js";
-import { readerFor, verdictOf, type TextLayer } from "./route.js";
+import { readerFor, verdictOf, type Reader, type TextLayer } from "./route.js";
 import type { SourceKind } from "./source.js";
 
-// Same spec the built-in OCR fallback card renders at; see pdf.ts's DEFAULT_RENDER.
+// Kept only for src/ingest/prepare.test.ts; drop once it imports DEFAULT_RENDER from ./pdf.js.
 export const PAGE_RENDER = DEFAULT_RENDER;
 
 export interface TextPage {
@@ -74,7 +74,7 @@ const SERVER_FAILURE: Record<ServerFailure, "ocr_unreachable" | "ocr_rejected"> 
 
 // Images have no text layer; mupdf would resample a bare image as a fake 96-dpi PDF.
 async function probe(input: ExtractInput): Promise<Result<ProbedPage[]>> {
-  if (input.kind === "image") return { ok: true, value: [] };
+  if (input.kind === "image") return ok([]);
   return probePdfPages(input.bytes);
 }
 
@@ -86,17 +86,12 @@ interface PageImages {
 
 async function pageImages(input: ExtractInput, spec: RenderSpec): Promise<Result<PageImages>> {
   if (input.kind === "image") {
-    return {
-      ok: true,
-      value: {
-        source: "original",
-        pages: [{ page: 1, mime: input.mime, bytes: input.bytes }],
-      },
-    };
+    return ok({ source: "original", pages: [{ page: 1, mime: input.mime, bytes: input.bytes }] });
   }
-  const rendered = await renderPdfPages(input.bytes, spec);
-  if (!rendered.ok) return rendered;
-  return { ok: true, value: { source: "raster", dpi: spec.dpi, pages: rendered.value } };
+  return map(
+    await renderPdfPages(input.bytes, spec),
+    (pages): PageImages => ({ source: "raster", dpi: spec.dpi, pages }),
+  );
 }
 
 function placeholder(page: number): string {
@@ -109,12 +104,15 @@ function ocrExtraction(
   settings: OCRSettings,
   textLayer: TextLayer,
 ): ExtractOutcome {
-  for (const outcome of outcomes) {
-    if (outcome.ok || !isServerFailure(outcome.reason)) continue;
+  const serverFailure = outcomes.find(
+    (outcome): outcome is Extract<OCRPageOutcome, { ok: false }> & { reason: ServerFailure } =>
+      !outcome.ok && isServerFailure(outcome.reason),
+  );
+  if (serverFailure) {
     return {
       ok: false,
-      reason: SERVER_FAILURE[outcome.reason],
-      message: `page ${outcome.page}: ${outcome.message}`,
+      reason: SERVER_FAILURE[serverFailure.reason],
+      message: `page ${serverFailure.page}: ${serverFailure.message}`,
     };
   }
   return {
@@ -133,6 +131,41 @@ function ocrExtraction(
   };
 }
 
+interface ReaderContext {
+  input: ExtractInput;
+  textLayer: TextLayer;
+  pages: readonly ProbedPage[];
+  ocr: OCRSettings | null;
+}
+
+async function agentRead({ input, textLayer }: ReaderContext): Promise<ExtractOutcome> {
+  const images = await pageImages(input, DEFAULT_RENDER);
+  if (!images.ok) return { ok: false, reason: "pdf_unreadable", message: images.error };
+  return { ok: true, value: { kind: "images", textLayer, ...images.value } };
+}
+
+const READERS: Record<Reader, (context: ReaderContext) => Promise<ExtractOutcome>> = {
+  "text-layer": async ({ textLayer, pages }) => ({
+    ok: true,
+    value: {
+      kind: "text",
+      source: "text-layer",
+      textLayer,
+      pages: pages.map(({ page, text }) => ({ page, text })),
+      failedPages: [],
+    },
+  }),
+  agent: agentRead,
+  ocr: async (context) => {
+    if (!context.ocr) throw new Error(`reader "ocr" selected with no OCR settings configured`);
+    // Resolved before rendering: the served id picks the card, and the card carries the render spec.
+    const resolved = await resolveServedModel(context.ocr);
+    const images = await pageImages(context.input, resolved.render);
+    if (!images.ok) return { ok: false, reason: "pdf_unreadable", message: images.error };
+    return ocrExtraction(await ocrPages(images.value.pages, resolved), resolved, context.textLayer);
+  },
+};
+
 export async function extractFile(
   input: ExtractInput,
   options: ExtractOptions,
@@ -144,32 +177,5 @@ export async function extractFile(
   const ocr = overrides.noOcr ? null : options.ocr;
   const textLayer = overrides.rescan ? "none" : verdictOf(probed.value);
   const reader = readerFor(textLayer, ocr ? "ready" : "unset");
-
-  if (reader === "text-layer") {
-    return {
-      ok: true,
-      value: {
-        kind: "text",
-        source: "text-layer",
-        textLayer,
-        pages: probed.value.map(({ page, text }) => ({ page, text })),
-        failedPages: [],
-      },
-    };
-  }
-
-  if (reader === "agent") {
-    const images = await pageImages(input, PAGE_RENDER);
-    if (!images.ok) return { ok: false, reason: "pdf_unreadable", message: images.error };
-    return { ok: true, value: { kind: "images", textLayer, ...images.value } };
-  }
-
-  // reader === "ocr": the table only reaches here with ocr configured.
-  if (!ocr) throw new Error(`reader "ocr" selected with no OCR settings configured`);
-
-  // Resolved before rendering: the served id picks the card, and the card carries the render spec.
-  const resolved = await resolveServedModel(ocr);
-  const images = await pageImages(input, resolved.render);
-  if (!images.ok) return { ok: false, reason: "pdf_unreadable", message: images.error };
-  return ocrExtraction(await ocrPages(images.value.pages, resolved), resolved, textLayer);
+  return READERS[reader]({ input, textLayer, pages: probed.value, ocr });
 }

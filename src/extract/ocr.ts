@@ -1,8 +1,8 @@
 import * as z from "zod";
 import type { OpenLedgerConfig } from "../config/config.js";
-import { tryExecute, type Result } from "../lib/result.js";
+import { err, ok, tryExecute, type Result } from "../lib/result.js";
 import type { PageImage, RenderSpec } from "./pdf.js";
-import { modelCardFor, type ModelCardName, type OCRParams } from "./cards/index.js";
+import { modelCardFor, type ModelCard, type OCRParams } from "./cards/index.js";
 
 /** A small local model can spend minutes on a dense page; this is a stuck-server bound, not a target. */
 export const OCR_TIMEOUT_MS = 300_000;
@@ -23,8 +23,6 @@ export interface OCRSettings {
   /** `""` when the endpoint needs no auth (the local case). */
   apiKey: string;
   timeoutMs: number;
-  /** Which model card the id selected; internal, not part of the request. */
-  modelCard: ModelCardName;
   prompt: string;
   params: OCRParams;
   render: RenderSpec;
@@ -32,23 +30,24 @@ export interface OCRSettings {
 
 export type OCRConfigSource = Pick<OpenLedgerConfig, "ocrBaseUrl" | "ocrModel" | "ocrApiKey">;
 
+function cardSettings({ prompt, params, render }: ModelCard): Pick<OCRSettings, "prompt" | "params" | "render"> {
+  return { prompt, params, render };
+}
+
 /** The endpoint URL alone decides whether OCR is configured; `null` means cleanly unset. */
 export function resolveOcr(source: OCRConfigSource): OCRSettings | null {
   const baseUrl = source.ocrBaseUrl.trim().replace(/\/+$/, "");
   if (!baseUrl) return null;
 
   const configured = source.ocrModel.trim();
-  const { name, card } = modelCardFor(configured);
+  const { card } = modelCardFor(configured);
 
   return {
     baseUrl,
     model: configured || card.model,
     apiKey: source.ocrApiKey.trim(),
     timeoutMs: OCR_TIMEOUT_MS,
-    modelCard: name,
-    prompt: card.prompt,
-    params: card.params,
-    render: card.render,
+    ...cardSettings(card),
   };
 }
 
@@ -189,9 +188,9 @@ export async function probeOcrEndpoint(settings: OCRSettings): Promise<Result<st
 
   const parsed = MODELS.safeParse(response.value);
   if (!parsed.success) {
-    return { ok: false, error: `unexpected /models response: ${z.prettifyError(parsed.error)}` };
+    return err(`unexpected /models response: ${z.prettifyError(parsed.error)}`);
   }
-  return { ok: true, value: parsed.data.data.map((model) => model.id) };
+  return ok(parsed.data.data.map((model) => model.id));
 }
 
 /** The served id the configured id selects: exact spelling first, else the first id containing it, case-insensitive. */
@@ -208,13 +207,5 @@ export async function resolveServedModel(settings: OCRSettings): Promise<OCRSett
   if (!served.ok) return settings;
   const match = pickServedModel(settings.model, served.value);
   if (!match || match === settings.model) return settings;
-  const { name, card } = modelCardFor(match);
-  return {
-    ...settings,
-    model: match,
-    modelCard: name,
-    prompt: card.prompt,
-    params: card.params,
-    render: card.render,
-  };
+  return { ...settings, model: match, ...cardSettings(modelCardFor(match).card) };
 }

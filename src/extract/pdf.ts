@@ -1,15 +1,12 @@
+import { range } from "es-toolkit";
 import type { Document, StructuredText } from "mupdf";
 import { tryExecute, type Result } from "../lib/result.js";
 import type { PageFacts } from "./route.js";
 
 type Mupdf = typeof import("mupdf");
-let mupdfPromise: Promise<Mupdf> | null = null;
 
-// Lazy: WASM module isn't loaded until first call.
-function getMupdf(): Promise<Mupdf> {
-  if (!mupdfPromise) mupdfPromise = import("mupdf");
-  return mupdfPromise;
-}
+// Lazy: the WASM module isn't loaded until first call; ESM caches the import.
+export const loadMupdf = (): Promise<Mupdf> => import("mupdf");
 
 const PDF_MIME = "application/pdf";
 
@@ -21,7 +18,7 @@ export type UnlockFailureReason = "unsupported_document" | "wrong_password";
 type UnlockResult = { ok: true; decrypted: Buffer } | { ok: false; reason: UnlockFailureReason };
 
 export async function isEncryptedPdf(bytes: Buffer): Promise<boolean> {
-  const mupdf = await getMupdf();
+  const mupdf = await loadMupdf();
   const doc = mupdf.Document.openDocument(bytes, PDF_MIME);
   try {
     return doc.needsPassword();
@@ -31,7 +28,7 @@ export async function isEncryptedPdf(bytes: Buffer): Promise<boolean> {
 }
 
 export async function unlockPdf(bytes: Buffer, password: string): Promise<UnlockResult> {
-  const mupdf = await getMupdf();
+  const mupdf = await loadMupdf();
   const doc = mupdf.Document.openDocument(bytes, PDF_MIME);
   try {
     if (!(doc instanceof mupdf.PDFDocument)) {
@@ -84,21 +81,24 @@ function probeOne(doc: Document, index: number): ProbedPage {
   }
 }
 
-/** Measures and extracts the text layer in one pass, so no page opens twice. */
-export async function probePdfPages(bytes: Buffer): Promise<Result<ProbedPage[]>> {
-  const mupdf = await getMupdf();
+async function mapPages<T>(
+  bytes: Buffer,
+  fn: (mupdf: Mupdf, doc: Document, index: number) => T,
+): Promise<Result<T[]>> {
+  const mupdf = await loadMupdf();
   return tryExecute(() => {
     const doc = mupdf.Document.openDocument(bytes, PDF_MIME);
     try {
-      const pages: ProbedPage[] = [];
-      for (let index = 0; index < doc.countPages(); index++) {
-        pages.push(probeOne(doc, index));
-      }
-      return pages;
+      return range(doc.countPages()).map((index) => fn(mupdf, doc, index));
     } finally {
       doc.destroy();
     }
   });
+}
+
+/** Measures and extracts the text layer in one pass, so no page opens twice. */
+export function probePdfPages(bytes: Buffer): Promise<Result<ProbedPage[]>> {
+  return mapPages(bytes, (_mupdf, doc, index) => probeOne(doc, index));
 }
 
 export interface RenderSpec {
@@ -140,21 +140,6 @@ function renderOne(mupdf: Mupdf, doc: Document, index: number, spec: RenderSpec)
   }
 }
 
-export async function renderPdfPages(
-  bytes: Buffer,
-  spec: RenderSpec,
-): Promise<Result<PageImage[]>> {
-  const mupdf = await getMupdf();
-  return tryExecute(() => {
-    const doc = mupdf.Document.openDocument(bytes, PDF_MIME);
-    try {
-      const pages: PageImage[] = [];
-      for (let index = 0; index < doc.countPages(); index++) {
-        pages.push(renderOne(mupdf, doc, index, spec));
-      }
-      return pages;
-    } finally {
-      doc.destroy();
-    }
-  });
+export function renderPdfPages(bytes: Buffer, spec: RenderSpec): Promise<Result<PageImage[]>> {
+  return mapPages(bytes, (mupdf, doc, index) => renderOne(mupdf, doc, index, spec));
 }
