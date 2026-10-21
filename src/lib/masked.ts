@@ -8,11 +8,7 @@ const MASK_CHARS = "Xx•*…";
 
 /** Splits after the LAST mask char, so a masked run isn't mistaken for a check-digit separator. */
 export function tailAfterMask(s: string): string {
-  let lastAt = -1;
-  for (const ch of MASK_CHARS) {
-    const i = s.lastIndexOf(ch);
-    if (i > lastAt) lastAt = i;
-  }
+  const lastAt = Math.max(...[...MASK_CHARS].map((ch) => s.lastIndexOf(ch)));
   return lastAt === -1 ? s : s.slice(lastAt + 1);
 }
 

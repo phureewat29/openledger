@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from "crypto";
 
+const hash16 = (material: string): string =>
+  createHash("sha256").update(material).digest("hex").slice(0, 16);
+
 /**
  * `tx:` + sha256("<hash>|<page>|<row>[|<leg>]"), deterministic, so re-ingesting the
  * same file is idempotent. Omitting `legIndex` makes the hash match `deriveGroupId`'s.
@@ -11,13 +14,12 @@ export function deriveTransactionId(
   legIndex?: number,
 ): string {
   const base = `${fileHash}|${page}|${rowIndex}`;
-  const material = legIndex != null ? `${base}|${legIndex}` : base;
-  return "tx:" + createHash("sha256").update(material).digest("hex").slice(0, 16);
+  return "tx:" + hash16(legIndex !== undefined ? `${base}|${legIndex}` : base);
 }
 
 /** `tg:` + the same hash as legless `deriveTransactionId(fileHash, page, rowIndex)`. */
 export function deriveGroupId(fileHash: string, page: number, rowIndex: number): string {
-  return "tg:" + createHash("sha256").update(`${fileHash}|${page}|${rowIndex}`).digest("hex").slice(0, 16);
+  return "tg:" + hash16(`${fileHash}|${page}|${rowIndex}`);
 }
 
 /**

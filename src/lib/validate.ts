@@ -166,28 +166,13 @@ function formatError(
   return clauses.join("; ");
 }
 
-function parse<S extends z.ZodObject>(
-  schema: S,
-  raw: Record<string, unknown>,
-  opts?: ParseOptions,
-): Result<z.infer<S>> {
-  const shape = schema.shape as Record<string, unknown>;
-  const normalized = normalizeRaw(shape, raw, opts?.aliases);
-  const parsed = schema.safeParse(normalized);
-  if (parsed.success) return { ok: true, value: parsed.data as z.infer<S> };
-  return {
-    ok: false,
-    error: formatError(shape, normalized, parsed.error.issues as unknown as Issue[], opts),
-  };
-}
-
 /** Accumulates every missing-required and coercion error into one thrown `ValidationError`. */
 export function parseInput<S extends z.ZodObject>(
   schema: S,
-  raw: Record<string, unknown>,
+  raw: object,
   opts?: ParseOptions,
 ): z.infer<S> {
-  const result = parse(schema, raw, opts);
+  const result = safeParse(schema, raw, opts);
   if (!result.ok) throw new ValidationError(result.error);
   if (opts?.atLeastOne && Object.keys(result.value as object).length === 0) {
     throw new ValidationError(opts.atLeastOne);
@@ -198,8 +183,15 @@ export function parseInput<S extends z.ZodObject>(
 /** For batch rows, which must keep the PARTIAL exit-code contract instead of throwing. */
 export function safeParse<S extends z.ZodObject>(
   schema: S,
-  raw: Record<string, unknown>,
+  raw: object,
   opts?: ParseOptions,
 ): Result<z.infer<S>> {
-  return parse(schema, raw, opts);
+  const shape = schema.shape as Record<string, unknown>;
+  const normalized = normalizeRaw(shape, raw as Record<string, unknown>, opts?.aliases);
+  const parsed = schema.safeParse(normalized);
+  if (parsed.success) return { ok: true, value: parsed.data as z.infer<S> };
+  return {
+    ok: false,
+    error: formatError(shape, normalized, parsed.error.issues as unknown as Issue[], opts),
+  };
 }

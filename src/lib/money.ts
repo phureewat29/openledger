@@ -1,29 +1,26 @@
+import { memoize } from "es-toolkit";
+import { tryExecute, unwrapOr } from "./result.js";
+
 /**
  * Amounts are integers in the currency's smallest unit (THB satang, JPY none,
  * KWD three) to avoid float drift; decimal conversion happens only at the
  * CLI/pipeline boundary.
  */
 
-const exponentCache = new Map<string, number>();
+const exponentOf = memoize((code: string): number =>
+  unwrapOr(
+    tryExecute(
+      () =>
+        new Intl.NumberFormat("en", { style: "currency", currency: code }).resolvedOptions()
+          .maximumFractionDigits,
+    ),
+    undefined,
+  ) ?? 2,
+);
 
 /** Resolved via Intl and memoized; falls back to 2 on an unresolvable (or empty/garbage) code. */
 export function minorUnitExponent(currency: string): number {
-  const code = currency.toUpperCase();
-  const cached = exponentCache.get(code);
-  if (cached !== undefined) return cached;
-
-  let exp = 2;
-  try {
-    const resolved = new Intl.NumberFormat("en", {
-      style: "currency",
-      currency: code,
-    }).resolvedOptions();
-    exp = resolved.maximumFractionDigits ?? 2;
-  } catch {
-    exp = 2;
-  }
-  exponentCache.set(code, exp);
-  return exp;
+  return exponentOf(currency.toUpperCase());
 }
 
 /**
