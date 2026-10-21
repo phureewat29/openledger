@@ -1,6 +1,8 @@
-/** UTC, not local time. */
+/** The local calendar date: a user at 01:00 local gets today, not the UTC day. */
 export function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
 }
 
 /** ISO calendar date shape (YYYY-MM-DD). Shape only, no calendar validity check. */
