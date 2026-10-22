@@ -1,4 +1,4 @@
-import { escapeRegExp } from "es-toolkit";
+import { escapeRegExp, uniqBy } from "es-toolkit";
 import { readContext } from "../config/context.js";
 
 /** Where redaction terms come from: the configured user plus their context.md. */
@@ -84,41 +84,41 @@ function nameFrom(rule: SectionRule, line: string, userName: string): string | n
 }
 
 function buildRedactions(source: RedactionSource): RedactionEntry[] {
-  const entries: RedactionEntry[] = [];
-  const seen = new Set<string>();
-
-  const push = (real: string, token: string) => {
-    const trimmed = real.trim();
-    if (trimmed.length < 2) return;
-    const key = trimmed.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    entries.push({ real: trimmed, token });
-  };
-
-  const userName = source.userName;
-  if (userName && userName !== "User") {
-    push(userName, "[USER]");
-    const parts = userName.split(/\s+/);
-    if (parts.length > 1) {
-      push(parts[0], "[USER_FIRST]");
-      push(parts[parts.length - 1], "[USER_LAST]");
-    }
-  }
+  const { userName } = source;
+  const parts = userName.split(/\s+/);
+  const userEntries: RedactionEntry[] =
+    userName && userName !== "User"
+      ? [
+          { real: userName, token: "[USER]" },
+          ...(parts.length > 1
+            ? [
+                { real: parts[0], token: "[USER_FIRST]" },
+                { real: parts[parts.length - 1], token: "[USER_LAST]" },
+              ]
+            : []),
+        ]
+      : [];
 
   const context = readContext(source.contextPath);
-  if (context) {
-    for (const rule of SECTION_RULES) {
-      for (const line of extractSectionLines(context, rule.heading)) {
-        if (rule.skipIfUser && line.toLowerCase() === userName.toLowerCase()) continue;
-        const name = nameFrom(rule, line, userName);
-        if (name) push(name, rule.token);
-      }
-    }
-  }
+  const contextEntries: RedactionEntry[] = context
+    ? SECTION_RULES.flatMap((rule) =>
+        extractSectionLines(context, rule.heading)
+          .filter((line) => !(rule.skipIfUser && line.toLowerCase() === userName.toLowerCase()))
+          .flatMap((line) => {
+            const name = nameFrom(rule, line, userName);
+            return name ? [{ real: name, token: rule.token }] : [];
+          }),
+      )
+    : [];
 
-  entries.sort((a, b) => b.real.length - a.real.length);
-  return entries;
+  const candidates = [...userEntries, ...contextEntries].map(({ real, token }) => ({
+    real: real.trim(),
+    token,
+  }));
+  return uniqBy(
+    candidates.filter(({ real }) => real.length >= 2),
+    ({ real }) => real.toLowerCase(),
+  ).sort((a, b) => b.real.length - a.real.length);
 }
 
 /** Returns a closure, not a `redact(text)`: the context read and pattern compile happen once, then amortize over every field of a payload. */
@@ -164,9 +164,7 @@ export function applyRedaction<T>(
       return value.map((item) => walk(item, key));
     }
     if (value !== null && typeof value === "object") {
-      const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(value)) out[k] = walk(v, k);
-      return out;
+      return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, walk(v, k)]));
     }
     return value;
   };
