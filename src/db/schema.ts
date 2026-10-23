@@ -2,6 +2,7 @@ import { difference, dropRight } from "es-toolkit";
 import type Database from "libsql";
 import { copyFileSync, readdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { chmod600 } from "../lib/perms.js";
 import { DBNotReadyError } from "./errors.js";
 import { MIGRATIONS, type Migration } from "./migrations/index.js";
 import { ISO_NOW_SQL } from "./timestamps.js";
@@ -129,7 +130,9 @@ function hasUserTables(db: Database.Database): boolean {
  */
 function backupDatabase(db: Database.Database, dbPath: string): void {
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  copyFileSync(dbPath, `${dbPath}.${backupStamp()}.bak`);
+  const backupPath = `${dbPath}.${backupStamp()}.bak`;
+  copyFileSync(dbPath, backupPath);
+  chmod600(backupPath);
   pruneBackups(dbPath);
 }
 
