@@ -2,7 +2,7 @@ import type Database from "libsql";
 import { DBBusyError, DBNotReadyError, isBusyError, sqliteErrorCode } from "./errors.js";
 import { migrate } from "./schema.js";
 import { dirname } from "path";
-import { mkdirSync, existsSync } from "fs";
+import { mkdirSync } from "fs";
 import { chmod600 } from "../lib/perms.js";
 import { errorMessage, tryExecute } from "../lib/result.js";
 
@@ -16,8 +16,7 @@ const NOT_A_DATABASE_CODES = new Set(["SQLITE_NOTADB", "SQLITE_CORRUPT"]);
 
 // libsql loads lazily here so its native binding stays off the startup path of commands that never open the ledger.
 export async function openDb(dbPath: string): Promise<Database.Database> {
-  const dir = dirname(dbPath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
 
   // A path that cannot be opened at all (a directory, a bad mount) throws from the
   // constructor, where there is no connection to close and nothing to diagnose further.
@@ -26,10 +25,10 @@ export async function openDb(dbPath: string): Promise<Database.Database> {
   if (!opened.ok) throw new DBNotReadyError(`Cannot open database at ${dbPath}: ${opened.error}`);
   const db = opened.value;
 
-  ensureWAL(db, dbPath);
   // status and doctor survive a failed open via tryExecute and keep running, so the
   // handle must not outlive a throw from anything below.
   try {
+    ensureWAL(db, dbPath);
     db.pragma("foreign_keys = ON");
     migrate(db, dbPath);
     // WAL mode writes committed rows into the -wal/-shm sidecars, so the 0600 promise has to cover them too.
@@ -61,12 +60,8 @@ function ensureWAL(db: Database.Database, dbPath: string): void {
       db.pragma("journal_mode = WAL");
       return;
     } catch (err) {
-      if (!isBusyError(err)) {
-        db.close();
-        throw openFailureError(err, dbPath);
-      }
+      if (!isBusyError(err)) throw openFailureError(err, dbPath);
       if (attempt >= WAL_OPEN_ATTEMPTS) {
-        db.close();
         throw new DBBusyError(
           `The ledger at ${dbPath} is in use by another process and did not free up in time.`,
           { cause: err },
