@@ -6,7 +6,7 @@ import { COMMAND_CONTRACTS } from "./commands.js";
 /**
  * A command cannot merge without declaring its wire shape in `COMMAND_CONTRACTS`,
  * and a deleted command must drop its entry. This test enforces both directions
- * against the real commander tree, the same `buildProgram()` entry
+ * against the real commander tree, the same `buildProgram([])` entry
  * `src/cli/consistency.test.ts` walks.
  */
 
@@ -21,7 +21,7 @@ function programLeafPaths(program: Command): string[] {
 
 describe("COMMAND_CONTRACTS covers exactly the real command tree", () => {
   it("every leaf command has an entry, and every entry names a real leaf command", () => {
-    const fromProgram = new Set(programLeafPaths(buildProgram()));
+    const fromProgram = new Set(programLeafPaths(buildProgram([])));
     const fromContracts = new Set(Object.keys(COMMAND_CONTRACTS));
 
     const missing = [...fromProgram].filter((path) => !fromContracts.has(path));

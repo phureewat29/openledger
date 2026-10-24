@@ -11,7 +11,9 @@ import { inspectConfig } from "../../config/cli.js";
 import { openDb } from "../../db/connection.js";
 import { getVersion } from "../../lib/version.js";
 import { SKILL_DIRS, SKILL_PACK_DIR } from "../../setup/install.js";
-import { EXIT, currentMode, emit, emitList, runAction, type Column } from "../output.js";
+import { runAction, type Invocation } from "../output.js";
+import type { Column } from "../format.js";
+import type { ExitCode } from "../../contract/exit.js";
 import { tryExecute } from "../../lib/result.js";
 import {
   pickServedModel,
@@ -166,16 +168,16 @@ const CHECK_COLUMNS: Column<Check>[] = [
   { header: "Detail", value: (r) => r.detail ?? "" },
 ];
 
-async function diagnoseEnvironment(_opts: Record<string, unknown>, command: Command): Promise<void> {
-  const checks = await runChecks(inspectConfig(command));
+async function diagnoseEnvironment(ctx: Invocation): Promise<ExitCode | undefined> {
+  const checks = await runChecks(inspectConfig(ctx.configPath));
   const ok = checks.filter((c) => HARD_CHECKS.has(c.name)).every((c) => c.ok);
 
-  const mode = currentMode();
-  if (mode.json) {
+  const { out } = ctx;
+  if (out.mode.json) {
     const result: DoctorReport = { checks, ok };
-    emit(result);
+    out.emit(result);
   } else {
-    emitList(checks, CHECK_COLUMNS);
+    out.emitList(checks, CHECK_COLUMNS);
     const failed = checks.some((c) => !c.ok);
     const line = !ok
       ? "OpenLedger is not ready. Fix the failed checks above, then run `oled doctor` again."
@@ -183,9 +185,9 @@ async function diagnoseEnvironment(_opts: Record<string, unknown>, command: Comm
         ? "OpenLedger is ready, but some checks failed. See the details above."
         : "Everything looks good. OpenLedger is ready.";
     const paint = !ok ? chalk.red : failed ? chalk.yellow : chalk.green;
-    process.stdout.write("\n" + (mode.color ? paint(line) : line) + "\n");
+    out.write("\n" + (out.mode.color ? paint(line) : line) + "\n");
   }
-  if (!ok) process.exitCode = EXIT.NOT_READY;
+  return ok ? undefined : "NOT_READY";
 }
 
 export function registerDoctor(program: Command): void {

@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { currentMode, emit, runAction } from "../cli/output.js";
+import { runAction, type Invocation } from "../cli/output.js";
 import { fail } from "../cli/errors.js";
 import {
   DEFAULT_SKILLS_DIR,
@@ -10,19 +10,18 @@ import {
 } from "./install.js";
 import type { SetupInstallResult } from "../contract/setup.js";
 
-interface SetupOpts {
+interface SetupSkillOpts {
   global?: boolean;
   dir?: string;
   force?: boolean;
   print?: boolean;
 }
 
-async function setupSkill(opts: SetupOpts): Promise<void> {
+async function setupSkill(ctx: Invocation, opts: SetupSkillOpts): Promise<void> {
   // --print dumps SKILL.md as raw markdown (not NDJSON) even when --json is set.
   if (opts.print) {
     const md = skillMd();
-    process.stdout.write(md);
-    if (!md.endsWith("\n")) process.stdout.write("\n");
+    ctx.out.write(md.endsWith("\n") ? md : md + "\n");
     return;
   }
 
@@ -55,12 +54,11 @@ async function setupSkill(opts: SetupOpts): Promise<void> {
     throw err;
   }
 
-  const mode = currentMode();
-  if (mode.json) {
+  if (ctx.out.mode.json) {
     const result: SetupInstallResult = { installed: [target] };
-    emit(result);
+    ctx.out.emit(result);
   } else {
-    process.stdout.write(`${target.path}\t${target.version}\n`);
+    ctx.out.write(`${target.path}\t${target.version}\n`);
   }
 }
 

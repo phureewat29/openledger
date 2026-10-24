@@ -1,8 +1,10 @@
 import chalk from "chalk";
-import type { OutputMode } from "./output.js";
+import { EXIT, type ExitCode } from "../contract/exit.js";
 
 // eslint-disable-next-line no-control-regex
 export const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+export const TAGLINE = "A reliable, deterministic ledger for your AI";
 
 export function visibleLength(s: string): number {
   return s.replace(ANSI_RE, "").length;
@@ -12,33 +14,54 @@ export function formatInt(n: number): string {
   return n.toLocaleString("en-US");
 }
 
-// Pads before applying bold, so the ANSI codes don't count toward the width.
-function padLabel(label: string, width: number, opts: { bold?: boolean } = {}): string {
-  const padded = label.padEnd(width);
-  return opts.bold ? chalk.bold(padded) : padded;
+export interface Column<T = unknown> {
+  header: string;
+  value: (row: T) => string;
+  align?: "left" | "right";
+}
+
+/** One tab-separated line per row, ANSI-free so piped output stays stable; empty for no rows. */
+export function renderPlain<T>(rows: readonly T[], columns: Column<T>[]): string {
+  const lines = rows.map((row) =>
+    columns.map((c) => c.value(row).replace(ANSI_RE, "")).join("\t"),
+  );
+  return lines.length ? lines.join("\n") + "\n" : "";
+}
+
+export function renderTable<T>(rows: readonly T[], columns: Column<T>[], color: boolean): string {
+  const cells = rows.map((row) => columns.map((c) => c.value(row)));
+  const widths = columns.map((c, i) =>
+    Math.max(visibleLength(c.header), ...cells.map((r) => visibleLength(r[i]))),
+  );
+  const pad = (s: string, width: number, align: Column<T>["align"]): string => {
+    const gap = " ".repeat(Math.max(0, width - visibleLength(s)));
+    return align === "right" ? gap + s : s + gap;
+  };
+  const header = columns
+    .map((c, i) => pad(color ? chalk.bold(c.header) : c.header, widths[i], c.align))
+    .join("  ")
+    .trimEnd();
+  const body = cells.map((r) =>
+    columns.map((c, i) => pad(r[i], widths[i], c.align)).join("  ").trimEnd(),
+  );
+  return [header, ...body].join("\n") + "\n";
 }
 
 // Human output only (TTY: aligned two-column, piped: tab-separated); the caller owns --json.
-export function printKeyValues(
-  mode: OutputMode,
+export function formatKeyValues(
   rows: [string, string | number][],
-  opts: { bold?: boolean } = {},
-): void {
-  if (!mode.tty) {
-    process.stdout.write(rows.map(([k, v]) => `${k}\t${v}`).join("\n") + "\n");
-    return;
-  }
+  opts: { tty: boolean; bold?: boolean },
+): string {
+  if (!opts.tty) return rows.map(([k, v]) => `${k}\t${v}`).join("\n") + "\n";
   const width = Math.max(...rows.map(([k]) => k.length));
-  for (const [k, v] of rows) {
-    process.stdout.write(`${padLabel(k, width, { bold: !!opts.bold })}  ${v}\n`);
-  }
+  // Pads before applying bold, so the ANSI codes don't count toward the width.
+  return rows
+    .map(([k, v]) => `${opts.bold ? chalk.bold(k.padEnd(width)) : k.padEnd(width)}  ${v}\n`)
+    .join("");
 }
 
 export function banner(): string {
-  return (
-    chalk.bold("OpenLedger") +
-    chalk.dim("  ·  A reliable, deterministic ledger for your AI")
-  );
+  return chalk.bold("OpenLedger") + chalk.dim(`  ·  ${TAGLINE}`);
 }
 
 const DISCLAIMER =
@@ -50,8 +73,24 @@ const SCENARIO = [
   "Every entry is double-entry and data stays safely on your machine.",
 ];
 
+const EXIT_LABELS: Record<ExitCode, string> = {
+  OK: "ok",
+  GENERIC: "error",
+  USAGE: "usage",
+  NOT_READY: "not ready",
+  INPUT_REQUIRED: "input required",
+  NOT_FOUND: "not found",
+  INVALID: "invalid",
+  PARTIAL: "partial",
+  BUSY: "busy",
+};
+
+const EXIT_LINE = (Object.keys(EXIT) as ExitCode[])
+  .map((name) => `${EXIT[name]} ${EXIT_LABELS[name]}`)
+  .join(" · ");
+
 const CONTRACT = [
-  "Exit codes: 0 ok · 1 error · 2 usage · 3 not ready · 4 input required · 5 not found · 6 invalid · 7 partial · 8 busy.",
+  `Exit codes: ${EXIT_LINE}.`,
   'Under --json every stdout line is one JSON object, and list reads end with a {"type":"summary"} row.',
   "Errors are one stderr JSON object with a hint; read output masks PII as [USER]/[CARD], masks are not data.",
 ];
@@ -62,10 +101,10 @@ function section(label: string, lines: string[]): string {
 
 export function helpScreen(
   commands: { name: string; desc: string }[],
-  extraOptions: { name: string; desc: string }[] = [],
+  globalOptions: { name: string; desc: string }[],
 ): string {
   const options: { name: string; desc: string }[] = [
-    ...extraOptions,
+    ...globalOptions,
     { name: "--version", desc: "Show the version and exit" },
     { name: "--help", desc: "Show this help screen" },
   ];
@@ -76,17 +115,13 @@ export function helpScreen(
   const row = (name: string, desc: string) =>
     `${chalk.cyan(name.padEnd(nameWidth))}    ${chalk.dim(desc)}`;
 
-  const usageLines = [
-    row("oled", "<command> [OPTIONS]"),
-  ];
-
   return [
     "",
     banner(),
     "",
     section("About", SCENARIO),
     "",
-    section("Usage", usageLines),
+    section("Usage", [row("oled", "<command> [OPTIONS]")]),
     "",
     section("Commands", commands.map((c) => row(c.name, c.desc))),
     "",

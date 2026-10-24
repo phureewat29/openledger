@@ -6,11 +6,11 @@ import {
   type NoteRow,
 } from "./queries.js";
 import { applyRedaction } from "../privacy/redactor.js";
-import { emitList, emitSummary, runAction, type Column } from "../cli/output.js";
+import { runAction, type Invocation } from "../cli/output.js";
+import type { Column } from "../cli/format.js";
 import { fail } from "../cli/errors.js";
 import { redactionEnabled, requireYes } from "../cli/input.js";
-import { openDb } from "../db/connection.js";
-import { requireConfig } from "../config/cli.js";
+import { openLedger } from "../config/cli.js";
 import * as z from "zod";
 import { parseInput, str, num } from "../lib/validate.js";
 import type {
@@ -35,18 +35,17 @@ interface ListNotesOpts {
   redact?: boolean;
 }
 
-async function listNotes(opts: ListNotesOpts, command: Command): Promise<void> {
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+async function listNotes(ctx: Invocation, opts: ListNotesOpts): Promise<void> {
+  const { config, db } = await openLedger(ctx.configPath);
   const rows = applyRedaction(
     queryNotes(db),
     redactionEnabled(opts),
     NOTE_REDACT_FIELDS,
     config,
   );
-  emitList(rows, NOTE_COLUMNS);
+  ctx.out.emitList(rows, NOTE_COLUMNS);
   const summary: Omit<NotesListSummary, "type"> = { total: rows.length, returned: rows.length };
-  emitSummary(summary);
+  ctx.out.emitSummary(summary);
 }
 
 const ADD_NOTE_SPEC = z.object({
@@ -54,31 +53,29 @@ const ADD_NOTE_SPEC = z.object({
   category: z.enum(VALID_CATEGORIES).default("fact"),
 });
 
-async function addNote(opts: Record<string, unknown>, command: Command): Promise<void> {
+async function addNote(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(ADD_NOTE_SPEC, opts);
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   const saved = addNoteRow(db, parsed.content, parsed.category);
-  emitList([saved], NOTE_COLUMNS);
+  ctx.out.emitList([saved], NOTE_COLUMNS);
   const summary: Omit<NotesAddSummary, "type"> = { added: 1 };
-  emitSummary(summary);
+  ctx.out.emitSummary(summary);
 }
 
 // Positional `<id>` args aren't commander opts; parsed through the same spec API with an ad hoc object.
 const NOTE_ID_SPEC = z.object({ id: num() });
 const NOTE_ID_LABELS = { id: "note id" };
 
-async function removeNote(id: string, opts: { yes?: boolean }, command: Command): Promise<void> {
+async function removeNote(ctx: Invocation, id: string, opts: { yes?: boolean }): Promise<void> {
   requireYes(opts, "removing this note");
   const parsed = parseInput(NOTE_ID_SPEC, { id }, { labels: NOTE_ID_LABELS });
 
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   const deleted = deleteNoteRow(db, parsed.id);
   if (!deleted) fail("NOT_FOUND", `note "${id}" not found`);
-  emitList([deleted], NOTE_COLUMNS);
+  ctx.out.emitList([deleted], NOTE_COLUMNS);
   const summary: Omit<NotesRemoveSummary, "type"> = { removed: 1 };
-  emitSummary(summary);
+  ctx.out.emitSummary(summary);
 }
 
 export function registerNotes(program: Command): void {

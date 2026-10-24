@@ -1,10 +1,17 @@
-import { afterEach, describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import type Database from "libsql";
-import { Command } from "commander";
-import { createOneAccount, createAccountsBatch, failAccountNotFound } from "./cli.js";
+import {
+  ACCOUNT_FAILURE_EXIT,
+  createOneAccount,
+  createAccountsBatch,
+  failAccountNotFound,
+} from "./cli.js";
+import type { AccountFailure } from "./accounts.js";
 import { findAccountById, insertAccount } from "./queries.js";
 import { failingAccountInsert, freshDb } from "../../fixtures/db.js";
-import { EXIT, runAction } from "../cli/output.js";
+import { createOutput } from "../cli/output.js";
+import { failReason } from "../cli/errors.js";
+import { EXIT } from "../contract/exit.js";
 
 // createOneAccount unwraps RefusedCreate but must not treat any other throw as a refusal:
 // a broken database would otherwise misread as "account already exists".
@@ -39,21 +46,10 @@ describe("createOneAccount refusal carrier", () => {
   });
 });
 
-function jsonCommand(): Command {
-  const program = new Command();
-  program.option("--json");
-  program.parse(["--json"], { from: "user" });
-  return program;
-}
-
 // A driver/constraint throw is hard to force through the CLI subprocess without
 // corrupting the sandbox db out-of-band, so this pins the batch loop directly.
 describe("createAccountsBatch: a mid-batch throw stays that item's failure", () => {
-  afterEach(() => {
-    process.exitCode = undefined;
-  });
-
-  it("keeps every result row and posts the good items when one item's write throws", async () => {
+  it("keeps every result row and posts the good items when one item's write throws", () => {
     const db = freshDb();
     const broken = failingAccountInsert(db, "thb:equity:bad");
     const items = [
@@ -62,16 +58,11 @@ describe("createAccountsBatch: a mid-batch throw stays that item's failure", () 
       { id: "thb:equity:good-b", name: "Good B", type: "equity" },
     ];
 
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    let lines: string[];
-    try {
-      await runAction((_cmd?: Command) => createAccountsBatch(broken, items))(jsonCommand());
-      lines = writeSpy.mock.calls.map((call) => String(call[0])).filter((l) => l.trim());
-    } finally {
-      writeSpy.mockRestore();
-    }
+    const chunks: string[] = [];
+    const out = createOutput({ json: true, tty: false, color: false, kind: "json" }, (s) => chunks.push(s));
+    const exit = createAccountsBatch(out, broken, items);
 
-    const objs = lines.map((l) => JSON.parse(l));
+    const objs = chunks.join("").trimEnd().split("\n").map((l) => JSON.parse(l));
     const results = objs.filter((o) => o.type === "result");
 
     expect(results.map((r) => ({ index: r.index, ok: r.ok }))).toEqual([
@@ -81,7 +72,7 @@ describe("createAccountsBatch: a mid-batch throw stays that item's failure", () 
     ]);
     expect(typeof results[1].message).toBe("string");
     expect(objs.find((o) => o.type === "summary")).toMatchObject({ created: 2, duplicates: 0, failed: 1 });
-    expect(process.exitCode).toBe(EXIT.PARTIAL);
+    expect(exit).toBe("PARTIAL");
 
     // The broken item's own write rolled back; its siblings still landed.
     expect(findAccountById(db, "thb:equity:good-a")).not.toBeNull();
@@ -154,5 +145,33 @@ describe("failAccountNotFound", () => {
     const db = freshDb(seedThbLedger);
     const err = catchFailAccountNotFound(db, "thb:expense:doesnotexist");
     expect(err.hint).toBeUndefined();
+  });
+});
+
+interface ReasonCase {
+  reason: AccountFailure;
+  exitCode: number;
+}
+
+/** Pinned as data, not read off ACCOUNT_FAILURE_EXIT: a re-pointed reason must fail here. */
+const REASON_CASES: ReasonCase[] = [
+  { reason: "account_exists", exitCode: EXIT.INVALID },
+  { reason: "parent_not_found", exitCode: EXIT.NOT_FOUND },
+  { reason: "invalid_hierarchy", exitCode: EXIT.INVALID },
+];
+
+describe("ACCOUNT_FAILURE_EXIT", () => {
+  it.each(REASON_CASES)("$reason exits $exitCode", ({ reason, exitCode }) => {
+    let thrown: { code: keyof typeof EXIT } | undefined;
+    try {
+      failReason(ACCOUNT_FAILURE_EXIT, { reason, message: "refused" });
+    } catch (err) {
+      thrown = err as { code: keyof typeof EXIT };
+    }
+    expect(EXIT[thrown!.code]).toBe(exitCode);
+  });
+
+  it("assigns an exit code to every reason arm", () => {
+    expect(Object.keys(ACCOUNT_FAILURE_EXIT).sort()).toEqual(REASON_CASES.map((c) => c.reason).sort());
   });
 });

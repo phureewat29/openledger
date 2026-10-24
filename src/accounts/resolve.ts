@@ -2,7 +2,6 @@ import type Database from "libsql";
 import {
   createAccount,
   ensureLedgerRoot,
-  ensureStructuralAccount,
   isLedgerRootId,
   structuralAccountId,
   validateAccountId,
@@ -14,14 +13,8 @@ import {
   ledgerExists,
   type AccountType,
 } from "./queries.js";
-import { merchantExists } from "../merchants/queries.js";
 import { currencyOf, isLedgerScopedId, typeFromId } from "../lib/ids.js";
 import { findAccountsByFuzzyName } from "./matching.js";
-
-export interface ResolvedMerchant {
-  readonly merchantId: string | null;
-  readonly attemptedUnknownId: string | null;
-}
 
 export type AccountHint =
   | { readonly type: "placeholder_created"; readonly accountId: string }
@@ -40,15 +33,6 @@ export function isUncategorizedId(accountId: string): boolean {
     isLedgerScopedId(accountId) &&
     accountId === structuralAccountId(currencyOf(accountId), "uncategorized")
   );
-}
-
-export function resolveMerchantId(
-  db: Database.Database,
-  merchantId: string | null | undefined,
-): ResolvedMerchant {
-  if (!merchantId) return { merchantId: null, attemptedUnknownId: null };
-  if (merchantExists(db, merchantId)) return { merchantId, attemptedUnknownId: null };
-  return { merchantId: null, attemptedUnknownId: merchantId };
 }
 
 export interface PostingResolution {
@@ -72,11 +56,6 @@ export function resolveOnePosting(
       ? { type: "similar_account", accountId, similarId }
       : { type: "placeholder_created", accountId },
   };
-}
-
-/** `<currency>:expense:uncategorized` for a ledger that already exists. */
-export function ensureUncategorizedFallback(db: Database.Database, currency: string): string {
-  return ensureStructuralAccount(db, currency, "uncategorized");
 }
 
 /** The currency head alone decides: booking elsewhere would relabel the

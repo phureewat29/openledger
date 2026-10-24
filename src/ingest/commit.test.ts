@@ -13,6 +13,7 @@ import {
   type TransactionCommitContext,
   type RawTransactionInput,
 } from "./commit.js";
+import { noiseTokens } from "../datasets/datasets.js";
 import { failingAccountInsert, freshDb } from "../../fixtures/db.js";
 
 function seedAccountsAndFile(db: Database.Database): void {
@@ -45,7 +46,7 @@ const CTX: TransactionCommitContext = {
   batchId: "ib:1",
   fileId: "sf-1",
   fileHash: "hashABC",
-  country: "TH",
+  noise: noiseTokens("TH"),
 };
 
 function raw(over: Partial<RawTransactionInput> = {}): RawTransactionInput {

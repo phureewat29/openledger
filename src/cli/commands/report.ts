@@ -1,9 +1,8 @@
 import type { Command } from "commander";
 import { getPeriodTotals, subtractTotals } from "../../accounts/balances.js";
-import { printKeyValues } from "../format.js";
-import { openDb } from "../../db/connection.js";
-import { requireConfig } from "../../config/cli.js";
-import { currentMode, emit, runAction } from "../output.js";
+import { formatKeyValues } from "../format.js";
+import { openLedger } from "../../config/cli.js";
+import { runAction, type Invocation } from "../output.js";
 import { fail } from "../errors.js";
 import { toDecimalTotals } from "../../lib/money.js";
 import { ISO_DATE_RE } from "../../lib/date.js";
@@ -14,7 +13,7 @@ interface ShowReportOpts {
   to?: string;
 }
 
-async function showReport(opts: ShowReportOpts, command: Command): Promise<void> {
+async function showReport(ctx: Invocation, opts: ShowReportOpts): Promise<void> {
   if (!opts.from || !opts.to) {
     fail("USAGE", "--from and --to are required", {
       hint: "e.g. `oled report --from 2026-01-01 --to 2026-03-31 --json`; for net worth use `oled status --json`",
@@ -27,8 +26,7 @@ async function showReport(opts: ShowReportOpts, command: Command): Promise<void>
     fail("USAGE", `--to must be an ISO date (YYYY-MM-DD), got "${opts.to}"`);
   }
 
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   const totals = getPeriodTotals(db, opts.from, opts.to);
   // Net is taken in minor units per currency before anything becomes decimal; a THB
   // income and a USD expense share no common net.
@@ -39,9 +37,9 @@ async function showReport(opts: ShowReportOpts, command: Command): Promise<void>
     expenses: toDecimalTotals(totals.expenses),
     net: toDecimalTotals(subtractTotals(totals.income, totals.expenses)),
   };
-  const mode = currentMode();
+  const { mode } = ctx.out;
   if (mode.json) {
-    emit(result);
+    ctx.out.emit(result);
     return;
   }
   const rows: [string, string | number][] = [
@@ -57,7 +55,7 @@ async function showReport(opts: ShowReportOpts, command: Command): Promise<void>
       rows.push([`${label}.${currency}`, amount]);
     }
   }
-  printKeyValues(mode, rows, { bold: mode.color });
+  ctx.out.write(formatKeyValues(rows, { tty: mode.tty, bold: mode.color }));
 }
 
 export function registerReport(program: Command): void {

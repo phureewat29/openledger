@@ -1,10 +1,10 @@
 import type { Command } from "commander";
 import type Database from "libsql";
-import { type Column, emitList, emitObject, emitSummary, runAction } from "../cli/output.js";
+import { runAction, type Invocation } from "../cli/output.js";
+import type { Column } from "../cli/format.js";
 import { fail } from "../cli/errors.js";
 import { requireYes } from "../cli/input.js";
-import { openDb } from "../db/connection.js";
-import { requireConfig } from "../config/cli.js";
+import { openLedger } from "../config/cli.js";
 import {
   FILE_STATUSES,
   deleteFile,
@@ -41,18 +41,17 @@ interface ListFilesOpts {
   status?: string;
 }
 
-async function listFiles(opts: ListFilesOpts, command: Command): Promise<void> {
+async function listFiles(ctx: Invocation, opts: ListFilesOpts): Promise<void> {
   // Checked up front: an unrecognized status would otherwise silently return zero rows.
   const { status } = opts;
   if (status !== undefined && !FILE_STATUSES.includes(status as FileStatus)) {
     fail("USAGE", `--status must be one of ${FILE_STATUSES.join("|")}, got "${status}"`);
   }
 
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   const rows = queryFiles(db);
   const shown = status ? rows.filter((r) => r.status === status) : rows;
-  emitList(shown, FILE_COLUMNS);
+  ctx.out.emitList(shown, FILE_COLUMNS);
   const summary: Omit<FilesListSummary, "type"> = {
     total: rows.length,
     returned: shown.length,
@@ -61,12 +60,11 @@ async function listFiles(opts: ListFilesOpts, command: Command): Promise<void> {
       ? { hint: "files lists what ingest already registered; new statements in the data dir appear with `oled ingest list`" }
       : {}),
   };
-  emitSummary(summary);
+  ctx.out.emitSummary(summary);
 }
 
-async function showFile(id: string, _opts: Record<string, unknown>, command: Command): Promise<void> {
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+async function showFile(ctx: Invocation, id: string): Promise<void> {
+  const { db } = await openLedger(ctx.configPath);
   const row = requireFile(db, id, "run `oled files list --json` for the ids");
 
   const detail: FileDetail = {
@@ -75,17 +73,16 @@ async function showFile(id: string, _opts: Record<string, unknown>, command: Com
     transaction_count: countTransactionsBySourceFile(db, id),
     open_question_count: countQuestions(db, { file_id: id }),
   };
-  emitObject(detail);
+  ctx.out.emitObject(detail);
 }
 
 interface DropFileOpts {
   yes?: boolean;
 }
 
-async function dropFile(id: string, opts: DropFileOpts, command: Command): Promise<void> {
+async function dropFile(ctx: Invocation, id: string, opts: DropFileOpts): Promise<void> {
   requireYes(opts, `dropping file ${id}`);
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { config, db } = await openLedger(ctx.configPath);
   requireFile(db, id, "run `oled files list --json` for the ids");
   const res = deleteFile(db, id);
 
@@ -98,7 +95,7 @@ async function dropFile(id: string, opts: DropFileOpts, command: Command): Promi
     unvoided: res.unvoided,
     cache_removed: removed,
   };
-  emitObject(dropped);
+  ctx.out.emitObject(dropped);
 }
 
 export function registerFiles(program: Command): void {

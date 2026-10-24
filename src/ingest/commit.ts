@@ -1,15 +1,13 @@
 import type Database from "libsql";
 import {
   shouldPlaceAccount,
-  ensureUncategorizedFallback,
   isUncategorizedId,
   namesUnopenedLedger,
   resolveOnePosting,
-  resolveMerchantId,
   type AccountHint,
   type PostingResolution,
-  type ResolvedMerchant,
 } from "../accounts/resolve.js";
+import { ensureStructuralAccount } from "../accounts/accounts.js";
 import {
   findTransactionById,
   insertTransaction,
@@ -30,7 +28,7 @@ import {
 } from "../lib/ids.js";
 import { toMinorUnits } from "../lib/money.js";
 import { ledgerExists } from "../accounts/queries.js";
-import type { MerchantUpsertInput } from "../merchants/queries.js";
+import { merchantExists, type MerchantUpsertInput } from "../merchants/queries.js";
 import {
   closeRowRefusal,
   raiseCurrencyMismatch,
@@ -42,15 +40,13 @@ import {
   type QuestionContext,
   type TransactionSide,
 } from "./questions.js";
-import { noiseTokens } from "../datasets/datasets.js";
 import type { CommitMerchant, CommitSide } from "../contract/ingest.js";
 
-/** Decorates a merchant hint with its country's noise tokens, or passes null through. */
 export function withNoiseTokens(
   merchant: MerchantUpsertInput | null | undefined,
-  country: string,
+  noise: readonly string[],
 ): (MerchantUpsertInput & { noise_tokens: readonly string[] }) | null {
-  return merchant ? { ...merchant, noise_tokens: noiseTokens(country) } : null;
+  return merchant ? { ...merchant, noise_tokens: noise } : null;
 }
 
 /** One authority for the bookkeeping directions shown in CLI help text. */
@@ -63,8 +59,7 @@ export const CURRENCY_MISMATCH_HINT =
 export interface TransactionCommitContext extends QuestionContext {
   /** Enables idempotent transaction id derivation. */
   readonly fileHash?: string | null;
-  /** Picks the merchant noise-token dataset; resolved here because store modules (queries.ts) may not read `src/datasets/`. */
-  readonly country: string;
+  readonly noise: readonly string[];
 }
 
 export interface RawTransactionInput {
@@ -131,6 +126,20 @@ interface PreparedSide {
   requested: string;
   resolved: string;
   hint: AccountHint | null;
+}
+
+interface ResolvedMerchant {
+  readonly merchantId: string | null;
+  readonly attemptedUnknownId: string | null;
+}
+
+function resolveMerchantId(
+  db: Database.Database,
+  merchantId: string | null | undefined,
+): ResolvedMerchant {
+  if (!merchantId) return { merchantId: null, attemptedUnknownId: null };
+  if (merchantExists(db, merchantId)) return { merchantId, attemptedUnknownId: null };
+  return { merchantId: null, attemptedUnknownId: merchantId };
 }
 
 interface PreparedTransaction {
@@ -214,8 +223,10 @@ function resolveTransactionAccounts(
   const credit = resolveOnePosting(db, creditAccountId);
   if (!debit.accountId && !credit.accountId) return null;
 
-  const debitId = debit.accountId ?? ensureUncategorizedFallback(db, currencyOf(credit.accountId!));
-  const creditId = credit.accountId ?? ensureUncategorizedFallback(db, currencyOf(debit.accountId!));
+  const debitId =
+    debit.accountId ?? ensureStructuralAccount(db, currencyOf(credit.accountId!), "uncategorized");
+  const creditId =
+    credit.accountId ?? ensureStructuralAccount(db, currencyOf(debit.accountId!), "uncategorized");
 
   return {
     debit: preparedSide("debit", debitAccountId, debitId, debit),
@@ -374,7 +385,7 @@ function resolveRow(
     date: input.date,
     description: input.description,
     merchant_id: merchant.merchantId,
-    merchant: withNoiseTokens(input.merchant, ctx.country),
+    merchant: withNoiseTokens(input.merchant, ctx.noise),
     raw_descriptor: input.raw_descriptor ?? null,
     source_file_id: input.source_file_id ?? ctx.fileId ?? null,
     source_page: input.source_page ?? null,

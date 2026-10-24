@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { Command } from "commander";
-import { EXIT } from "../cli/output.js";
+import { EXIT } from "../contract/exit.js";
 import { inspectConfig, requireConfig } from "./cli.js";
 
 interface ThrownCLIError {
@@ -22,15 +21,6 @@ function thrownBy(run: () => unknown): ThrownCLIError {
   throw new Error("unreachable: run() was expected to throw");
 }
 
-/** Mirrors program.ts's per-level `--config <path>` registration, enough for
- *  resolveConfigPath's ancestor walk. Omitting `path` simulates no --config anywhere. */
-function commandWithConfig(path?: string): Command {
-  const program = new Command();
-  program.option("--config <path>");
-  program.parse(path !== undefined ? ["--config", path] : [], { from: "user" });
-  return program;
-}
-
 let dir: string;
 
 beforeEach(() => {
@@ -44,7 +34,7 @@ afterEach(() => {
 describe("requireConfig (unchanged by the assertUsable extraction)", () => {
   it("fails NOT_READY when the named file does not exist", () => {
     const missing = join(dir, "nope.json");
-    const thrown = thrownBy(() => requireConfig(commandWithConfig(missing)));
+    const thrown = thrownBy(() => requireConfig(missing));
     expect(thrown.code).toBe("NOT_READY");
     expect(EXIT[thrown.code]).toBe(3);
     expect(thrown.message).toBe(`no config file at ${missing}`);
@@ -54,7 +44,7 @@ describe("requireConfig (unchanged by the assertUsable extraction)", () => {
   it("fails NOT_READY when the named file exists but does not parse", () => {
     const broken = join(dir, "broken.json");
     writeFileSync(broken, "not json\n");
-    const thrown = thrownBy(() => requireConfig(commandWithConfig(broken)));
+    const thrown = thrownBy(() => requireConfig(broken));
     expect(thrown.code).toBe("NOT_READY");
     expect(thrown.message).toContain(`config file ${broken} is unusable`);
     expect(thrown.hint).toBe("fix or remove it, then run `oled config --init`");
@@ -63,7 +53,7 @@ describe("requireConfig (unchanged by the assertUsable extraction)", () => {
   it("returns the resolved config when the named file exists and parses", () => {
     const good = join(dir, "good.json");
     writeFileSync(good, JSON.stringify({ displayCurrency: "USD" }));
-    const cfg = requireConfig(commandWithConfig(good));
+    const cfg = requireConfig(good);
     expect(cfg.exists).toBe(true);
     expect(cfg.displayCurrency).toBe("USD");
   });
@@ -72,7 +62,7 @@ describe("requireConfig (unchanged by the assertUsable extraction)", () => {
 describe("inspectConfig: a named --config must still resolve", () => {
   it("fails NOT_READY when the named path does not exist", () => {
     const missing = join(dir, "nope.json");
-    const thrown = thrownBy(() => inspectConfig(commandWithConfig(missing)));
+    const thrown = thrownBy(() => inspectConfig(missing));
     expect(thrown.code).toBe("NOT_READY");
     expect(thrown.message).toBe(`no config file at ${missing}`);
   });
@@ -80,7 +70,7 @@ describe("inspectConfig: a named --config must still resolve", () => {
   it("fails NOT_READY when the named path exists but is unusable", () => {
     const broken = join(dir, "broken.json");
     writeFileSync(broken, "not json\n");
-    const thrown = thrownBy(() => inspectConfig(commandWithConfig(broken)));
+    const thrown = thrownBy(() => inspectConfig(broken));
     expect(thrown.code).toBe("NOT_READY");
     expect(thrown.message).toContain(`config file ${broken} is unusable`);
   });
@@ -88,7 +78,7 @@ describe("inspectConfig: a named --config must still resolve", () => {
   it("returns the resolved config when the named path exists and parses", () => {
     const good = join(dir, "good.json");
     writeFileSync(good, JSON.stringify({ displayCurrency: "USD" }));
-    const loaded = inspectConfig(commandWithConfig(good));
+    const loaded = inspectConfig(good);
     expect(loaded.problem).toBeNull();
     expect(loaded.config.exists).toBe(true);
     expect(loaded.config.displayCurrency).toBe("USD");
@@ -118,7 +108,7 @@ describe("inspectConfig: no --config stays lenient about the default profile", (
 
   it("with no default file, reports exists:false instead of failing", () => {
     withSandboxHome(() => {
-      const loaded = inspectConfig(commandWithConfig());
+      const loaded = inspectConfig(undefined);
       expect(loaded.config.exists).toBe(false);
       expect(loaded.problem).toBeNull();
     });
@@ -130,7 +120,7 @@ describe("inspectConfig: no --config stays lenient about the default profile", (
       mkdirSync(oledDir, { recursive: true });
       writeFileSync(join(oledDir, "config.json"), "not json\n");
 
-      const loaded = inspectConfig(commandWithConfig());
+      const loaded = inspectConfig(undefined);
       expect(loaded.config.exists).toBe(true);
       expect(loaded.problem).toBeTruthy();
     });

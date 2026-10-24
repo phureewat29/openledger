@@ -1,11 +1,10 @@
 import type { Command } from "commander";
 import type Database from "libsql";
-import { currentMode, emit, emitCappedSummary, emitList, emitObject, emitSummary, runAction, type Column } from "../cli/output.js";
+import { cappedSummary, runAction, type Invocation, type Output } from "../cli/output.js";
+import type { Column } from "../cli/format.js";
 import { fail, mapNotFoundError } from "../cli/errors.js";
 import { redactionEnabled, requireYes } from "../cli/input.js";
-import { openDb } from "../db/connection.js";
-import { requireConfig } from "../config/cli.js";
-import type { ResolvedConfig } from "../config/config.js";
+import { openLedger } from "../config/cli.js";
 import {
   insertTransaction,
   deleteTransaction as deleteTransactionRow,
@@ -32,6 +31,7 @@ import {
   type RawTransactionInput,
 } from "../ingest/commit.js";
 import { autoMergeStrictDuplicateTransactions, findDuplicateTransactions } from "./duplicates.js";
+import { noiseTokens } from "../datasets/datasets.js";
 import { requireAccount } from "../accounts/cli.js";
 import { formatFixed, fromMinorUnits, toMinorUnits } from "../lib/money.js";
 import { clampOffset } from "../lib/limit.js";
@@ -109,9 +109,8 @@ function amountFilterCurrency(account?: string, currency?: string): string {
   fail("USAGE", "--amount needs a unit: pass --account <id> or --currency <code>");
 }
 
-async function listTransactions(opts: ListTransactionsOpts, command: Command): Promise<void> {
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+async function listTransactions(ctx: Invocation, opts: ListTransactionsOpts): Promise<void> {
+  const { config, db } = await openLedger(ctx.configPath);
   const parsed = parseInput(LIST_TRANSACTIONS_SPEC, opts as Record<string, unknown>);
   const listOpts: Omit<ListTransactionsOptions, "group"> = { includeVoid: !!opts.includeVoid };
   if (parsed.account) listOpts.account = parsed.account;
@@ -135,9 +134,9 @@ async function listTransactions(opts: ListTransactionsOpts, command: Command): P
   if (opts.group) {
     // Offset pages rows before clustering, so a group can straddle a page, same as the limit.
     const clusters = queryTransactions(db, { ...listOpts, group: true });
-    emitClusters(clusters, redactionEnabled(opts), config);
+    emitClusters(ctx.out, clusters, redactionEnabled(opts), config);
     const returned = clusters.reduce((n, c) => n + c.transactions.length, 0);
-    emitCappedSummary(total, returned, limit, offset);
+    ctx.out.emitSummary(cappedSummary(total, returned, limit, offset));
     return;
   }
 
@@ -147,45 +146,52 @@ async function listTransactions(opts: ListTransactionsOpts, command: Command): P
     TRANSACTION_REDACT_FIELDS,
     config,
   );
-  emitList<TransactionView>(rows, LIST_COLUMNS);
-  emitCappedSummary(total, rows.length, limit, offset);
+  ctx.out.emitList<TransactionView>(rows, LIST_COLUMNS);
+  ctx.out.emitSummary(cappedSummary(total, rows.length, limit, offset));
 }
 
-function emitClusters(clusters: TransactionCluster[], redact: boolean, source: RedactionSource): void {
+function renderClusterRow(t: TransactionView): string {
+  const accounts = `${sideLabel(t.debit_account_name, t.debit_account_id)} -> ${sideLabel(t.credit_account_name, t.credit_account_id)}`;
+  return `  ${t.id}  ${t.date}  ${t.description}  ${accounts}  ${formatFixed(t.amount, t.currency)} ${t.currency}\n`;
+}
+
+function renderClusters(view: TransactionClusterView[]): string {
+  return view
+    .map((c) => `${c.group_id ?? "(ungrouped)"}\n` + c.transactions.map(renderClusterRow).join(""))
+    .join("");
+}
+
+function emitClusters(
+  out: Output,
+  clusters: TransactionCluster[],
+  redact: boolean,
+  source: RedactionSource,
+): void {
   const raw: TransactionClusterView[] = clusters.map((c) => ({
     group_id: c.group_id,
     transactions: c.transactions.map(presentTransaction),
   }));
   // One redactor build (and one context.md read) for the whole view, not one per cluster.
   const view = applyRedaction(raw, redact, TRANSACTION_REDACT_FIELDS, source);
-  const mode = currentMode();
-  if (mode.json) {
-    for (const c of view) emit(c);
+  if (out.mode.json) {
+    for (const c of view) out.emit(c);
     return;
   }
-  for (const c of view) {
-    process.stdout.write(`${c.group_id ?? "(ungrouped)"}\n`);
-    for (const t of c.transactions) {
-      process.stdout.write(
-        `  ${t.id}  ${t.date}  ${t.description}  ${sideLabel(t.debit_account_name, t.debit_account_id)} -> ${sideLabel(t.credit_account_name, t.credit_account_id)}  ${formatFixed(t.amount, t.currency)} ${t.currency}\n`,
-      );
-    }
-  }
+  out.write(renderClusters(view));
 }
 
 async function showTransaction(
+  ctx: Invocation,
   id: string,
   opts: { redact?: boolean },
-  command: Command,
 ): Promise<void> {
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { config, db } = await openLedger(ctx.configPath);
   const detail = findTransactionById(db, id);
   if (!detail) fail("NOT_FOUND", `transaction "${id}" not found`);
 
   const view: TransactionShowView = presentTransaction(detail);
   if (detail.group) view.group = detail.group.map(presentTransaction);
-  emitObject(
+  ctx.out.emitObject(
     applyRedaction(view, redactionEnabled(opts), TRANSACTION_REDACT_FIELDS, config),
   );
 }
@@ -205,12 +211,13 @@ const DUPLICATE_COLUMNS: Column<TransactionDuplicateRow>[] = [
   { header: "Merchant ID", value: (r) => r.merchant_id ?? "" },
 ];
 
-async function dedupeTransactions(
-  opts: { autoMerge?: boolean; redact?: boolean },
-  command: Command,
-): Promise<void> {
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+interface DedupeTransactionsOpts {
+  autoMerge?: boolean;
+  redact?: boolean;
+}
+
+async function dedupeTransactions(ctx: Invocation, opts: DedupeTransactionsOpts): Promise<void> {
+  const { config, db } = await openLedger(ctx.configPath);
 
   let autoMerged: number | undefined;
   if (opts.autoMerge) {
@@ -227,7 +234,7 @@ async function dedupeTransactions(
     config,
   );
 
-  emitList<TransactionDuplicateRow>(rows, DUPLICATE_COLUMNS);
+  ctx.out.emitList<TransactionDuplicateRow>(rows, DUPLICATE_COLUMNS);
   const summary: Omit<TransactionDedupeSummary, "type"> = {
     groups: groups.length,
     ...(autoMerged !== undefined ? { auto_merged: autoMerged } : {}),
@@ -239,7 +246,7 @@ async function dedupeTransactions(
         }
       : {}),
   };
-  emitSummary(summary);
+  ctx.out.emitSummary(summary);
 }
 
 const MERGE_TRANSACTIONS_SPEC = z.object({
@@ -253,11 +260,10 @@ interface MergeTransactionsOpts {
   yes?: boolean;
 }
 
-async function mergeTransactions(opts: MergeTransactionsOpts, command: Command): Promise<void> {
+async function mergeTransactions(ctx: Invocation, opts: MergeTransactionsOpts): Promise<void> {
   const parsed = parseInput(MERGE_TRANSACTIONS_SPEC, opts as Record<string, unknown>);
   requireYes(opts, "merging transactions");
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
 
   let result;
   try {
@@ -273,11 +279,11 @@ async function mergeTransactions(opts: MergeTransactionsOpts, command: Command):
       voided: false,
       already_void: true,
     };
-    emitObject(view);
+    ctx.out.emitObject(view);
     return;
   }
   const view: TransactionMergeResult = { from: parsed.from, to: parsed.to, voided: true };
-  emitObject(view);
+  ctx.out.emitObject(view);
 }
 
 interface AddTransactionOpts {
@@ -328,15 +334,20 @@ function buildRawTransaction(opts: AddTransactionOpts): RawTransactionInput {
   return raw;
 }
 
-function addViaResolve(db: Database.Database, config: ResolvedConfig, raw: RawTransactionInput): void {
+function addViaResolve(
+  out: Output,
+  db: Database.Database,
+  noise: readonly string[],
+  raw: RawTransactionInput,
+): void {
   const batchId = newBatchId();
-  const ctx: TransactionCommitContext = {
+  const commitCtx: TransactionCommitContext = {
     batchId,
     fileId: null,
     fileHash: null,
-    country: config.country,
+    noise,
   };
-  const outcome = commitTransaction(db, ctx, raw);
+  const outcome = commitTransaction(db, commitCtx, raw);
   if (!outcome.ok) {
     // The conversion-pair hint only fits a mismatch between two ledgers that both exist.
     if (outcome.reason === "currency_mismatch" && !outcome.unopenedLedger) {
@@ -350,10 +361,15 @@ function addViaResolve(db: Database.Database, config: ResolvedConfig, raw: RawTr
     raised_questions: outcome.raisedQuestions,
     currency_overridden: outcome.currencyOverridden,
   };
-  emitObject(view);
+  out.emitObject(view);
 }
 
-function addStrict(db: Database.Database, config: ResolvedConfig, raw: RawTransactionInput): void {
+function addStrict(
+  out: Output,
+  db: Database.Database,
+  noise: readonly string[],
+  raw: RawTransactionInput,
+): void {
   const accountHint =
     "create it with `oled accounts create`, or find a close match with `oled accounts match --query <name>`, or re-run with --resolve";
   const debit = requireAccount(db, raw.debit_account_id, accountHint);
@@ -379,7 +395,7 @@ function addStrict(db: Database.Database, config: ResolvedConfig, raw: RawTransa
       debit_account_id: raw.debit_account_id,
       credit_account_id: raw.credit_account_id,
       amount: toMinorUnits(raw.amount, currency),
-      merchant: withNoiseTokens(raw.merchant, config.country),
+      merchant: withNoiseTokens(raw.merchant, noise),
       merchant_id: raw.merchant_id ?? null,
       raw_descriptor: raw.raw_descriptor ?? null,
       source_page: raw.source_page ?? null,
@@ -388,16 +404,16 @@ function addStrict(db: Database.Database, config: ResolvedConfig, raw: RawTransa
     fail("INVALID", (err as Error).message);
   }
   const view: TransactionAddResult = { transaction_id: result.id, duplicate: result.duplicate };
-  emitObject(view);
+  out.emitObject(view);
 }
 
-async function addTransaction(opts: AddTransactionOpts, command: Command): Promise<void> {
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+async function addTransaction(ctx: Invocation, opts: AddTransactionOpts): Promise<void> {
+  const { config, db } = await openLedger(ctx.configPath);
   const raw = buildRawTransaction(opts);
+  const noise = noiseTokens(config.country);
 
-  if (opts.resolve) return addViaResolve(db, config, raw);
-  return addStrict(db, config, raw);
+  if (opts.resolve) return addViaResolve(ctx.out, db, noise, raw);
+  return addStrict(ctx.out, db, noise, raw);
 }
 
 const UPDATE_TRANSACTION_SPEC = z.object({
@@ -409,35 +425,33 @@ const UPDATE_TRANSACTION_SPEC = z.object({
 const UPDATE_TRANSACTION_ALIASES = { merchant_id: ["merchant"] };
 
 async function updateTransaction(
+  ctx: Invocation,
   id: string,
   opts: Record<string, unknown>,
-  command: Command,
 ): Promise<void> {
   const fields: UpdateTransactionMetaFields = parseInput(UPDATE_TRANSACTION_SPEC, opts, {
     aliases: UPDATE_TRANSACTION_ALIASES,
     atLeastOne: "at least one of --date, --description, --merchant is required",
   });
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   const changes = updateTransactionMeta(db, id, fields);
   if (changes === 0) fail("NOT_FOUND", `transaction "${id}" not found`);
   const view: TransactionUpdateResult = { transaction_id: id, updated: true };
-  emitObject(view);
+  ctx.out.emitObject(view);
 }
 
 async function deleteTransaction(
+  ctx: Invocation,
   id: string,
   opts: { yes?: boolean },
-  command: Command,
 ): Promise<void> {
   requireYes(opts, "deleting this transaction");
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   const { deleted, unvoided } = deleteTransactionRow(db, id);
   if (!deleted) fail("NOT_FOUND", `transaction "${id}" not found`);
   // Deleting a survivor puts its mirrors back into balance derivation.
   const view: TransactionDeleteResult = { transaction_id: id, deleted: true, unvoided };
-  emitObject(view);
+  ctx.out.emitObject(view);
 }
 
 const RECATEGORIZE_SPEC = z.object({
@@ -451,16 +465,15 @@ const RECATEGORIZE_LABELS = {
 };
 
 async function recategorizeTransactions(
+  ctx: Invocation,
   opts: Record<string, unknown>,
-  command: Command,
 ): Promise<void> {
   const parsed = parseInput(RECATEGORIZE_SPEC, opts, { labels: RECATEGORIZE_LABELS });
   // An empty id reads the same as the flag not being passed.
   if (!parsed.filter_account.trim()) fail("USAGE", `${RECATEGORIZE_LABELS.filter_account} required`);
   if (!parsed.set_account.trim()) fail("USAGE", "--set-account required");
 
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   requireAccount(
     db,
     parsed.set_account,
@@ -482,7 +495,7 @@ async function recategorizeTransactions(
     skipped_currency_mismatch: result.skipped_currency_mismatch,
     sample_transaction_ids: result.sample_transaction_ids,
   };
-  emitObject(view);
+  ctx.out.emitObject(view);
 }
 
 export function registerTransactions(program: Command): void {

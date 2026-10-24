@@ -4,7 +4,7 @@ import { resolve } from "path";
 import chalk from "chalk";
 import type { Command } from "commander";
 import { requireConfig } from "../../config/cli.js";
-import { emit, renderByMode, runAction } from "../output.js";
+import { runAction, type Invocation } from "../output.js";
 import type { OpenResult } from "../../contract/open.js";
 
 const OPENERS: Partial<Record<NodeJS.Platform, string>> = {
@@ -28,8 +28,8 @@ function spawnOpener(cmd: string, dataDir: string): Promise<string | undefined> 
 }
 
 // The path is reported even when the opener fails: it is still useful on its own.
-async function openDataDir(_opts: Record<string, unknown>, command: Command): Promise<void> {
-  const dataDir = resolve(requireConfig(command).dataDir);
+async function openDataDir(ctx: Invocation): Promise<void> {
+  const dataDir = resolve(requireConfig(ctx.configPath).dataDir);
   if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
 
   const cmd = openerCommand();
@@ -37,23 +37,20 @@ async function openDataDir(_opts: Record<string, unknown>, command: Command): Pr
     ? await spawnOpener(cmd, dataDir)
     : `don't know how to open the file manager on ${process.platform}`;
 
-  renderByMode({
+  ctx.out.render({
     json: () => {
       const result: OpenResult = { path: dataDir };
       if (spawnError) result.spawn_error = spawnError;
-      emit(result);
+      ctx.out.emit(result);
     },
     tty: () => {
-      console.log(chalk.dim(`Data folder: ${dataDir}`));
+      ctx.out.write(chalk.dim(`Data folder: ${dataDir}`) + "\n");
       if (spawnError) {
-        console.log(
-          chalk.yellow(`Couldn't open the folder automatically: ${spawnError}. Open it manually with the path above.`),
-        );
+        const advice = `Couldn't open the folder automatically: ${spawnError}. Open it manually with the path above.`;
+        ctx.out.write(chalk.yellow(advice) + "\n");
       }
     },
-    plain: () => {
-      process.stdout.write(dataDir + "\n");
-    },
+    plain: () => ctx.out.write(dataDir + "\n"),
   });
 }
 

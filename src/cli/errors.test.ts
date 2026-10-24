@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ValidationError } from "../lib/validate.js";
 import { DBBusyError, DBNotReadyError } from "../db/errors.js";
-import type { AccountFailure } from "../accounts/accounts.js";
 import { EXIT } from "../contract/exit.js";
-import { REASON_EXIT, fail, failReason, mapNotFoundError, toCLIError } from "./errors.js";
+import { fail, failReason, mapNotFoundError, toCLIError, type FailureCode } from "./errors.js";
 
 interface ThrownCLIError {
   code: keyof typeof EXIT;
@@ -127,37 +126,22 @@ describe("toCLIError: classification", () => {
   );
 });
 
-interface ReasonCase {
-  reason: AccountFailure;
-  code: keyof typeof EXIT;
-  exitCode: number;
-}
-
-/** Pinned as data, not read off REASON_EXIT: a re-pointed reason must fail here. */
-const REASON_CASES: ReasonCase[] = [
-  { reason: "account_exists", code: "INVALID", exitCode: 6 },
-  { reason: "parent_not_found", code: "NOT_FOUND", exitCode: 5 },
-  { reason: "invalid_hierarchy", code: "INVALID", exitCode: 6 },
-];
+const TABLE: Record<"taken" | "missing", FailureCode> = { taken: "INVALID", missing: "NOT_FOUND" };
 
 describe("failReason", () => {
-  it.each(REASON_CASES)("$reason exits $code ($exitCode)", ({ reason, code, exitCode }) => {
-    const thrown = thrownBy(() => failReason({ reason, message: "refused" }));
-    expect(thrown.code).toBe(code);
-    expect(EXIT[thrown.code]).toBe(exitCode);
+  it("maps the reason through the given table and keeps the message", () => {
+    const thrown = thrownBy(() => failReason(TABLE, { reason: "missing", message: "refused" }));
+    expect(thrown.code).toBe("NOT_FOUND");
     expect(thrown.message).toBe("refused");
     expect(thrown.hint).toBeUndefined();
   });
 
   it("carries a hint only when one is given", () => {
     const thrown = thrownBy(() =>
-      failReason({ reason: "parent_not_found", message: "no parent" }, "create it first"),
+      failReason(TABLE, { reason: "taken", message: "no parent" }, "create it first"),
     );
+    expect(thrown.code).toBe("INVALID");
     expect(thrown.hint).toBe("create it first");
-  });
-
-  it("assigns an exit code to every reason arm", () => {
-    expect(Object.keys(REASON_EXIT).sort()).toEqual(REASON_CASES.map((c) => c.reason).sort());
   });
 });
 

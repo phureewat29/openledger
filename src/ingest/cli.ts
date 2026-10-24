@@ -1,9 +1,10 @@
 import type { Command } from "commander";
 import type Database from "libsql";
-import { EXIT, type Column, type ExitCode, currentMode, emit, emitList, emitObject, emitSummary, runAction } from "../cli/output.js";
-import { fail } from "../cli/errors.js";
-import { openDb } from "../db/connection.js";
-import { requireConfig } from "../config/cli.js";
+import { runAction, type Invocation } from "../cli/output.js";
+import type { Column } from "../cli/format.js";
+import { fail, type FailureCode } from "../cli/errors.js";
+import { openLedger } from "../config/cli.js";
+import type { ExitCode } from "../contract/exit.js";
 import { commitIngest } from "./commit-cli.js";
 import { markFileFailed, markFileIngested } from "../files/queries.js";
 import { getAccountBalanceMinor } from "../accounts/balances.js";
@@ -58,9 +59,8 @@ function toIngestFile(entry: IngestEntry): IngestFile {
   };
 }
 
-async function listIngest(opts: ListIngestOpts, command: Command): Promise<void> {
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+async function listIngest(ctx: Invocation, opts: ListIngestOpts): Promise<void> {
+  const { config, db } = await openLedger(ctx.configPath);
 
   let regex: RegExp | undefined;
   if (opts.regex) {
@@ -82,17 +82,17 @@ async function listIngest(opts: ListIngestOpts, command: Command): Promise<void>
   for (const e of entries) counts[e.status]++;
   const total = entries.length;
 
-  const mode = currentMode();
-  if (mode.json) {
-    for (const e of entries) emit(toIngestFile(e));
+  const { out } = ctx;
+  if (out.mode.json) {
+    for (const e of entries) out.emit(toIngestFile(e));
     const summary: Omit<IngestListSummary, "type"> = { ...counts, total };
-    emitSummary(summary);
+    out.emitSummary(summary);
     return;
   }
 
-  emitList(entries, INGEST_COLUMNS);
-  if (mode.tty) {
-    process.stdout.write(
+  out.emitList(entries, INGEST_COLUMNS);
+  if (out.mode.tty) {
+    out.write(
       `\n${counts.new} new, ${counts.pending} pending, ${counts.ingested} ingested, ${counts.failed} failed, ${counts.unreadable} unreadable (${total} total)\n`,
     );
   }
@@ -111,7 +111,7 @@ const PASSWORD_HINT = "re-run with --password <password>";
 const ACCEPTED_EXTS = SUPPORTED_EXTS.join(" ");
 const SIZE_LIMIT = `${MAX_SOURCE_BYTES / (1024 * 1024)} MB`;
 
-const PREPARE_FAILURES: Record<PrepareFailure, { code: ExitCode; hint: string }> = {
+const PREPARE_FAILURES: Record<PrepareFailure, { code: FailureCode; hint: string }> = {
   not_found: { code: "NOT_FOUND", hint: "run `oled ingest list --json` to see what is discoverable" },
   unsupported_extension: {
     code: "USAGE",
@@ -163,12 +163,11 @@ const PREPARE_LINE: {
 };
 
 async function prepareIngest(
+  ctx: Invocation,
   pathOrId: string,
   opts: PrepareIngestOpts,
-  command: Command,
-): Promise<void> {
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+): Promise<ExitCode | undefined> {
+  const { config, db } = await openLedger(ctx.configPath);
 
   const result = await prepareFile(db, config, pathOrId, {
     password: opts.password,
@@ -181,10 +180,10 @@ async function prepareIngest(
     fail(code, result.message, { hint });
   }
 
-  emitObject(PREPARE_LINE[result.kind](result as never));
+  ctx.out.emitObject(PREPARE_LINE[result.kind](result as never));
 
   // A page the endpoint could not read is a hole in the document, not a failed run.
-  if (result.kind === "text" && result.failedPages.length > 0) process.exitCode = EXIT.PARTIAL;
+  if (result.kind === "text" && result.failedPages.length > 0) return "PARTIAL";
 }
 
 const DONE_FLAGS_SPEC = z.object({
@@ -245,14 +244,13 @@ function reconcileStatement(db: Database.Database, target: ReconcileTarget): Rec
 }
 
 async function completeIngest(
+  ctx: Invocation,
   id: string,
   opts: Record<string, unknown>,
-  command: Command,
 ): Promise<void> {
   const flags = parseInput(DONE_FLAGS_SPEC, opts);
   const target = reconcileTarget(flags);
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { config, db } = await openLedger(ctx.configPath);
   requireFile(
     db,
     id,
@@ -270,7 +268,7 @@ async function completeIngest(
     cache_removed: removed,
     ...(reconciliation ? { reconciliation } : {}),
   };
-  emitObject(result);
+  ctx.out.emitObject(result);
 }
 
 interface FailIngestOpts {
@@ -278,11 +276,10 @@ interface FailIngestOpts {
   error?: string;
 }
 
-async function failIngest(id: string, opts: FailIngestOpts, command: Command): Promise<void> {
+async function failIngest(ctx: Invocation, id: string, opts: FailIngestOpts): Promise<void> {
   if (!opts.error) fail("USAGE", "`ingest fail` requires --error <text>");
 
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { config, db } = await openLedger(ctx.configPath);
   requireFile(
     db,
     id,
@@ -292,7 +289,7 @@ async function failIngest(id: string, opts: FailIngestOpts, command: Command): P
 
   const { removed } = cleanCache(config.cacheDir, id);
   const result: IngestFailResult = { file_id: id, status: "failed", cache_removed: removed };
-  emitObject(result);
+  ctx.out.emitObject(result);
 }
 
 export function registerIngest(program: Command): void {

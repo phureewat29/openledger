@@ -7,7 +7,6 @@ import {
 } from "./queries.js";
 import {
   shouldPlaceAccount,
-  ensureUncategorizedFallback,
   namesUnopenedLedger,
   resolveOnePosting,
 } from "./resolve.js";
@@ -204,22 +203,6 @@ describe("resolveOnePosting lookalikes", () => {
       accountId: "thb:income:transfers:p2p",
       hint: { type: "placeholder_created", accountId: "thb:income:transfers:p2p" },
     });
-  });
-});
-
-describe("ensureUncategorizedFallback", () => {
-  it("returns the ledger's own uncategorized account, idempotently", () => {
-    const db = freshDb(seedThbLedger);
-    const id = ensureUncategorizedFallback(db, "thb");
-    expect(id).toBe("thb:expense:uncategorized");
-    expect(findAccountById(db, id)!.name).toBe("Uncategorized (THB)");
-    expect(ensureUncategorizedFallback(db, "thb")).toBe(id);
-  });
-
-  it("keeps each ledger's fallback separate", () => {
-    const db = freshDb(seedThbLedger);
-    expect(ensureUncategorizedFallback(db, "usd")).toBe("usd:expense:uncategorized");
-    expect(findAccountById(db, "usd:expense:uncategorized")!.name).toBe("Uncategorized (USD)");
   });
 });
 

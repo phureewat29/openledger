@@ -15,7 +15,7 @@ import { existsSync } from "fs";
 import { homeRelative } from "../../lib/path.js";
 import { formatAmount, toDecimalTotals } from "../../lib/money.js";
 import { banner, visibleLength, ANSI_RE, formatInt } from "../format.js";
-import { currentMode, emit, renderByMode, runAction } from "../output.js";
+import { runAction, type Invocation } from "../output.js";
 import { redactionEnabled } from "../input.js";
 import { tryExecute } from "../../lib/result.js";
 import { inspectConfig } from "../../config/cli.js";
@@ -98,8 +98,8 @@ export async function buildReport(loaded: LoadedConfig): Promise<StatusReport> {
 const STATUS_REDACT_FIELDS = ["error", "user_name", "config_problem"] as const;
 
 // Redaction defaults on, so bare `oled` (no --no-redact flag) masks the same fields `status` does.
-export async function showStatus(opts: { redact?: boolean }, command: Command): Promise<void> {
-  const loaded = inspectConfig(command);
+export async function showStatus(ctx: Invocation, opts: { redact?: boolean }): Promise<void> {
+  const loaded = inspectConfig(ctx.configPath);
   const cfg = loaded.config;
   let report = await buildReport(loaded);
   // Decided before redaction: paths and error prose are display strings, not facts to branch on.
@@ -107,15 +107,15 @@ export async function showStatus(opts: { redact?: boolean }, command: Command): 
   if (redactionEnabled(opts)) {
     report = applyRedaction(report, true, STATUS_REDACT_FIELDS, cfg);
   }
-  const mode = currentMode();
-  renderByMode({
-    json: () => emit(report),
-    tty: () => renderTty(report, mode.color, ledgerMissing),
-    plain: () => renderPlain(report),
+  const { out } = ctx;
+  out.render({
+    json: () => out.emit(report),
+    tty: () => out.write(renderTty(report, out.mode.color, ledgerMissing)),
+    plain: () => out.write(renderPlain(report)),
   });
 }
 
-function renderPlain(r: StatusReport): void {
+function renderPlain(r: StatusReport): string {
   const lines: [string, string | number | boolean][] = [
     ["configured", r.configured],
     ["config_path", r.config_path],
@@ -158,27 +158,26 @@ function renderPlain(r: StatusReport): void {
       }
     }
   }
-  process.stdout.write(lines.map(([k, v]) => `${k}\t${v}`).join("\n") + "\n");
+  return lines.map(([k, v]) => `${k}\t${v}`).join("\n") + "\n";
 }
 
 const LABEL_WIDTH = 18;
 
 // Exported for tests: this renderer only runs on a real TTY, so no subprocess suite executes it.
-export function renderTty(r: StatusReport, color: boolean, ledgerMissing = false): void {
+export function renderTty(r: StatusReport, color: boolean, ledgerMissing = false): string {
   const dim = (s: string) => (color ? chalk.dim(s) : s);
   const bold = (s: string) => (color ? chalk.bold.yellow(s) : s);
 
-  const section = (title: string, rows: [string, string][]): void => {
-    process.stdout.write(bold(title) + "\n");
+  const section = (title: string, rows: [string, string][]): string => {
     const valueWidth = Math.max(0, ...rows.map(([, v]) => visibleLength(v)));
-    for (const [label, value] of rows) {
+    const body = rows.map(([label, value]) => {
       const pad = " ".repeat(Math.max(0, valueWidth - visibleLength(value)));
-      process.stdout.write(`  ${label.padEnd(LABEL_WIDTH)}${pad}${value}\n`);
-    }
-    process.stdout.write("\n");
+      return `  ${label.padEnd(LABEL_WIDTH)}${pad}${value}\n`;
+    });
+    return bold(title) + "\n" + body.join("") + "\n";
   };
 
-  process.stdout.write("\n" + (color ? banner() : stripBanner()) + "\n\n");
+  const parts = ["\n" + (color ? banner() : stripBanner()) + "\n\n"];
 
   const system: [string, string][] = [["Configured", r.configured ? "yes" : dim("no")]];
   if (r.config_problem) system.push(["Config", dim(`unusable: ${r.config_problem}`)]);
@@ -192,7 +191,7 @@ export function renderTty(r: StatusReport, color: boolean, ledgerMissing = false
       r.db.reachable ? "ready" : dim(r.db.error ? `not ready: ${r.db.error}` : "not ready"),
     ],
   );
-  section("System", system);
+  parts.push(section("System", system));
 
   // Bare status always exits 0; a named --config that fails to resolve exits NOT_READY
   // before a report is ever built. An unreachable db still needs its own pointer here.
@@ -200,16 +199,18 @@ export function renderTty(r: StatusReport, color: boolean, ledgerMissing = false
     const next = ledgerMissing
       ? "run `oled config --init` to create one"
       : "run `oled doctor` for details";
-    process.stdout.write(dim(`  ${next}`) + "\n\n");
+    parts.push(dim(`  ${next}`) + "\n\n");
   }
 
   if (r.counts) {
-    section("Ledger", [
-      ["Accounts", formatInt(r.counts.accounts)],
-      ["Transactions", formatInt(r.counts.transactions)],
-      ["Merchants", formatInt(r.counts.merchants)],
-      ["Notes", formatInt(r.counts.notes)],
-    ]);
+    parts.push(
+      section("Ledger", [
+        ["Accounts", formatInt(r.counts.accounts)],
+        ["Transactions", formatInt(r.counts.transactions)],
+        ["Merchants", formatInt(r.counts.merchants)],
+        ["Notes", formatInt(r.counts.notes)],
+      ]),
+    );
   }
 
   const fileExtras: string[] = [];
@@ -229,10 +230,11 @@ export function renderTty(r: StatusReport, color: boolean, ledgerMissing = false
       `${formatInt(r.questions.open)} open${r.questions.deferred ? "  " + dim(`(${r.questions.deferred} deferred)`) : ""}`,
     ]);
   }
-  section("Pipeline", pipeline);
+  parts.push(section("Pipeline", pipeline));
 
   const financial = r.net_worth ? financialRows(r.net_worth, dim, r.locale) : [];
-  if (financial.length) section("Financial", financial);
+  if (financial.length) parts.push(section("Financial", financial));
+  return parts.join("");
 }
 
 // Ledgers in ISO order; each amount formats in its own currency, not the display currency.

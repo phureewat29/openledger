@@ -2,16 +2,17 @@ import type { Command } from "commander";
 import { ValidationError } from "../lib/validate.js";
 import { errorMessage } from "../lib/result.js";
 import { DBBusyError, DBNotReadyError, isBusyError, sqliteErrorCode } from "../db/errors.js";
-import type { AccountFailure } from "../accounts/accounts.js";
 import type { ExitCode } from "../contract/exit.js";
+
+export type FailureCode = Exclude<ExitCode, "OK">;
 
 // Not exported: outside this module, fail() is the only construction site for CLIError.
 class CLIError extends Error {
-  readonly code: ExitCode;
+  readonly code: FailureCode;
   readonly hint?: string;
   readonly details?: unknown;
   constructor(
-    code: ExitCode,
+    code: FailureCode,
     message: string,
     opts?: { hint?: string; details?: unknown },
   ) {
@@ -24,7 +25,7 @@ class CLIError extends Error {
 }
 
 export function fail(
-  code: ExitCode,
+  code: FailureCode,
   message: string,
   opts?: { hint?: string; details?: unknown },
 ): never {
@@ -73,18 +74,13 @@ export function toCLIError(err: unknown, cmd?: Command): CLIError {
   return new CLIError("GENERIC", errorMessage(err));
 }
 
-// Record<Union, ExitCode> fails the build if a reason case is unhandled.
-export const REASON_EXIT: Record<AccountFailure, ExitCode> = {
-  account_exists: "INVALID",
-  parent_not_found: "NOT_FOUND",
-  invalid_hierarchy: "INVALID",
-};
-
-export function failReason(
-  failure: { reason: AccountFailure; message: string },
+// Declare `table` as `Record<Reason, FailureCode>` so a reason nobody assigned a code fails the build.
+export function failReason<R extends string>(
+  table: Record<R, FailureCode>,
+  failure: { reason: NoInfer<R>; message: string },
   hint?: string,
 ): never {
-  fail(REASON_EXIT[failure.reason], failure.message, hint === undefined ? undefined : { hint });
+  fail(table[failure.reason], failure.message, hint === undefined ? undefined : { hint });
 }
 
 // Matches error message text, for throw sites that use a plain `Error` instead of a typed reason.

@@ -109,7 +109,7 @@ describe("accounts create (subprocess)", () => {
     });
   }, 30000);
 
-  // The remaining two AccountFailure arms REASON_EXIT splits: a taken id is the caller's
+  // The remaining two AccountFailure arms ACCOUNT_FAILURE_EXIT splits: a taken id is the caller's
   // to rename, a missing parent is one to create.
   it("refuses a taken id as INVALID (6), leaving the row that holds it", async () => {
     const res = await runCLI([

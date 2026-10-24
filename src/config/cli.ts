@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import type Database from "libsql";
 import { existsSync, mkdirSync } from "fs";
 import { openDb } from "../db/connection.js";
 import { STRUCTURAL_ACCOUNTS, ensureStructuralAccount } from "../accounts/accounts.js";
@@ -15,21 +16,12 @@ import { expandHome } from "../lib/path.js";
 import { findCountryDefaults, availableCountries } from "../datasets/datasets.js";
 import { createContextTemplate } from "./context.js";
 import { DEFAULT_MODEL_ID } from "../extract/cards/index.js";
-import { printKeyValues } from "../cli/format.js";
-import { currentMode, emit, runAction, type OutputMode } from "../cli/output.js";
+import { formatKeyValues } from "../cli/format.js";
+import { runAction, type Invocation, type Output } from "../cli/output.js";
 import { fail } from "../cli/errors.js";
 import * as z from "zod";
 import { parseInput, str, bool } from "../lib/validate.js";
 import type { ConfigShowResult, ConfigConvergeResult } from "../contract/config.js";
-
-/** The root's argv scan consumes the flag wherever it appears; the ancestor walk reads it from any command node (same walk as resolveMode). */
-function resolveConfigPath(cmd: Command): string | undefined {
-  for (let c: Command | undefined = cmd; c; c = c.parent ?? undefined) {
-    const flag = c.opts().config;
-    if (typeof flag === "string") return flag;
-  }
-  return undefined;
-}
 
 /** Fails NOT_READY on a config that can't back a command: an unusable file, or a path with
  *  nothing at it. Shared by `requireConfig` (always) and `inspectConfig` (only once a
@@ -50,8 +42,15 @@ function assertUsable(loaded: LoadedConfig): ResolvedConfig {
 }
 
 /** For commands that operate on the ledger: no config file, no ledger. */
-export function requireConfig(cmd: Command): ResolvedConfig {
-  return assertUsable(loadConfig(resolveConfigPath(cmd)));
+export function requireConfig(path: string | undefined): ResolvedConfig {
+  return assertUsable(loadConfig(path));
+}
+
+export async function openLedger(
+  path: string | undefined,
+): Promise<{ config: ResolvedConfig; db: Database.Database }> {
+  const config = requireConfig(path);
+  return { config, db: await openDb(config.dbPath) };
 }
 
 /**
@@ -60,11 +59,10 @@ export function requireConfig(cmd: Command): ResolvedConfig {
  * leniently. But a --config the caller actually named must still resolve: otherwise the
  * report would silently describe the default profile's ledger instead of the one asked for.
  */
-export function inspectConfig(cmd: Command): LoadedConfig {
-  const named = resolveConfigPath(cmd);
-  const loaded = loadConfig(named);
+export function inspectConfig(path: string | undefined): LoadedConfig {
+  const loaded = loadConfig(path);
   // An explicit empty path still counts as "named"; only true absence stays lenient.
-  if (named !== undefined) assertUsable(loaded);
+  if (path !== undefined) assertUsable(loaded);
   return loaded;
 }
 
@@ -114,12 +112,12 @@ function flattenRows(obj: Record<string, unknown>): [string, string][] {
   return rows;
 }
 
-function printConfig(mode: OutputMode, data: Record<string, unknown>): void {
-  if (mode.json) {
-    emit(data);
+function printConfig(out: Output, data: Record<string, unknown>): void {
+  if (out.mode.json) {
+    out.emit(data);
     return;
   }
-  printKeyValues(mode, flattenRows(data));
+  out.write(formatKeyValues(flattenRows(data), { tty: out.mode.tty }));
 }
 
 /** The display currency names a ledger (`<currency>:<type>`), so anything but three
@@ -185,7 +183,11 @@ function resolveConvergedConfig(flags: SettingFlags, loaded: LoadedConfig): Conv
 }
 
 // Idempotent: each value resolves to an explicit flag, the file, or a default.
-async function convergeConfig(flags: SettingFlags, loaded: LoadedConfig): Promise<void> {
+async function convergeConfig(
+  out: Output,
+  flags: SettingFlags,
+  loaded: LoadedConfig,
+): Promise<void> {
   const converged = resolveConvergedConfig(flags, loaded);
   // 0700: the data dir holds the raw statements, the most sensitive files here.
   mkdirSync(converged.dataDir, { recursive: true, mode: 0o700 });
@@ -210,7 +212,7 @@ async function convergeConfig(flags: SettingFlags, loaded: LoadedConfig): Promis
     context_path: loaded.config.contextPath,
     created: { config: configPath, db: merged.dbPath, data_dir: merged.dataDir },
   };
-  printConfig(currentMode(), result);
+  printConfig(out, result);
 }
 
 /** `--init` asserts a fresh setup; a missing db or data dir is a recovery case it may rebuild. */
@@ -221,12 +223,12 @@ function fullyInitialized(cfg: ResolvedConfig): boolean {
 // One verb, three moods: bare shows, setting flags write (creating the file on
 // first touch), --init asserts the setup is being created fresh.
 async function configureHarness(
+  ctx: Invocation,
   path: string | undefined,
   opts: Record<string, unknown>,
-  command: Command,
 ): Promise<void> {
   // One spelling only: a root-consumed --config would be silently ignored here otherwise.
-  if (resolveConfigPath(command) !== undefined) {
+  if (ctx.configPath !== undefined) {
     fail("USAGE", "config names its file as a positional", {
       hint: "oled config <path> …",
     });
@@ -244,7 +246,7 @@ async function configureHarness(
         hint: "create it with `oled config <path> --init`",
       });
     }
-    printConfig(currentMode(), showPayload(loaded));
+    printConfig(ctx.out, showPayload(loaded));
     return;
   }
 
@@ -260,7 +262,7 @@ async function configureHarness(
       hint: "drop --init to change settings",
     });
   }
-  await convergeConfig(settings, loaded);
+  await convergeConfig(ctx.out, settings, loaded);
 }
 
 export function registerConfig(program: Command): void {

@@ -10,9 +10,11 @@ const exitOnEpipe = (err: NodeJS.ErrnoException): void => {
 process.stdout.on("error", exitOnEpipe);
 process.stderr.on("error", exitOnEpipe);
 
+const argv = process.argv;
+
 // runAction reports action failures; only commander's parse errors reach here.
 try {
-  buildProgram().parse();
+  buildProgram(argv).parse(argv);
 } catch (err) {
-  reportParseError(err);
+  reportParseError(err, argv);
 }

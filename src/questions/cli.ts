@@ -10,12 +10,12 @@ import {
   type QuestionRow,
 } from "./queries.js";
 import { applyRedaction } from "../privacy/redactor.js";
-import { emitCappedSummary, emitList, emitSummary, runAction, type Column } from "../cli/output.js";
+import { cappedSummary, runAction, type Invocation } from "../cli/output.js";
+import type { Column } from "../cli/format.js";
 import { fail } from "../cli/errors.js";
 import { redactionEnabled } from "../cli/input.js";
 import { clampOffset } from "../lib/limit.js";
-import { openDb } from "../db/connection.js";
-import { requireConfig } from "../config/cli.js";
+import { openLedger } from "../config/cli.js";
 import * as z from "zod";
 import { parseInput, str, int } from "../lib/validate.js";
 import { parseJsonOrNull } from "../lib/json.js";
@@ -77,10 +77,9 @@ const LIST_QUESTIONS_SPEC = z.object({
   offset: int().optional(),
 });
 
-async function listQuestions(opts: ListQuestionsOpts, command: Command): Promise<void> {
+async function listQuestions(ctx: Invocation, opts: ListQuestionsOpts): Promise<void> {
   const parsed = parseInput(LIST_QUESTIONS_SPEC, opts as Record<string, unknown>);
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { config, db } = await openLedger(ctx.configPath);
   // One filter object for both queries, so `total` counts what the list filtered.
   const filter = { batch_id: parsed.batch, includeDeferred: !!opts.includeDeferred };
   const rows = queryQuestions(db, { ...filter, limit: parsed.limit, offset: parsed.offset });
@@ -90,13 +89,15 @@ async function listQuestions(opts: ListQuestionsOpts, command: Command): Promise
     QUESTION_REDACT_FIELDS,
     config,
   );
-  emitList(listRows, LIST_COLUMNS);
+  ctx.out.emitList(listRows, LIST_COLUMNS);
   const total = countQuestions(db, filter);
-  emitCappedSummary(
-    total,
-    listRows.length,
-    clampQuestionsLimit(parsed.limit),
-    clampOffset(parsed.offset),
+  ctx.out.emitSummary(
+    cappedSummary(
+      total,
+      listRows.length,
+      clampQuestionsLimit(parsed.limit),
+      clampOffset(parsed.offset),
+    ),
   );
 }
 
@@ -106,9 +107,9 @@ const ANSWER_SPEC = z.object({
 });
 
 async function answerQuestion(
+  ctx: Invocation,
   id: string,
   opts: Record<string, unknown>,
-  command: Command,
 ): Promise<void> {
   const parsed = parseInput(ANSWER_SPEC, opts);
   const also: string[] = parsed.also
@@ -118,8 +119,7 @@ async function answerQuestion(
   // answer once, not delete once and then fail NOT_FOUND on its own second pass.
   const ids = uniq([id, ...also]);
 
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
 
   // Resolve every id before deleting any: closeQuestion is irreversible, so a
   // bogus id partway through the list must not cost the ids that came before it.
@@ -138,13 +138,13 @@ async function answerQuestion(
     if (!closed) throw new Error(`question "${qid}" vanished mid-answer`);
     return { id: qid, kind: closed.kind, answer: closed.answer, rule_key: closed.rule_key };
   });
-  emitList(results, ANSWERED_COLUMNS);
+  ctx.out.emitList(results, ANSWERED_COLUMNS);
   // `ids` is deduped, so the siblings are whatever --also added beyond the named id.
   const summary: Omit<QuestionsAnswerSummary, "type"> = {
     answered: results.length,
     closed_siblings: results.length - 1,
   };
-  emitSummary(summary);
+  ctx.out.emitSummary(summary);
 }
 
 const DEFER_SPEC = z.object({
@@ -152,18 +152,17 @@ const DEFER_SPEC = z.object({
 });
 
 async function deferQuestion(
+  ctx: Invocation,
   id: string,
   opts: Record<string, unknown>,
-  command: Command,
 ): Promise<void> {
   const parsed = parseInput(DEFER_SPEC, opts);
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   const ok = deferQuestionRow(db, id, parsed.days);
   if (!ok) fail("NOT_FOUND", `question "${id}" not found`);
-  emitList([{ id, days: parsed.days }], DEFER_COLUMNS);
+  ctx.out.emitList([{ id, days: parsed.days }], DEFER_COLUMNS);
   const summary: Omit<QuestionsDeferSummary, "type"> = { deferred: 1 };
-  emitSummary(summary);
+  ctx.out.emitSummary(summary);
 }
 
 export function registerQuestions(program: Command): void {

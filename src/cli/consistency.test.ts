@@ -4,11 +4,9 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 import { buildProgram } from "./program.js";
-import { EXIT } from "./output.js";
-import { EXIT as CONTRACT_EXIT } from "../contract/exit.js";
 import { CONTRACT_VERSION } from "../contract/version.js";
 
-// buildProgram() only builds the commander tree: no argv parsing, no action run.
+// buildProgram([]) only builds the commander tree: no argv parsing, no action run.
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
 const README = readFileSync(resolve(repoRoot, "README.md"), "utf8");
 const SKILL = readFileSync(resolve(repoRoot, "skills", "openledger", "SKILL.md"), "utf8");
@@ -115,7 +113,7 @@ function extractFlagTokens(span: string): string[] {
 
 describe("docs consistency (no subprocesses)", () => {
   it("top-level command names: program tree == README Commands section == SKILL.md spans", () => {
-    const program = buildProgram();
+    const program = buildProgram([]);
     const fromProgram = new Set(topLevelNames(program));
     const fromReadme = extractReadmeCommandNames(README);
     const fromSkill = extractSpanNouns(SKILL);
@@ -125,7 +123,7 @@ describe("docs consistency (no subprocesses)", () => {
   });
 
   it("every subcommand named in a SKILL.md span resolves to a real subcommand (no silent fallback to the parent)", () => {
-    const program = buildProgram();
+    const program = buildProgram([]);
     const problems: string[] = [];
 
     for (const span of extractOledCodeSpans(SKILL)) {
@@ -144,7 +142,7 @@ describe("docs consistency (no subprocesses)", () => {
   });
 
   it("every --flag on an oled span in SKILL.md is a real option on the resolved command", () => {
-    const program = buildProgram();
+    const program = buildProgram([]);
     // --help is commander's own, present on every command but absent from `options`.
     const globalFlags = new Set(["--json", "--no-color", "--config", "--help"]);
     const problems: string[] = [];
@@ -183,10 +181,6 @@ describe("docs consistency (no subprocesses)", () => {
 });
 
 describe("machine contract wiring", () => {
-  it("output.ts's EXIT is the same object as contract/exit.ts's, not a copy", () => {
-    expect(EXIT).toBe(CONTRACT_EXIT);
-  });
-
   it("SKILL.md's contract_version clause names the current CONTRACT_VERSION", () => {
     const idx = SKILL.indexOf("contract_version");
     expect(idx, "SKILL.md is missing a contract_version clause").toBeGreaterThan(-1);

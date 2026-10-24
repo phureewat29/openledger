@@ -1,4 +1,3 @@
-import type { Command } from "commander";
 import type Database from "libsql";
 import {
   commitLinkedTransactions,
@@ -16,11 +15,12 @@ import type {
   CommitStandaloneResult,
   CommitSummary,
 } from "../contract/ingest.js";
-import { EXIT, currentMode, emit, emitObject, emitSummary } from "../cli/output.js";
+import type { Invocation } from "../cli/output.js";
 import { fail } from "../cli/errors.js";
 import { asRecord, readStdinBatch } from "../cli/input.js";
-import { openDb } from "../db/connection.js";
-import { requireConfig } from "../config/cli.js";
+import { openLedger } from "../config/cli.js";
+import { noiseTokens } from "../datasets/datasets.js";
+import type { ExitCode } from "../contract/exit.js";
 import { newBatchId } from "../lib/ids.js";
 import { errorMessage } from "../lib/result.js";
 import { findFileById } from "../files/queries.js";
@@ -199,7 +199,7 @@ interface BatchContext {
   /** The `--file` id every row inherits unless it names its own. */
   file?: string;
   fileHashes: Map<string, string | null>;
-  country: string;
+  noise: readonly string[];
 }
 
 // file_hash is what makes transaction ids deterministic, and dedup relies on that.
@@ -229,7 +229,7 @@ function commitRow(
     record,
     index,
     fileId,
-    ctx: { batchId: batch.batchId, fileId, fileHash, country: batch.country },
+    ctx: { batchId: batch.batchId, fileId, fileHash, noise: batch.noise },
   };
 
   const linked = record.linked;
@@ -239,12 +239,14 @@ function commitRow(
   return commitStandaloneRow(db, counters, row);
 }
 
-export async function commitIngest(opts: CommitIngestOpts, command: Command): Promise<void> {
+export async function commitIngest(
+  ctx: Invocation,
+  opts: CommitIngestOpts,
+): Promise<ExitCode | undefined> {
   const items = await readStdinBatch(opts.input);
   if (items.length === 0) fail("USAGE", "no transaction data provided");
 
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { config, db } = await openLedger(ctx.configPath);
 
   // An unknown --file id must fail before insert, else a null file hash breaks id determinism.
   // Held for the summary: a commit writes transactions, never `files`, so the status stays current.
@@ -265,7 +267,7 @@ export async function commitIngest(opts: CommitIngestOpts, command: Command): Pr
     batchId,
     file: opts.file,
     fileHashes: new Map(),
-    country: config.country,
+    noise: noiseTokens(config.country),
   };
 
   for (let index = 0; index < items.length; index++) {
@@ -300,9 +302,9 @@ export async function commitIngest(opts: CommitIngestOpts, command: Command): Pr
       }
     : null;
 
-  const mode = currentMode();
-  if (mode.json) {
-    for (const r of results) emit(r);
+  const { out } = ctx;
+  if (out.mode.json) {
+    for (const r of results) out.emit(r);
     const summary: Omit<CommitSummary, "type"> = {
       batch_id: batchId,
       posted: counters.posted,
@@ -312,20 +314,20 @@ export async function commitIngest(opts: CommitIngestOpts, command: Command): Pr
       ...(fileFacts ?? {}),
       ...(pendingHint ? { hint: pendingHint } : {}),
     };
-    emitSummary(summary);
+    out.emitSummary(summary);
   } else {
-    for (const r of results) emitObject(r);
-    process.stdout.write(
+    for (const r of results) out.emitObject(r);
+    out.write(
       `\nbatch ${batchId}: ${counters.posted} posted, ${counters.duplicates} duplicate(s), ${counters.failed} failed, ${counters.raisedTotal} question(s) raised\n`,
     );
     if (fileFacts) {
-      process.stdout.write(
+      out.write(
         `file ${fileFacts.file_id}: ${fileFacts.file_transaction_count} transactions, ${fileFacts.file_open_question_count} open questions\n`,
       );
     }
-    if (pendingHint) process.stdout.write(`${pendingHint}\n`);
+    if (pendingHint) out.write(`${pendingHint}\n`);
   }
 
   // Exit 7 only for genuine failures: duplicates are a successful no-op.
-  if (counters.failed > 0) process.exitCode = EXIT.PARTIAL;
+  return counters.failed > 0 ? "PARTIAL" : undefined;
 }

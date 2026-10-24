@@ -44,7 +44,7 @@ describe("cli integration (subprocess)", () => {
   it("--help renders every command in the help screen", async () => {
     const { stdout, code } = await runCLI(["--help"]);
     expect(code).toBe(0);
-    for (const command of buildProgram().commands) expect(stdout).toContain(command.name());
+    for (const command of buildProgram([]).commands) expect(stdout).toContain(command.name());
   }, 30000);
 
   it("--config sits on every help screen except the config command's, which is positional-only", async () => {

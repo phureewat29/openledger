@@ -1,15 +1,17 @@
 import type { Command } from "commander";
 import type Database from "libsql";
-import { EXIT, currentMode, emit, emitList, emitObject, emitSummary, renderByMode, runAction, type Column } from "../cli/output.js";
-import { fail, failReason, mapNotFoundError } from "../cli/errors.js";
+import { camelCase } from "es-toolkit";
+import { runAction, type Invocation, type Output } from "../cli/output.js";
+import type { Column } from "../cli/format.js";
+import { fail, failReason, mapNotFoundError, type FailureCode } from "../cli/errors.js";
 import { asRecord, readStdinBatch, redactionEnabled, requireYes } from "../cli/input.js";
-import { openDb } from "../db/connection.js";
-import { requireConfig } from "../config/cli.js";
+import { openLedger } from "../config/cli.js";
 import {
   createAccount as createAccountRow,
   mergeAccounts as mergeAccountRows,
   deleteAccount as deleteAccountRow,
   validateAccountId,
+  type AccountFailure,
   type AccountRefusal,
 } from "./accounts.js";
 import {
@@ -40,6 +42,7 @@ import { applyRedaction } from "../privacy/redactor.js";
 import { tryExecute } from "../lib/result.js";
 import * as z from "zod";
 import { parseInput, safeParse, str, num, int, json } from "../lib/validate.js";
+import type { ExitCode } from "../contract/exit.js";
 import type {
   Account as PresentedAccount,
   AccountTreeNode as PresentedTreeNode,
@@ -52,7 +55,18 @@ import type {
   DeleteAccountResult,
   AdjustAccountResult,
   UpdateAccountResult,
+  CreateAccountBatchSummary,
+  ListAccountsSummary,
+  MatchAccountsSummary,
+  TreeAccountsSummary,
 } from "../contract/accounts.js";
+
+// Record<Union, FailureCode> fails the build if a reason case is unhandled.
+export const ACCOUNT_FAILURE_EXIT: Record<AccountFailure, FailureCode> = {
+  account_exists: "INVALID",
+  parent_not_found: "NOT_FOUND",
+  invalid_hierarchy: "INVALID",
+};
 
 // Ledgers are enumerated from the accounts table, never from config, so a bad prefix can't
 // resolve against config state; the caller's own hint applies only once the id names a real ledger.
@@ -123,14 +137,14 @@ function formatTotals(totals: Record<string, number>): string {
     .join(" ");
 }
 
-function renderTreeTty(nodes: PresentedTreeNode[], depth = 0): void {
-  for (const n of nodes) {
-    const indent = "  ".repeat(depth);
-    process.stdout.write(
-      `${indent}${n.name} (${n.id})  ${formatFixed(n.balance, n.currency)} [rollup ${formatTotals(n.rollup)}]\n`,
-    );
-    renderTreeTty(n.children, depth + 1);
-  }
+function renderTreeTty(nodes: PresentedTreeNode[], depth = 0): string {
+  const indent = "  ".repeat(depth);
+  return nodes
+    .map((n) => {
+      const line = `${indent}${n.name} (${n.id})  ${formatFixed(n.balance, n.currency)} [rollup ${formatTotals(n.rollup)}]\n`;
+      return line + renderTreeTty(n.children, depth + 1);
+    })
+    .join("");
 }
 
 function flattenTree(nodes: PresentedTreeNode[], depth: number, out: string[]): void {
@@ -150,10 +164,10 @@ function flattenTree(nodes: PresentedTreeNode[], depth: number, out: string[]): 
   }
 }
 
-function renderTreePlain(nodes: PresentedTreeNode[]): void {
+function renderTreePlain(nodes: PresentedTreeNode[]): string {
   const out: string[] = [];
   flattenTree(nodes, 0, out);
-  if (out.length) process.stdout.write(out.join("\n") + "\n");
+  return out.length ? out.join("\n") + "\n" : "";
 }
 
 // Fails an invalid --type with the same wording zod produces for `accounts create --type`.
@@ -170,9 +184,8 @@ interface ListAccountsOpts {
   redact?: boolean;
 }
 
-async function listAccounts(opts: ListAccountsOpts, command: Command): Promise<void> {
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+async function listAccounts(ctx: Invocation, opts: ListAccountsOpts): Promise<void> {
+  const { config, db } = await openLedger(ctx.configPath);
   const type = parseAccountTypeFilter(opts.type);
   const rows = applyRedaction(
     getAccountBalances(db, type ? { type } : {}).map(presentAccount),
@@ -180,18 +193,18 @@ async function listAccounts(opts: ListAccountsOpts, command: Command): Promise<v
     ACCOUNT_REDACT_FIELDS,
     config,
   );
-  emitList(rows, ACCOUNT_COLUMNS);
-  emitSummary({ total: rows.length, returned: rows.length });
+  ctx.out.emitList(rows, ACCOUNT_COLUMNS);
+  const summary: Omit<ListAccountsSummary, "type"> = { total: rows.length, returned: rows.length };
+  ctx.out.emitSummary(summary);
 }
 
-interface TreeAccountsOpts {
+interface ShowAccountTreeOpts {
   type?: string;
   redact?: boolean;
 }
 
-async function treeAccounts(opts: TreeAccountsOpts, command: Command): Promise<void> {
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+async function showAccountTree(ctx: Invocation, opts: ShowAccountTreeOpts): Promise<void> {
+  const { config, db } = await openLedger(ctx.configPath);
   const type = parseAccountTypeFilter(opts.type);
   const roots = applyRedaction(
     getBalanceTree(db, type ? { type } : {}).map(presentTreeNode),
@@ -199,31 +212,31 @@ async function treeAccounts(opts: TreeAccountsOpts, command: Command): Promise<v
     ACCOUNT_REDACT_FIELDS,
     config,
   );
-  renderByMode({
+  ctx.out.render({
     json: () => {
       // One object per root so every stdout line stays a single JSON object.
-      for (const root of roots) emit(root);
-      emitSummary({ roots: roots.length });
+      for (const root of roots) ctx.out.emit(root);
+      const summary: Omit<TreeAccountsSummary, "type"> = { roots: roots.length };
+      ctx.out.emitSummary(summary);
     },
-    tty: () => renderTreeTty(roots),
-    plain: () => renderTreePlain(roots),
+    tty: () => ctx.out.write(renderTreeTty(roots)),
+    plain: () => ctx.out.write(renderTreePlain(roots)),
   });
 }
 
 async function showAccount(
+  ctx: Invocation,
   id: string,
   opts: { redact?: boolean },
-  command: Command,
 ): Promise<void> {
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { config, db } = await openLedger(ctx.configPath);
   const account = requireAccount(db, id);
   const balances = getAccountBalances(db, { idOrParent: id });
   const self = balances.find((b) => b.id === id);
   const children = balances
     .filter((b) => b.parent_id === id)
     .map((b) => ({ id: b.id, name: b.name, type: b.type, balance: b.balance }));
-  emitObject(
+  ctx.out.emitObject(
     applyRedaction(
       {
         ...account,
@@ -331,23 +344,25 @@ function maskedResultField(result: CreatedAccount): Record<string, unknown> {
     : {};
 }
 
-async function createSingleAccount(opts: Record<string, unknown>, command: Command): Promise<void> {
+async function createSingleAccount(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(CREATE_ACCOUNT_SPEC, opts, { aliases: CREATE_ACCOUNT_ALIASES });
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   const outcome = createOneAccount(db, parsed);
-  if (!outcome.ok) failReason(outcome);
+  if (!outcome.ok) failReason(ACCOUNT_FAILURE_EXIT, outcome);
   const result: CreateAccountResult = {
     id: outcome.id,
     created: true,
     created_parents: outcome.created_parents,
     ...maskedResultField(outcome),
   };
-  emitObject(result);
+  ctx.out.emitObject(result);
 }
 
-// color is a global flag, not a per-account option; json never lands here (see output.ts's resolveMode).
-const NON_ACCOUNT_FLAG_KEYS = new Set(["input", "color"]);
+// Commander keys of the per-account flags, so a defaulted global (`color: true`) never counts as one.
+const ACCOUNT_FLAG_KEYS = [
+  ...Object.keys(CREATE_ACCOUNT_SPEC.shape).map((key) => camelCase(key)),
+  ...Object.values(CREATE_ACCOUNT_ALIASES).flat(),
+];
 
 type AccountsCreateBatchRow =
   | CreateAccountBatchCreated
@@ -359,7 +374,11 @@ type AccountsCreateBatchRow =
  * `account_exists` counts as success (`duplicate: true`); a throw from one
  * item becomes that item's failure row instead of aborting the batch.
  */
-export function createAccountsBatch(db: Database.Database, items: unknown[]): void {
+export function createAccountsBatch(
+  out: Output,
+  db: Database.Database,
+  items: unknown[],
+): ExitCode | undefined {
   const results: AccountsCreateBatchRow[] = [];
   let created = 0;
   let duplicates = 0;
@@ -418,35 +437,36 @@ export function createAccountsBatch(db: Database.Database, items: unknown[]): vo
     results.push(failedRow(index, one.message));
   }
 
-  const mode = currentMode();
-  if (mode.json) {
-    for (const r of results) emit(r);
-    emitSummary({ created, duplicates, failed });
+  if (out.mode.json) {
+    for (const r of results) out.emit(r);
+    const summary: Omit<CreateAccountBatchSummary, "type"> = { created, duplicates, failed };
+    out.emitSummary(summary);
   } else {
-    for (const r of results) emitObject(r);
-    process.stdout.write(`\n${created} created, ${duplicates} duplicate(s), ${failed} failed\n`);
+    for (const r of results) out.emitObject(r);
+    out.write(`\n${created} created, ${duplicates} duplicate(s), ${failed} failed\n`);
   }
 
-  if (failed > 0) process.exitCode = EXIT.PARTIAL;
+  return failed > 0 ? "PARTIAL" : undefined;
 }
 
 interface CreateAccountOpts extends Record<string, unknown> {
   input?: string;
 }
 
-async function createAccount(opts: CreateAccountOpts, command: Command): Promise<void> {
+async function createAccount(
+  ctx: Invocation,
+  opts: CreateAccountOpts,
+): Promise<ExitCode | undefined> {
   if (opts.input !== undefined) {
-    if (Object.keys(opts).some((k) => opts[k] !== undefined && !NON_ACCOUNT_FLAG_KEYS.has(k))) {
+    if (ACCOUNT_FLAG_KEYS.some((k) => opts[k] !== undefined)) {
       fail("USAGE", "--input and per-account flags are mutually exclusive");
     }
     const items = await readStdinBatch(opts.input);
     if (items.length === 0) fail("USAGE", "no account data provided");
-    const config = requireConfig(command);
-    const db = await openDb(config.dbPath);
-    createAccountsBatch(db, items);
-    return;
+    const { db } = await openLedger(ctx.configPath);
+    return createAccountsBatch(ctx.out, db, items);
   }
-  await createSingleAccount(opts, command);
+  await createSingleAccount(ctx, opts);
 }
 
 const MERGE_ACCOUNTS_SPEC = z.object({
@@ -460,11 +480,10 @@ interface MergeAccountsOpts {
   yes?: boolean;
 }
 
-async function mergeAccounts(opts: MergeAccountsOpts, command: Command): Promise<void> {
+async function mergeAccounts(ctx: Invocation, opts: MergeAccountsOpts): Promise<void> {
   const parsed = parseInput(MERGE_ACCOUNTS_SPEC, opts as Record<string, unknown>);
   requireYes(opts, "merging accounts");
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   let merged;
   try {
     merged = mergeAccountRows(db, parsed.from, parsed.to);
@@ -479,12 +498,11 @@ async function mergeAccounts(opts: MergeAccountsOpts, command: Command): Promise
     deleted_self_transactions: merged.deletedSelfTransactions,
     moved_merchant_defaults: merged.movedMerchantDefaults,
   };
-  emitObject(result);
+  ctx.out.emitObject(result);
 }
 
-async function deleteAccount(id: string, opts: { yes?: boolean }, command: Command): Promise<void> {
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+async function deleteAccount(ctx: Invocation, id: string, opts: { yes?: boolean }): Promise<void> {
+  const { db } = await openLedger(ctx.configPath);
   requireAccount(db, id);
   requireYes(opts, "deleting this account");
   try {
@@ -493,7 +511,7 @@ async function deleteAccount(id: string, opts: { yes?: boolean }, command: Comma
     mapNotFoundError(err);
   }
   const result: DeleteAccountResult = { id, deleted: true };
-  emitObject(result);
+  ctx.out.emitObject(result);
 }
 
 const ADJUST_ACCOUNT_SPEC = z.object({
@@ -503,14 +521,13 @@ const ADJUST_ACCOUNT_SPEC = z.object({
 });
 
 async function adjustAccount(
+  ctx: Invocation,
   id: string,
   opts: Record<string, unknown>,
-  command: Command,
 ): Promise<void> {
   const parsed = parseInput(ADJUST_ACCOUNT_SPEC, opts);
 
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   let outcome;
   try {
     outcome = adjustAccountBalance(db, {
@@ -523,20 +540,20 @@ async function adjustAccount(
     mapNotFoundError(err);
   }
   const result: AdjustAccountResult = { transaction_id: outcome.transactionId, delta: outcome.delta };
-  emitObject(result);
+  ctx.out.emitObject(result);
 }
 
 const MATCH_ACCOUNTS_SPEC = z.object({
   query: str(),
 });
 
-async function matchAccounts(opts: Record<string, unknown>, command: Command): Promise<void> {
+async function matchAccounts(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(MATCH_ACCOUNTS_SPEC, opts);
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   const matches: AccountMatch[] = findAccountsByFuzzyName(db, parsed.query);
-  emitList(matches, MATCH_COLUMNS);
-  emitSummary({ returned: matches.length });
+  ctx.out.emitList(matches, MATCH_COLUMNS);
+  const summary: Omit<MatchAccountsSummary, "type"> = { returned: matches.length };
+  ctx.out.emitSummary(summary);
 }
 
 const UPDATE_ACCOUNT_SPEC = z.object({
@@ -567,9 +584,9 @@ function buildAccountPatch(
 }
 
 async function updateAccount(
+  ctx: Invocation,
   id: string,
   opts: Record<string, unknown>,
-  command: Command,
 ): Promise<void> {
   const parsed = parseInput(UPDATE_ACCOUNT_SPEC, opts, {
     aliases: UPDATE_ACCOUNT_ALIASES,
@@ -579,8 +596,7 @@ async function updateAccount(
   const { name, ...rest } = parsed;
   const patch = buildAccountPatch(rest);
 
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
 
   // One transaction: a metadata patch that throws must not leave the rename committed.
   const result = db.transaction((): UpdateAccountResult => {
@@ -607,7 +623,7 @@ async function updateAccount(
     return out;
   })();
 
-  emitObject(result);
+  ctx.out.emitObject(result);
 }
 
 export function registerAccounts(program: Command): void {
@@ -637,7 +653,7 @@ export function registerAccounts(program: Command): void {
     .description("Show accounts as a tree")
     .option("--type <type>", "filter by account type")
     .option("--no-redact", "skip PII redaction (on by default)")
-    .action(runAction(treeAccounts));
+    .action(runAction(showAccountTree));
 
   accounts
     .command("show <id>")

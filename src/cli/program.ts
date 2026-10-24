@@ -1,7 +1,7 @@
 import { Command, Help, type CommanderError } from "commander";
 import { minBy } from "es-toolkit";
-import { helpScreen } from "./format.js";
-import { jsonRequested, runAction } from "./output.js";
+import { TAGLINE, helpScreen } from "./format.js";
+import { runAction } from "./output.js";
 import { commandPath, fail } from "./errors.js";
 import { levenshtein } from "../lib/distance.js";
 import { getVersion } from "../lib/version.js";
@@ -21,10 +21,11 @@ import { registerNotes } from "../notes/cli.js";
 import { registerDatasets } from "../datasets/cli.js";
 import { registerOpen } from "./commands/open.js";
 
-const GLOBAL_OPTIONS = [
+const GLOBAL_OPTIONS: { name: string; desc: string; skipOn?: string }[] = [
   { name: "--json", desc: "Emit NDJSON (machine-readable) instead of human output" },
   { name: "--no-color", desc: "Disable ANSI color output" },
-  { name: "--config <path>", desc: "Config file to use (default ~/.oled/config.json)" },
+  // Kept off the config command's help screen, which teaches the positional; parsing resolves at the root either way.
+  { name: "--config <path>", desc: "Config file to use (default ~/.oled/config.json)", skipOn: "config" },
 ];
 
 // Navigation hints the overview screen adds; they would only be noise inside the command's own help.
@@ -48,34 +49,34 @@ export function nearestCommand(input: string, commands: readonly Command[]): str
   return minBy(scored, (s) => s.dist)?.name ?? null;
 }
 
+// Candidates are `cmd`'s own subcommands; for the root, commandPath(cmd) is "oled".
+function failUnknownCommand(cmd: Command, helpTail: string): never {
+  const input = cmd.args[0];
+  const match = nearestCommand(input, cmd.commands);
+  const path = commandPath(cmd);
+  const suggestion = match ? `try \`${path} ${match}\`, or ` : "";
+  fail("USAGE", `unknown command '${input}'`, {
+    hint: `${suggestion}run \`${path} --help\` ${helpTail}`,
+  });
+}
+
 // Parse failures never reach runAction; map them onto the same error contract here.
-function parseFailureHandler(cmd: Command): (err: CommanderError) => void {
+function parseFailureHandler(cmd: Command, json: boolean): (err: CommanderError) => void {
   return (err) => {
     if (err.exitCode === 0) return;
     // commander already printed help for a bare noun; --json needs one error line instead.
     if (err.code === "commander.help") {
-      if (!jsonRequested()) return;
+      if (!json) return;
       fail("USAGE", `${commandPath(cmd)} needs a subcommand`, {
         hint: `one of: ${cmd.commands.map((sub) => sub.name()).join(", ")}`,
       });
     }
     if (err.code === "commander.excessArguments" && !cmd.parent) {
-      const input = cmd.args[0];
-      const match = nearestCommand(input, cmd.commands);
-      const suggestion = match ? `try \`oled ${match}\`, or ` : "";
-      fail("USAGE", `unknown command '${input}'`, {
-        hint: `${suggestion}run \`oled --help\` for the list of commands`,
-      });
+      failUnknownCommand(cmd, "for the list of commands");
     }
-    // A nested subcommand miss (e.g. `oled ingest comit`); candidates are the parent's own subcommands.
+    // A nested subcommand miss (e.g. `oled ingest comit`).
     if (err.code === "commander.unknownCommand") {
-      const input = cmd.args[0];
-      const match = nearestCommand(input, cmd.commands);
-      const path = commandPath(cmd);
-      const suggestion = match ? `try \`${path} ${match}\`, or ` : "";
-      fail("USAGE", `unknown command '${input}'`, {
-        hint: `${suggestion}run \`${path} --help\` for its flags and usage`,
-      });
+      failUnknownCommand(cmd, "for its flags and usage");
     }
     fail("USAGE", err.message.replace(/^error:\s*/, ""), {
       hint: `run \`${commandPath(cmd)} --help\` for its flags and usage`,
@@ -83,12 +84,14 @@ function parseFailureHandler(cmd: Command): (err: CommanderError) => void {
   };
 }
 
-export function buildProgram(): Command {
+export function buildProgram(argv: readonly string[]): Command {
+  // Parse failures and commander's own help output precede option binding; argv is all they have.
+  const json = argv.includes("--json");
   const program = new Command();
 
   program
     .name("oled")
-    .description("A reliable, deterministic ledger for your AI")
+    .description(TAGLINE)
     .version(getVersion())
     .addHelpCommand(false)
     // Bare `oled` runs the same action as `status`, which redacts by default.
@@ -111,24 +114,21 @@ export function buildProgram(): Command {
   registerOpen(program);
 
   // Repeated per command for each --help screen; value resolution happens at the root, which scans all of argv.
+  // Runs after every register*: a command added later would lack the flags and the exit override.
   function configureEveryLevel(cmd: Command): void {
-    cmd
-      .option("--json", "Emit NDJSON (machine-readable) instead of human output")
-      .option("--no-color", "Disable ANSI color output");
-    // Kept off the config command's help screen, which teaches the positional; parsing resolves at the root either way.
-    if (cmd.name() !== "config") {
-      cmd.option("--config <path>", "Config file to use (default ~/.oled/config.json)");
+    for (const opt of GLOBAL_OPTIONS) {
+      if (opt.skipOn !== cmd.name()) cmd.option(opt.name, opt.desc);
     }
     cmd
       // Commander's own suggestion embeds a newline that breaks the one-line
       // error contract; nearestCommand is the only suggester.
       .showSuggestionAfterError(false)
-      .exitOverride(parseFailureHandler(cmd))
+      .exitOverride(parseFailureHandler(cmd, json))
       // Under --json, the CLIError contract is the only thing allowed on stderr.
       .configureOutput({
         outputError: () => {},
         writeErr: (str) => {
-          if (!jsonRequested()) process.stderr.write(str);
+          if (!json) process.stderr.write(str);
         },
       });
     for (const sub of cmd.commands) configureEveryLevel(sub);

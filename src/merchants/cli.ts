@@ -1,9 +1,9 @@
 import type { Command } from "commander";
-import { emitList, emitObject, emitCappedSummary, runAction, type Column } from "../cli/output.js";
+import { cappedSummary, runAction, type Invocation } from "../cli/output.js";
+import type { Column } from "../cli/format.js";
 import { fail, mapNotFoundError } from "../cli/errors.js";
 import { redactionEnabled, requireYes } from "../cli/input.js";
-import { openDb } from "../db/connection.js";
-import { requireConfig } from "../config/cli.js";
+import { openLedger } from "../config/cli.js";
 import {
   listMerchants as queryMerchants,
   claimAlias,
@@ -53,31 +53,31 @@ const LIST_MERCHANTS_SPEC = z.object({
   offset: int().optional(),
 });
 
-async function listMerchants(opts: ListMerchantsOpts, command: Command): Promise<void> {
+async function listMerchants(ctx: Invocation, opts: ListMerchantsOpts): Promise<void> {
   const parsed = parseInput(LIST_MERCHANTS_SPEC, opts as Record<string, unknown>);
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { config, db } = await openLedger(ctx.configPath);
   const rows = applyRedaction(
     queryMerchants(db, { limit: parsed.limit, offset: parsed.offset }),
     redactionEnabled(opts),
     MERCHANT_REDACT_FIELDS,
     config,
   );
-  emitList(rows, MERCHANT_COLUMNS);
-  emitCappedSummary(
-    countMerchants(db),
-    rows.length,
-    clampMerchantsLimit(parsed.limit),
-    clampOffset(parsed.offset),
+  ctx.out.emitList(rows, MERCHANT_COLUMNS);
+  ctx.out.emitSummary(
+    cappedSummary(
+      countMerchants(db),
+      rows.length,
+      clampMerchantsLimit(parsed.limit),
+      clampOffset(parsed.offset),
+    ),
   );
 }
 
 const RESOLVE_MERCHANT_SPEC = z.object({ descriptor: str() });
 
-async function resolveMerchant(opts: Record<string, unknown>, command: Command): Promise<void> {
+async function resolveMerchant(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(RESOLVE_MERCHANT_SPEC, opts);
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { config, db } = await openLedger(ctx.configPath);
   const match = findMerchantByAlias(db, parsed.descriptor, noiseTokens(config.country));
   const resolved: MerchantResolveResult = match
     ? {
@@ -87,7 +87,7 @@ async function resolveMerchant(opts: Record<string, unknown>, command: Command):
         default_account_id: match.default_account_id,
       }
     : { found: false };
-  emitObject(resolved);
+  ctx.out.emitObject(resolved);
 }
 
 const UPSERT_MERCHANT_SPEC = z.object({
@@ -96,12 +96,11 @@ const UPSERT_MERCHANT_SPEC = z.object({
   default_account: str().optional(),
 });
 
-async function upsertMerchant(opts: Record<string, unknown>, command: Command): Promise<void> {
+async function upsertMerchant(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(UPSERT_MERCHANT_SPEC, opts);
   // An all-whitespace name is the flag not being passed, and reads that way.
   if (!parsed.name.trim()) fail("USAGE", "--name required");
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { config, db } = await openLedger(ctx.configPath);
   if (parsed.default_account) requireAccount(db, parsed.default_account);
   const input: MerchantUpsertInput = { canonical_name: parsed.name };
   if (parsed.alias) input.alias = parsed.alias;
@@ -115,7 +114,7 @@ async function upsertMerchant(opts: Record<string, unknown>, command: Command): 
     created_at: merchant.created_at,
   };
   if (merchant.alias_conflict) payload.alias_conflict = merchant.alias_conflict;
-  emitObject(payload);
+  ctx.out.emitObject(payload);
 }
 
 const UPDATE_MERCHANT_SPEC = z.object({
@@ -125,13 +124,12 @@ const UPDATE_MERCHANT_SPEC = z.object({
   default_account: str().optional(),
 });
 
-async function updateMerchant(opts: Record<string, unknown>, command: Command): Promise<void> {
+async function updateMerchant(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(UPDATE_MERCHANT_SPEC, opts, {
     atLeastOne: "at least one of --name, --alias, --default-account is required",
   });
   if (parsed.name !== undefined && !parsed.name.trim()) fail("USAGE", "--name required");
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { config, db } = await openLedger(ctx.configPath);
   const current = findMerchantById(db, parsed.merchant);
   if (!current) fail("NOT_FOUND", `merchant "${parsed.merchant}" not found`);
   if (parsed.default_account) requireAccount(db, parsed.default_account);
@@ -164,7 +162,7 @@ async function updateMerchant(opts: Record<string, unknown>, command: Command): 
     result.default_account = set.after;
   }
 
-  emitObject(result);
+  ctx.out.emitObject(result);
 }
 
 const SET_DEFAULT_SPEC = z.object({
@@ -173,15 +171,14 @@ const SET_DEFAULT_SPEC = z.object({
   clear: bool().optional(),
 });
 
-async function setMerchantDefault(opts: Record<string, unknown>, command: Command): Promise<void> {
+async function setMerchantDefault(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(SET_DEFAULT_SPEC, opts);
   const account = parsed.account;
   if (!!account === !!parsed.clear) {
     fail("USAGE", "exactly one of --account or --clear is required");
   }
 
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   if (!findMerchantById(db, parsed.merchant)) {
     fail("NOT_FOUND", `merchant "${parsed.merchant}" not found`);
   }
@@ -194,7 +191,7 @@ async function setMerchantDefault(opts: Record<string, unknown>, command: Comman
       before: set.before,
       after: set.after,
     };
-    emitObject(payload);
+    ctx.out.emitObject(payload);
     return;
   }
 
@@ -205,7 +202,7 @@ async function setMerchantDefault(opts: Record<string, unknown>, command: Comman
     before: result.before,
     after: null,
   };
-  emitObject(payload);
+  ctx.out.emitObject(payload);
 }
 
 const MERGE_MERCHANTS_SPEC = z.object({
@@ -219,11 +216,10 @@ interface MergeMerchantsOpts {
   yes?: boolean;
 }
 
-async function mergeMerchants(opts: MergeMerchantsOpts, command: Command): Promise<void> {
+async function mergeMerchants(ctx: Invocation, opts: MergeMerchantsOpts): Promise<void> {
   const parsed = parseInput(MERGE_MERCHANTS_SPEC, opts as Record<string, unknown>);
   requireYes(opts, "merging merchants");
-  const config = requireConfig(command);
-  const db = await openDb(config.dbPath);
+  const { db } = await openLedger(ctx.configPath);
   let result;
   try {
     result = mergeMerchantRows(db, parsed.from, parsed.to);
@@ -239,7 +235,7 @@ async function mergeMerchants(opts: MergeMerchantsOpts, command: Command): Promi
   if (result.adopted_default_account !== undefined) {
     payload.adopted_default_account = result.adopted_default_account;
   }
-  emitObject(payload);
+  ctx.out.emitObject(payload);
 }
 
 export function registerMerchants(program: Command): void {

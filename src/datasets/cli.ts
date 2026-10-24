@@ -1,5 +1,6 @@
 import type { Command } from "commander";
-import { emitList, emitSummary, runAction, type Column } from "../cli/output.js";
+import { runAction, type Invocation } from "../cli/output.js";
+import type { Column } from "../cli/format.js";
 import { fail } from "../cli/errors.js";
 import {
   listDatasets as queryDatasets,
@@ -9,6 +10,7 @@ import {
   type DatasetSummary,
 } from "./datasets.js";
 import type { DatasetRow } from "./loader.js";
+import type { DatasetsListSummary } from "../contract/datasets.js";
 
 const DATASET_COLUMNS: Column<DatasetSummary>[] = [
   { header: "Name", value: (d) => d.name },
@@ -43,19 +45,20 @@ const COLUMNS_BY_DATASET: Record<string, Column<DatasetRow>[]> = {
 
 const GENERIC_COLUMNS: Column<DatasetRow>[] = [{ header: "Country", value: (r) => r.country }];
 
-interface DatasetsOpts {
+interface ListDatasetsOpts {
   country?: string;
   kind?: string;
 }
 
-function listDatasets(name: string | undefined, opts: DatasetsOpts): void {
+function listDatasets(ctx: Invocation, name: string | undefined, opts: ListDatasetsOpts): void {
   if (name === undefined) {
     if (opts.country || opts.kind) {
       fail("USAGE", "--country/--kind need a dataset name (e.g. `oled datasets institutions --country th`)");
     }
     const sets = queryDatasets();
-    emitList(sets, DATASET_COLUMNS);
-    emitSummary({ returned: sets.length });
+    ctx.out.emitList(sets, DATASET_COLUMNS);
+    const summary: Omit<DatasetsListSummary, "type"> = { returned: sets.length };
+    ctx.out.emitSummary(summary);
     return;
   }
 
@@ -67,8 +70,9 @@ function listDatasets(name: string | undefined, opts: DatasetsOpts): void {
     fail("USAGE", `dataset "${name}" has no kinds; drop --kind`);
   }
   const rows = readDataset(name, { country: opts.country, kind: opts.kind });
-  emitList(rows, COLUMNS_BY_DATASET[name] ?? GENERIC_COLUMNS);
-  emitSummary({ returned: rows.length });
+  ctx.out.emitList(rows, COLUMNS_BY_DATASET[name] ?? GENERIC_COLUMNS);
+  const summary: Omit<DatasetsListSummary, "type"> = { returned: rows.length };
+  ctx.out.emitSummary(summary);
 }
 
 export function registerDatasets(program: Command): void {
