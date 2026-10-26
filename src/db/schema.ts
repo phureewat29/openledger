@@ -6,6 +6,7 @@ import { chmod600 } from "../lib/perms.js";
 import { DBNotReadyError } from "./errors.js";
 import { MIGRATIONS, type Migration } from "./migrations/index.js";
 import { ISO_NOW_SQL } from "./timestamps.js";
+import { inTransaction } from "./transaction.js";
 
 // A migration may drop tables (0002 rebaselines v1); the file is copied aside first.
 export function migrate(db: Database.Database, dbPath?: string): void {
@@ -55,7 +56,7 @@ function applyMigration(
   manifestLength: number,
   dbPath?: string,
 ): void {
-  const apply = db.transaction((): void => {
+  inTransaction(db, (): void => {
     const applied = currentVersion(db);
     if (applied > manifestLength) throw newerThanBuildError(applied, manifestLength);
     if (applied >= version) return;
@@ -70,7 +71,6 @@ function applyMigration(
     migration.up(db);
     db.prepare(`INSERT INTO schema_migrations (version) VALUES (?)`).run(version);
   });
-  apply.immediate();
 }
 
 /**
