@@ -41,13 +41,14 @@ export function seedAccount(db: Database.Database, account: SeedAccountInput): s
 }
 
 /**
- * A database whose account INSERT fails for ids under `idPrefix`, simulating a
- * write failure (full disk, revoked handle) mid-walk. Every other statement
- * runs untouched.
+ * A database whose `run` of a statement starting with `sqlPrefix` fails like a
+ * full disk or revoked handle would, when `shouldFail` accepts its parameters.
+ * Every other statement runs untouched.
  */
-export function failingAccountInsert(
+function failingRun(
   db: Database.Database,
-  idPrefix: string,
+  sqlPrefix: string,
+  shouldFail: (params: unknown[]) => boolean,
 ): Database.Database {
   return new Proxy(db, {
     get(target, prop, receiver) {
@@ -57,16 +58,80 @@ export function failingAccountInsert(
       }
       return (sql: string) => {
         const statement = target.prepare(sql);
-        if (!sql.startsWith("INSERT INTO accounts")) return statement;
+        if (!sql.startsWith(sqlPrefix)) return statement;
         return {
           run: (...params: unknown[]) => {
-            if (typeof params[0] === "string" && params[0].startsWith(idPrefix)) {
-              throw new Error("disk I/O error");
-            }
+            if (shouldFail(params)) throw new Error("disk I/O error");
             return statement.run(...params);
           },
         };
       };
     },
   }) as Database.Database;
+}
+
+/** The account INSERT fails for ids under `idPrefix`, simulating a write failure mid-walk. */
+export function failingAccountInsert(
+  db: Database.Database,
+  idPrefix: string,
+): Database.Database {
+  return failingRun(
+    db,
+    "INSERT INTO accounts",
+    (params) => typeof params[0] === "string" && params[0].startsWith(idPrefix),
+  );
+}
+
+/** Every `run` of a statement whose SQL starts with `sqlPrefix` fails. */
+export function failingStatement(db: Database.Database, sqlPrefix: string): Database.Database {
+  return failingRun(db, sqlPrefix, () => true);
+}
+
+export interface ContendedLedger {
+  /** Waits only CONTENDED_BUSY_TIMEOUT_MS for a lock before SQLITE_BUSY. */
+  db: Database.Database;
+  release(): void;
+}
+
+const CONTENDED_BUSY_TIMEOUT_MS = 50;
+
+/**
+ * A file-backed ledger where a second connection takes the write lock just before
+ * the `nth` top-level transaction opens, the way another `oled` process would
+ * between two batch items. Nested transactions join and are not counted.
+ */
+export function ledgerLockedAtTransaction(
+  dbPath: string,
+  nth: number,
+  seed?: (db: Database.Database) => void,
+): ContendedLedger {
+  const raw = new Database(dbPath, { timeout: CONTENDED_BUSY_TIMEOUT_MS });
+  raw.pragma("journal_mode = WAL");
+  raw.pragma("foreign_keys = ON");
+  migrate(raw);
+  seed?.(raw);
+
+  const holder = new Database(dbPath);
+  let opened = 0;
+  const db = new Proxy(raw, {
+    get(target, prop, receiver) {
+      if (prop === "exec") {
+        return (sql: string) => {
+          if (sql === "BEGIN IMMEDIATE" && ++opened === nth) holder.exec("BEGIN IMMEDIATE");
+          return target.exec(sql);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Database.Database;
+
+  return {
+    db,
+    release: () => {
+      if (holder.inTransaction) holder.exec("ROLLBACK");
+      holder.close();
+      raw.close();
+    },
+  };
 }
