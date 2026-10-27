@@ -1,5 +1,6 @@
 import type Database from "libsql";
 import { ISO_NOW_SQL } from "../db/timestamps.js";
+import { inTransaction } from "../db/transaction.js";
 
 interface FileTotals {
   ingested: number;
@@ -83,11 +84,10 @@ export function replaceFile(
   priorId: string,
   file: PendingFileInput,
 ): void {
-  const tx = db.transaction((): void => {
+  inTransaction(db, () => {
     deleteFile(db, priorId);
     insertPendingFile(db, file);
   });
-  tx();
 }
 
 interface DeleteFileResult {
@@ -100,27 +100,29 @@ interface DeleteFileResult {
 
 /** Cascaded transaction/question/un-void counts are gathered before the DELETE runs, or CASCADE makes them unrecoverable. */
 export function deleteFile(db: Database.Database, id: string): DeleteFileResult {
-  const removed = findFileById(db, id);
-  if (!removed) {
-    return { removed: null, removedTransactions: 0, removedQuestions: 0, unvoided: 0 };
-  }
-  const removedTransactions = (db
-    .prepare(`SELECT COUNT(*) AS n FROM transactions WHERE source_file_id = ?`)
-    .get(id) as { n: number }).n;
-  const removedQuestions = (db
-    .prepare(`SELECT COUNT(*) AS n FROM questions WHERE file_id = ?`)
-    .get(id) as { n: number }).n;
-  // Excludes mirrors that are themselves doomed (also sourced from this
-  // file): those get deleted outright, not un-voided.
-  const unvoided = (db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM transactions
-        WHERE void_of IN (SELECT id FROM transactions WHERE source_file_id = ?)
-          AND source_file_id IS NOT ?`,
-    )
-    .get(id, id) as { n: number }).n;
-  db.prepare(`DELETE FROM files WHERE id = ?`).run(id);
-  return { removed, removedTransactions, removedQuestions, unvoided };
+  return inTransaction(db, () => {
+    const removed = findFileById(db, id);
+    if (!removed) {
+      return { removed: null, removedTransactions: 0, removedQuestions: 0, unvoided: 0 };
+    }
+    const removedTransactions = (db
+      .prepare(`SELECT COUNT(*) AS n FROM transactions WHERE source_file_id = ?`)
+      .get(id) as { n: number }).n;
+    const removedQuestions = (db
+      .prepare(`SELECT COUNT(*) AS n FROM questions WHERE file_id = ?`)
+      .get(id) as { n: number }).n;
+    // Excludes mirrors that are themselves doomed (also sourced from this
+    // file): those get deleted outright, not un-voided.
+    const unvoided = (db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM transactions
+          WHERE void_of IN (SELECT id FROM transactions WHERE source_file_id = ?)
+            AND source_file_id IS NOT ?`,
+      )
+      .get(id, id) as { n: number }).n;
+    db.prepare(`DELETE FROM files WHERE id = ?`).run(id);
+    return { removed, removedTransactions, removedQuestions, unvoided };
+  });
 }
 
 interface MarkFileIngestedOpts {

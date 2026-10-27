@@ -1,4 +1,5 @@
 import type Database from "libsql";
+import { inTransaction } from "../db/transaction.js";
 
 export interface NoteRow {
   id: number;
@@ -22,16 +23,18 @@ export function countNotes(db: Database.Database): number {
 
 /** Idempotent on (category, content): a verbatim repeat returns the existing row unchanged. Semantic dedup is the calling agent's job. */
 export function addNote(db: Database.Database, content: string, category = "fact"): NoteRow {
-  const existing = db
-    .prepare(`${NOTE_SELECT} WHERE category = ? AND content = ? LIMIT 1`)
-    .get(category, content) as NoteRow | undefined;
-  if (existing) return existing;
-  const { lastInsertRowid } = db
-    .prepare(`INSERT INTO notes (content, category) VALUES (?, ?)`)
-    .run(content, category);
-  return db
-    .prepare(`${NOTE_SELECT} WHERE id = ?`)
-    .get(lastInsertRowid) as NoteRow;
+  return inTransaction(db, () => {
+    const existing = db
+      .prepare(`${NOTE_SELECT} WHERE category = ? AND content = ? LIMIT 1`)
+      .get(category, content) as NoteRow | undefined;
+    if (existing) return existing;
+    const { lastInsertRowid } = db
+      .prepare(`INSERT INTO notes (content, category) VALUES (?, ?)`)
+      .run(content, category);
+    return db
+      .prepare(`${NOTE_SELECT} WHERE id = ?`)
+      .get(lastInsertRowid) as NoteRow;
+  });
 }
 
 export function deleteNote(db: Database.Database, id: number): NoteRow | null {
