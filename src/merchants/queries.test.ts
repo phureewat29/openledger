@@ -7,7 +7,6 @@ import {
   listMerchants,
   renameMerchant,
   setMerchantDefaultAccount,
-  clearMerchantDefaultAccount,
   mergeMerchants,
   normalizeDescriptor,
 } from "./queries.js";
@@ -174,8 +173,7 @@ describe("setMerchantDefaultAccount + listMerchants + findMerchantById", () => {
   it("returns before/after when updating the default", () => {
     const m = upsertMerchant(db, { canonical_name: "Starbucks" }, TH_NOISE);
     const result = setMerchantDefaultAccount(db, m.id, "thb:expense:food:dining");
-    expect(result.before).toBeNull();
-    expect(result.after).toBe("thb:expense:food:dining");
+    expect(result).toEqual({ before: null, after: "thb:expense:food:dining" });
     expect(findMerchantById(db, m.id)!.default_account_id).toBe("thb:expense:food:dining");
   });
 
@@ -190,7 +188,7 @@ describe("setMerchantDefaultAccount + listMerchants + findMerchantById", () => {
   });
 });
 
-describe("clearMerchantDefaultAccount", () => {
+describe("setMerchantDefaultAccount with a null account (clear)", () => {
   let db: Database.Database;
   beforeEach(() => { db = freshDb(seedChartOfAccounts); });
 
@@ -199,19 +197,20 @@ describe("clearMerchantDefaultAccount", () => {
       canonical_name: "Amazon",
       default_account_id: "thb:expense:food",
     }, TH_NOISE);
-    const result = clearMerchantDefaultAccount(db, m.id);
-    expect(result).toEqual({ before: "thb:expense:food" });
+    const result = setMerchantDefaultAccount(db, m.id, null);
+    expect(result).toEqual({ before: "thb:expense:food", after: null });
     expect(findMerchantById(db, m.id)!.default_account_id).toBeNull();
   });
 
   it("returns null when the merchant does not exist", () => {
-    expect(clearMerchantDefaultAccount(db, "m:does-not-exist")).toBeNull();
+    expect(setMerchantDefaultAccount(db, "m:does-not-exist", null)).toBeNull();
+    expect(setMerchantDefaultAccount(db, "m:does-not-exist", "thb:expense:food")).toBeNull();
   });
 
   it("is idempotent on a merchant that already has no default", () => {
     const m = upsertMerchant(db, { canonical_name: "Starbucks" }, TH_NOISE);
-    const result = clearMerchantDefaultAccount(db, m.id);
-    expect(result).toEqual({ before: null });
+    const result = setMerchantDefaultAccount(db, m.id, null);
+    expect(result).toEqual({ before: null, after: null });
     expect(findMerchantById(db, m.id)!.default_account_id).toBeNull();
   });
 });
@@ -263,10 +262,7 @@ describe("mergeMerchants", () => {
     insertTransaction(db, tf({ merchant_id: from.id }));
     insertTransaction(db, tf({ merchant_id: from.id, description: "Coffee 2" }));
 
-    const result = mergeMerchants(db, from.id, to.id);
-
-    expect(result.moved_transactions).toBe(2);
-    expect(result.moved_aliases).toBe(1);
+    expect(mergeMerchants(db, from.id, to.id)).toEqual({ ok: true, moved_transactions: 2, moved_aliases: 1 });
     expect(findMerchantById(db, from.id)).toBeNull();
     const txRows = db.prepare(`SELECT merchant_id FROM transactions`).all() as { merchant_id: string }[];
     expect(txRows.every(r => r.merchant_id === to.id)).toBe(true);
@@ -278,9 +274,10 @@ describe("mergeMerchants", () => {
     const from = upsertMerchant(db, { canonical_name: "Starbux", default_account_id: "thb:expense:food:dining" }, TH_NOISE);
     const to = upsertMerchant(db, { canonical_name: "Starbucks" }, TH_NOISE);
 
-    const result = mergeMerchants(db, from.id, to.id);
-
-    expect(result.adopted_default_account).toBe("thb:expense:food:dining");
+    expect(mergeMerchants(db, from.id, to.id)).toMatchObject({
+      ok: true,
+      adopted_default_account: "thb:expense:food:dining",
+    });
     expect(findMerchantById(db, to.id)!.default_account_id).toBe("thb:expense:food:dining");
   });
 
@@ -288,24 +285,31 @@ describe("mergeMerchants", () => {
     const from = upsertMerchant(db, { canonical_name: "Starbux", default_account_id: "thb:expense:food:dining" }, TH_NOISE);
     const to = upsertMerchant(db, { canonical_name: "Starbucks", default_account_id: "thb:expense:food" }, TH_NOISE);
 
-    const result = mergeMerchants(db, from.id, to.id);
-
-    expect(result.adopted_default_account).toBeUndefined();
+    expect(mergeMerchants(db, from.id, to.id)).toEqual({ ok: true, moved_transactions: 0, moved_aliases: 0 });
     expect(findMerchantById(db, to.id)!.default_account_id).toBe("thb:expense:food");
   });
 
-  it("throws on self-merge", () => {
+  it("refuses a self-merge", () => {
     const m = upsertMerchant(db, { canonical_name: "Starbucks" }, TH_NOISE);
-    expect(() => mergeMerchants(db, m.id, m.id)).toThrow(/Cannot merge a merchant into itself/);
+    expect(mergeMerchants(db, m.id, m.id)).toEqual({
+      ok: false,
+      reason: "same_merchant",
+      message: "Cannot merge a merchant into itself.",
+    });
   });
 
-  it("throws when the source merchant does not exist", () => {
-    const to = upsertMerchant(db, { canonical_name: "Starbucks" }, TH_NOISE);
-    expect(() => mergeMerchants(db, "m:does-not-exist", to.id)).toThrow(/not found/);
-  });
-
-  it("throws when the destination merchant does not exist", () => {
-    const from = upsertMerchant(db, { canonical_name: "Starbucks" }, TH_NOISE);
-    expect(() => mergeMerchants(db, from.id, "m:does-not-exist")).toThrow(/not found/);
+  it("refuses a missing source or destination as not_found, merging nothing", () => {
+    const m = upsertMerchant(db, { canonical_name: "Starbucks" }, TH_NOISE);
+    expect(mergeMerchants(db, "m:does-not-exist", m.id)).toEqual({
+      ok: false,
+      reason: "not_found",
+      message: "Source merchant m:does-not-exist not found.",
+    });
+    expect(mergeMerchants(db, m.id, "m:does-not-exist")).toEqual({
+      ok: false,
+      reason: "not_found",
+      message: "Destination merchant m:does-not-exist not found.",
+    });
+    expect(findMerchantById(db, m.id)).not.toBeNull();
   });
 });

@@ -1,9 +1,10 @@
 import type { Command } from "commander";
 import { cappedSummary, runAction, type Invocation } from "../cli/output.js";
 import type { Column } from "../cli/format.js";
-import { fail, mapNotFoundError } from "../cli/errors.js";
+import { fail, failReason, type FailureCode } from "../cli/errors.js";
 import { redactionEnabled, requireYes } from "../cli/input.js";
 import { openLedger } from "../config/cli.js";
+import { inTransaction } from "../db/transaction.js";
 import {
   listMerchants as queryMerchants,
   claimAlias,
@@ -15,8 +16,8 @@ import {
   renameMerchant,
   upsertMerchant as upsertMerchantRow,
   setMerchantDefaultAccount,
-  clearMerchantDefaultAccount,
   mergeMerchants as mergeMerchantRows,
+  type MergeMerchantsFailure,
   type MerchantUpsertInput,
 } from "./queries.js";
 import type {
@@ -130,37 +131,42 @@ async function updateMerchant(ctx: Invocation, opts: Record<string, unknown>): P
   });
   if (parsed.name !== undefined && !parsed.name.trim()) fail("USAGE", "--name required");
   const { config, db } = await openLedger(ctx.configPath);
-  const current = findMerchantById(db, parsed.merchant);
-  if (!current) fail("NOT_FOUND", `merchant "${parsed.merchant}" not found`);
-  if (parsed.default_account) requireAccount(db, parsed.default_account);
+  const notFound = `merchant "${parsed.merchant}" not found`;
 
-  const result: MerchantUpdateResult = { merchant_id: parsed.merchant };
-  const noise = noiseTokens(config.country);
+  const result = inTransaction(db, (): MerchantUpdateResult => {
+    if (!findMerchantById(db, parsed.merchant)) fail("NOT_FOUND", notFound);
+    if (parsed.default_account) requireAccount(db, parsed.default_account);
 
-  if (parsed.name) {
-    const holder = findMerchantByName(db, parsed.name);
-    if (holder && holder.id !== parsed.merchant) {
-      fail("INVALID", `merchant name "${parsed.name.trim()}" already belongs to ${holder.id}`, {
-        hint: `merge them instead: oled merchants merge --from ${parsed.merchant} --to ${holder.id} --yes`,
-      });
+    const updated: MerchantUpdateResult = { merchant_id: parsed.merchant };
+    const noise = noiseTokens(config.country);
+
+    if (parsed.name) {
+      const holder = findMerchantByName(db, parsed.name);
+      if (holder && holder.id !== parsed.merchant) {
+        fail("INVALID", `merchant name "${parsed.name.trim()}" already belongs to ${holder.id}`, {
+          hint: `merge them instead: oled merchants merge --from ${parsed.merchant} --to ${holder.id} --yes`,
+        });
+      }
+      const renamed = renameMerchant(db, parsed.merchant, parsed.name, noise);
+      updated.before = renamed.before;
+      updated.after = renamed.after;
+      // The old name stays resolvable as an alias unless another merchant holds it.
+      if (renamed.alias_conflict) updated.alias_conflict = renamed.alias_conflict;
     }
-    const renamed = renameMerchant(db, parsed.merchant, parsed.name, noise);
-    result.before = renamed.before;
-    result.after = renamed.after;
-    // The old name stays resolvable as an alias unless another merchant holds it.
-    if (renamed.alias_conflict) result.alias_conflict = renamed.alias_conflict;
-  }
 
-  if (parsed.alias) {
-    const conflict = claimAlias(db, parsed.merchant, parsed.alias, noise);
-    if (conflict) result.alias_conflict = conflict;
-    else result.alias_added = parsed.alias;
-  }
+    if (parsed.alias) {
+      const conflict = claimAlias(db, parsed.merchant, parsed.alias, noise);
+      if (conflict) updated.alias_conflict = conflict;
+      else updated.alias_added = parsed.alias;
+    }
 
-  if (parsed.default_account) {
-    const set = setMerchantDefaultAccount(db, parsed.merchant, parsed.default_account);
-    result.default_account = set.after;
-  }
+    if (parsed.default_account) {
+      const set = setMerchantDefaultAccount(db, parsed.merchant, parsed.default_account);
+      if (!set) fail("NOT_FOUND", notFound);
+      updated.default_account = parsed.default_account;
+    }
+    return updated;
+  });
 
   ctx.out.emitObject(result);
 }
@@ -179,28 +185,16 @@ async function setMerchantDefault(ctx: Invocation, opts: Record<string, unknown>
   }
 
   const { db } = await openLedger(ctx.configPath);
-  if (!findMerchantById(db, parsed.merchant)) {
-    fail("NOT_FOUND", `merchant "${parsed.merchant}" not found`);
-  }
+  const notFound = `merchant "${parsed.merchant}" not found`;
+  if (!findMerchantById(db, parsed.merchant)) fail("NOT_FOUND", notFound);
+  if (account) requireAccount(db, account);
 
-  if (account) {
-    requireAccount(db, account);
-    const set = setMerchantDefaultAccount(db, parsed.merchant, account);
-    const payload: MerchantDefaultResult = {
-      merchant_id: parsed.merchant,
-      before: set.before,
-      after: set.after,
-    };
-    ctx.out.emitObject(payload);
-    return;
-  }
-
-  const result = clearMerchantDefaultAccount(db, parsed.merchant);
-  if (!result) fail("NOT_FOUND", `merchant "${parsed.merchant}" not found`);
+  const set = setMerchantDefaultAccount(db, parsed.merchant, account ?? null);
+  if (!set) fail("NOT_FOUND", notFound);
   const payload: MerchantDefaultResult = {
     merchant_id: parsed.merchant,
-    before: result.before,
-    after: null,
+    before: set.before,
+    after: set.after,
   };
   ctx.out.emitObject(payload);
 }
@@ -209,6 +203,11 @@ const MERGE_MERCHANTS_SPEC = z.object({
   from: str(),
   to: str(),
 });
+
+export const MERGE_MERCHANTS_EXIT: Record<MergeMerchantsFailure, FailureCode> = {
+  same_merchant: "INVALID",
+  not_found: "NOT_FOUND",
+};
 
 interface MergeMerchantsOpts {
   from?: string;
@@ -220,12 +219,8 @@ async function mergeMerchants(ctx: Invocation, opts: MergeMerchantsOpts): Promis
   const parsed = parseInput(MERGE_MERCHANTS_SPEC, opts as Record<string, unknown>);
   requireYes(opts, "merging merchants");
   const { db } = await openLedger(ctx.configPath);
-  let result;
-  try {
-    result = mergeMerchantRows(db, parsed.from, parsed.to);
-  } catch (err) {
-    mapNotFoundError(err);
-  }
+  const result = mergeMerchantRows(db, parsed.from, parsed.to);
+  if (!result.ok) failReason(MERGE_MERCHANTS_EXIT, result);
   const payload: MerchantMergeResult = {
     from: parsed.from,
     to: parsed.to,
