@@ -16,6 +16,7 @@ import { fail } from "../cli/errors.js";
 import { redactionEnabled } from "../cli/input.js";
 import { clampOffset } from "../lib/limit.js";
 import { openLedger } from "../config/cli.js";
+import { inTransaction } from "../db/transaction.js";
 import * as z from "zod";
 import { parseInput, str, int } from "../lib/validate.js";
 import { parseJsonOrNull } from "../lib/json.js";
@@ -121,22 +122,24 @@ async function answerQuestion(
 
   const { db } = await openLedger(ctx.configPath);
 
-  // Resolve every id before deleting any: closeQuestion is irreversible, so a
-  // bogus id partway through the list must not cost the ids that came before it.
-  const missing = ids.filter((qid) => !findQuestionById(db, qid));
-  if (missing.length > 0) {
-    const found = ids.filter((qid) => !missing.includes(qid));
-    fail(
-      "NOT_FOUND",
-      `question(s) not found: ${missing.map((m) => `"${m}"`).join(", ")}`,
-      found.length ? { hint: `these ids do exist: ${found.join(", ")}` } : undefined,
-    );
-  }
+  // One transaction, every id resolved before any closes: closing is irreversible, so a
+  // bogus id or a failure partway through the list must not cost the ids before it.
+  const results = inTransaction(db, (): AnsweredQuestion[] => {
+    const missing = ids.filter((qid) => !findQuestionById(db, qid));
+    if (missing.length > 0) {
+      const found = ids.filter((qid) => !missing.includes(qid));
+      fail(
+        "NOT_FOUND",
+        `question(s) not found: ${missing.map((m) => `"${m}"`).join(", ")}`,
+        found.length ? { hint: `these ids do exist: ${found.join(", ")}` } : undefined,
+      );
+    }
 
-  const results: AnsweredQuestion[] = ids.map((qid) => {
-    const closed = closeQuestion(db, qid, parsed.answer);
-    if (!closed) throw new Error(`question "${qid}" vanished mid-answer`);
-    return { id: qid, kind: closed.kind, answer: closed.answer, rule_key: closed.rule_key };
+    return ids.map((qid) => {
+      const closed = closeQuestion(db, qid, parsed.answer);
+      if (!closed) throw new Error(`question "${qid}" vanished mid-answer`);
+      return { id: qid, kind: closed.kind, answer: closed.answer, rule_key: closed.rule_key };
+    });
   });
   ctx.out.emitList(results, ANSWERED_COLUMNS);
   // `ids` is deduped, so the siblings are whatever --also added beyond the named id.

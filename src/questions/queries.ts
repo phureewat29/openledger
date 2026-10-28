@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { parseJsonOrNull } from "../lib/json.js";
 import { clampLimit, clampOffset } from "../lib/limit.js";
 import { ISO_NOW_SQL, ISO_SHIFTED_SQL } from "../db/timestamps.js";
+import { inTransaction } from "../db/transaction.js";
 
 interface RecordQuestionInput {
   transaction_id?: string | null;
@@ -72,15 +73,17 @@ export function closeQuestion(
   id: string,
   answer: string,
 ): ClosedQuestion | null {
-  const row = findQuestionById(db, id);
-  if (!row) return null;
-  db.prepare(`DELETE FROM questions WHERE id = ?`).run(id);
-  return {
-    prompt: row.prompt,
-    kind: row.kind,
-    answer,
-    rule_key: extractRuleKey(row.context_json),
-  };
+  return inTransaction(db, () => {
+    const row = findQuestionById(db, id);
+    if (!row) return null;
+    db.prepare(`DELETE FROM questions WHERE id = ?`).run(id);
+    return {
+      prompt: row.prompt,
+      kind: row.kind,
+      answer,
+      rule_key: extractRuleKey(row.context_json),
+    };
+  });
 }
 
 function extractRuleKey(contextJson: string | null): string | null {
