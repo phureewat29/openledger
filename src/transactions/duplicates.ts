@@ -133,8 +133,10 @@ function autoMergeStrictGroup(db: Database.Database, group: DuplicateTransaction
       cand.date === head.date &&
       cand.amount === head.amount
     ) {
-      const { alreadyVoid } = voidTransactionAsMirror(db, cand.id, head.id);
-      if (!alreadyVoid) merged++;
+      const voided = voidTransactionAsMirror(db, cand.id, head.id);
+      // The bucket key (amount and both accounts) already made these mirrors.
+      if (!voided.ok) throw new Error(voided.message);
+      if (!voided.alreadyVoid) merged++;
     }
   }
   return merged;

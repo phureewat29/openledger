@@ -1,5 +1,10 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "libsql";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { migrate } from "../db/schema.js";
+import { isBusyError } from "../db/errors.js";
 import {
   getAccountBalances,
   getNetWorth,
@@ -325,24 +330,27 @@ describe("bulkRecategorize", () => {
 
   it("moves both sides and skips would-be self-transactions", () => {
     const res = bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "thb:expense:transport" });
-    expect(res.affected).toBe(2);
-    expect(res.skipped_self_transaction).toBe(1);
+    expect(res).toMatchObject({ ok: true, affected: 2, skipped_self_transaction: 1 });
     expect(findTransactionById(db, "tx:d")?.debit_account_id).toBe("thb:expense:transport");
     expect(findTransactionById(db, "tx:c")?.credit_account_id).toBe("thb:expense:transport");
     expect(findTransactionById(db, "tx:self")?.debit_account_id).toBe("thb:expense:food");
     expect(findTransactionById(db, "tx:self")?.credit_account_id).toBe("thb:expense:transport");
   });
 
-  it("throws when the target account does not exist", () => {
-    expect(() => bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "thb:expense:nope" })).toThrow(
-      /account "thb:expense:nope" not found/,
-    );
+  it("refuses a target account that does not exist as not_found", () => {
+    expect(bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "thb:expense:nope" })).toEqual({
+      ok: false,
+      reason: "not_found",
+      message: 'account "thb:expense:nope" not found',
+    });
   });
 
   it("refuses the no-op where set == filter account", () => {
-    expect(() => bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "thb:expense:food" })).toThrow(
-      /no-op/,
-    );
+    expect(bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "thb:expense:food" })).toEqual({
+      ok: false,
+      reason: "same_account",
+      message: "bulkRecategorize: set.accountId equals filter.accountId (no-op).",
+    });
   });
 
   it("moves every row past the 10k chunk boundary and keeps the sample to the first ids", () => {
@@ -363,6 +371,7 @@ describe("bulkRecategorize", () => {
     seed();
 
     const res = bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "thb:expense:transport" });
+    if (!res.ok) throw new Error(res.message);
     expect(res.affected).toBe(BEYOND_CHUNK + 2); // the seeded rows plus tx:d and tx:c from beforeEach
     expect(res.sample_transaction_ids).toHaveLength(10);
     expect(findTransactionById(db, "tx:batch0")?.debit_account_id).toBe("thb:expense:transport");
@@ -376,6 +385,7 @@ describe("bulkRecategorize", () => {
 
     // Every seeded row's other side is THB, so all three are pre-filtered before the cross-ledger trigger would see the UPDATE.
     expect(res).toEqual({
+      ok: true,
       affected: 0,
       skipped_self_transaction: 0,
       skipped_currency_mismatch: 3,
@@ -420,37 +430,110 @@ describe("voidTransactionAsMirror", () => {
   });
 
   it("voids from into to and records the surviving twin", () => {
-    expect(voidTransactionAsMirror(db, "tx:b", "tx:a")).toEqual({ alreadyVoid: false });
+    expect(voidTransactionAsMirror(db, "tx:b", "tx:a")).toEqual({ ok: true, alreadyVoid: false });
     const row = findTransactionById(db, "tx:b")!;
     expect(row.void_of).toBe("tx:a");
   });
 
   it("is an idempotent no-op when from is already void", () => {
     voidTransactionAsMirror(db, "tx:b", "tx:a");
-    expect(voidTransactionAsMirror(db, "tx:b", "tx:a")).toEqual({ alreadyVoid: true });
+    expect(voidTransactionAsMirror(db, "tx:b", "tx:a")).toEqual({ ok: true, alreadyVoid: true });
   });
 
   it("refuses a self-merge", () => {
-    expect(() => voidTransactionAsMirror(db, "tx:a", "tx:a")).toThrow(/itself/);
+    expect(voidTransactionAsMirror(db, "tx:a", "tx:a")).toEqual({
+      ok: false,
+      reason: "same_transaction",
+      message: "Cannot merge a transaction into itself.",
+    });
   });
 
-  it("throws not found for a missing row (either side)", () => {
-    expect(() => voidTransactionAsMirror(db, "tx:missing", "tx:a")).toThrow(/not found/);
-    expect(() => voidTransactionAsMirror(db, "tx:a", "tx:missing")).toThrow(/not found/);
+  it("refuses a missing row (either side) as not_found", () => {
+    expect(voidTransactionAsMirror(db, "tx:missing", "tx:a")).toEqual({
+      ok: false,
+      reason: "not_found",
+      message: 'transaction "tx:missing" not found',
+    });
+    expect(voidTransactionAsMirror(db, "tx:a", "tx:missing")).toMatchObject({ ok: false, reason: "not_found" });
   });
 
   it("refuses when amount or either account differs", () => {
     insertTransaction(db, tf({ id: "tx:amt", amount: 99999 }));
-    expect(() => voidTransactionAsMirror(db, "tx:amt", "tx:a")).toThrow(/mirror/);
+    expect(voidTransactionAsMirror(db, "tx:amt", "tx:a")).toEqual({
+      ok: false,
+      reason: "not_mirrors",
+      message: 'transactions "tx:amt" and "tx:a" are not mirrors (amount and both accounts must match)',
+    });
 
     insertTransaction(db, tf({ id: "tx:pair", debit_account_id: "thb:expense:transport", amount: 15000 }));
-    expect(() => voidTransactionAsMirror(db, "tx:pair", "tx:a")).toThrow(/mirror/);
+    expect(voidTransactionAsMirror(db, "tx:pair", "tx:a")).toMatchObject({ ok: false, reason: "not_mirrors" });
   });
 
   it("refuses merging into a voided row", () => {
     voidTransactionAsMirror(db, "tx:b", "tx:a");
     insertTransaction(db, tf({ id: "tx:c", amount: 15000 }));
-    expect(() => voidTransactionAsMirror(db, "tx:c", "tx:b")).toThrow(/voided/);
+    expect(voidTransactionAsMirror(db, "tx:c", "tx:b")).toEqual({
+      ok: false,
+      reason: "target_voided",
+      message: 'cannot merge into voided transaction "tx:b"',
+    });
+  });
+});
+
+describe("voidTransactionAsMirror: crossed merges from two processes", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Two connections to one file, the second waiting only 50 ms for a lock. */
+  function twoConnections(): [Database.Database, Database.Database] {
+    const dir = mkdtempSync(join(tmpdir(), "oled-void-race-"));
+    dirs.push(dir);
+    const path = join(dir, "db.sqlite");
+    const first = new Database(path);
+    first.pragma("journal_mode = WAL");
+    first.pragma("foreign_keys = ON");
+    migrate(first);
+    seedChartOfAccounts(first);
+    insertTransaction(first, tf({ id: "tx:a", amount: 15000 }));
+    insertTransaction(first, tf({ id: "tx:b", amount: 15000 }));
+    const second = new Database(path, { timeout: 50 });
+    second.pragma("foreign_keys = ON");
+    return [first, second];
+  }
+
+  it("never voids both rows of a pair: the second merge waits, then finds its target voided", () => {
+    const [first, second] = twoConnections();
+    let racer: unknown;
+    // `merge B A` lands between the first merge's checks and its UPDATE.
+    const interleaved = new Proxy(first, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
+        if (prop !== "prepare") return typeof value === "function" ? value.bind(target) : value;
+        return (sql: string) => {
+          if (sql.startsWith("UPDATE transactions SET void_of")) {
+            try {
+              racer = voidTransactionAsMirror(second, "tx:b", "tx:a");
+            } catch (err) {
+              racer = err;
+            }
+          }
+          return target.prepare(sql);
+        };
+      },
+    }) as Database.Database;
+
+    expect(voidTransactionAsMirror(interleaved, "tx:a", "tx:b")).toEqual({ ok: true, alreadyVoid: false });
+    expect(isBusyError(racer)).toBe(true);
+    expect(voidTransactionAsMirror(second, "tx:b", "tx:a")).toMatchObject({ ok: false, reason: "target_voided" });
+
+    const voided = first
+      .prepare(`SELECT id FROM transactions WHERE void_of IS NOT NULL`)
+      .all() as { id: string }[];
+    second.close();
+    first.close();
+    expect(voided.map((r) => r.id)).toEqual(["tx:a"]);
   });
 });
 

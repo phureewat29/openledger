@@ -6,6 +6,7 @@ import { buildPatch, type PatchField } from "../lib/patch.js";
 import { STRUCTURAL_SUFFIX, currencyOf, newGroupId, newTransactionId } from "../lib/ids.js";
 import { clampLimit, clampOffset } from "../lib/limit.js";
 import { ISO_DATE_RE } from "../lib/date.js";
+import { inTransaction } from "../db/transaction.js";
 
 /** `noise_tokens` lives here, not on `TransactionInput`, so only rows claiming an alias carry one. */
 interface TransactionMerchantInput extends MerchantUpsertInput {
@@ -179,11 +180,9 @@ export function insertLinkedTransactions(
   const groupId =
     opts.group_id ?? inputs.find((i) => i.group_id)?.group_id ?? newGroupId();
 
-  let results: { id: string; duplicate: boolean }[] = [];
-  const tx = db.transaction((): void => {
-    results = inputs.map((input) => insertTransaction(db, { ...input, group_id: groupId }));
-  });
-  tx();
+  const results = inTransaction(db, () =>
+    inputs.map((input) => insertTransaction(db, { ...input, group_id: groupId })),
+  );
   return { results, group_id: groupId };
 }
 
@@ -342,17 +341,13 @@ export function deleteTransaction(
   db: Database.Database,
   id: string,
 ): { deleted: boolean; unvoided: number } {
-  let deleted = false;
-  let unvoided = 0;
-  const tx = db.transaction((): void => {
-    unvoided = (
+  return inTransaction(db, () => {
+    const mirrors = (
       db.prepare(`SELECT COUNT(*) AS n FROM transactions WHERE void_of = ?`).get(id) as { n: number }
     ).n;
-    deleted = db.prepare(`DELETE FROM transactions WHERE id = ?`).run(id).changes > 0;
-    if (!deleted) unvoided = 0;
+    const deleted = db.prepare(`DELETE FROM transactions WHERE id = ?`).run(id).changes > 0;
+    return { deleted, unvoided: deleted ? mirrors : 0 };
   });
-  tx();
-  return { deleted, unvoided };
 }
 
 export interface BulkRecategorizeFilter {
@@ -380,6 +375,12 @@ interface BulkRecategorizeResult {
   sample_transaction_ids: string[];
 }
 
+export type RecategorizeFailure = "same_account" | "not_found";
+
+type BulkRecategorizeOutcome =
+  | ({ ok: true } & BulkRecategorizeResult)
+  | { ok: false; reason: RecategorizeFailure; message: string };
+
 /**
  * Re-points every matching transaction's `:from` side to `:to`. Rows whose
  * other side already equals `:to` are skipped (would violate the debit<>credit
@@ -390,27 +391,30 @@ export function bulkRecategorize(
   db: Database.Database,
   filter: BulkRecategorizeFilter,
   set: BulkRecategorizeSet,
-): BulkRecategorizeResult {
+): BulkRecategorizeOutcome {
   const from = filter.accountId;
   const to = set.accountId;
   if (!from) throw new Error("bulkRecategorize: filter.accountId is required.");
   if (!to) throw new Error("bulkRecategorize: set.accountId is required.");
   if (from === to) {
-    throw new Error("bulkRecategorize: set.accountId equals filter.accountId (no-op).");
-  }
-  if (!accountExists(db, to)) {
-    throw new Error(`account "${to}" not found`);
+    return {
+      ok: false,
+      reason: "same_account",
+      message: "bulkRecategorize: set.accountId equals filter.accountId (no-op).",
+    };
   }
 
   const whereSql = "(t.debit_account_id = ? OR t.credit_account_id = ?)";
   const params: unknown[] = [from, from];
 
-  let affected = 0;
-  let skipped = 0;
-  let skippedCurrency = 0;
-  let sample: string[] = [];
   const toCurrency = currencyOf(to);
-  const tx = db.transaction((): void => {
+  return inTransaction(db, (): BulkRecategorizeOutcome => {
+    if (!accountExists(db, to)) {
+      return { ok: false, reason: "not_found", message: `account "${to}" not found` };
+    }
+    let affected = 0;
+    let skipped = 0;
+    let skippedCurrency = 0;
     const rows = db
       .prepare(
         `SELECT t.id, t.debit_account_id, t.credit_account_id FROM transactions t WHERE ${whereSql}`,
@@ -430,9 +434,7 @@ export function bulkRecategorize(
       }
       toUpdate.push(r.id);
     }
-    if (toUpdate.length === 0) return;
 
-    sample = toUpdate.slice(0, RECATEGORIZE_SAMPLE_LIMIT);
     for (const batch of chunk(toUpdate, RECATEGORIZE_UPDATE_CHUNK_SIZE)) {
       const placeholders = batch.map(() => "?").join(",");
       affected += db
@@ -444,14 +446,14 @@ export function bulkRecategorize(
         )
         .run(from, to, from, to, ...batch).changes;
     }
+    return {
+      ok: true,
+      affected,
+      skipped_self_transaction: skipped,
+      skipped_currency_mismatch: skippedCurrency,
+      sample_transaction_ids: toUpdate.slice(0, RECATEGORIZE_SAMPLE_LIMIT),
+    };
   });
-  tx();
-  return {
-    affected,
-    skipped_self_transaction: skipped,
-    skipped_currency_mismatch: skippedCurrency,
-    sample_transaction_ids: sample,
-  };
 }
 
 /**
@@ -466,10 +468,8 @@ export function repointTransactions(
 ): { moved: number; deletedSelfTransactions: number } {
   if (fromId === toId) throw new Error("Cannot re-point transactions to the same account.");
 
-  let moved = 0;
-  let deletedSelfTransactions = 0;
-  const tx = db.transaction((): void => {
-    deletedSelfTransactions = db
+  return inTransaction(db, () => {
+    const deletedSelfTransactions = db
       .prepare(
         `DELETE FROM transactions
           WHERE (debit_account_id = ? AND credit_account_id = ?)
@@ -483,10 +483,8 @@ export function repointTransactions(
     const c = db
       .prepare(`UPDATE transactions SET credit_account_id = ? WHERE credit_account_id = ?`)
       .run(toId, fromId).changes;
-    moved = d + c;
+    return { moved: d + c, deletedSelfTransactions };
   });
-  tx();
-  return { moved, deletedSelfTransactions };
 }
 
 /** Same filters as listTransactions, no limit; with no opts it counts every live row (voided mirrors excluded). */
@@ -544,42 +542,62 @@ interface VoidCandidate {
   void_of: string | null;
 }
 
+export type VoidMirrorFailure = "same_transaction" | "not_found" | "target_voided" | "not_mirrors";
+
+type VoidMirrorOutcome =
+  | { ok: true; alreadyVoid: boolean }
+  | { ok: false; reason: VoidMirrorFailure; message: string };
+
 /**
  * Voids `fromId` into surviving `toId` (sets `void_of=toId`); never deletes,
  * so re-ingesting the mirror's source file can't resurrect it. Requires
  * matching amount and both accounts, but not date (statement vs. posting
  * dates legitimately differ). Re-voiding an already-void row is a no-op.
+ * The checks share the UPDATE's transaction, or crossed merges (A into B, B
+ * into A) would both pass the live check and void the pair.
  */
 export function voidTransactionAsMirror(
   db: Database.Database,
   fromId: string,
   toId: string,
-): { alreadyVoid: boolean } {
-  if (fromId === toId) throw new Error("Cannot merge a transaction into itself.");
-
-  const select = db.prepare(
-    `SELECT amount, debit_account_id, credit_account_id, void_of FROM transactions WHERE id = ?`,
-  );
-  const from = select.get(fromId) as VoidCandidate | undefined;
-  if (!from) throw new Error(`transaction "${fromId}" not found`);
-  const to = select.get(toId) as VoidCandidate | undefined;
-  if (!to) throw new Error(`transaction "${toId}" not found`);
-
-  if (from.void_of !== null) return { alreadyVoid: true };
-  if (to.void_of !== null) throw new Error(`cannot merge into voided transaction "${toId}"`);
-
-  if (
-    from.amount !== to.amount ||
-    from.debit_account_id !== to.debit_account_id ||
-    from.credit_account_id !== to.credit_account_id
-  ) {
-    throw new Error(
-      `transactions "${fromId}" and "${toId}" are not mirrors (amount and both accounts must match)`,
-    );
+): VoidMirrorOutcome {
+  if (fromId === toId) {
+    return { ok: false, reason: "same_transaction", message: "Cannot merge a transaction into itself." };
   }
 
-  db.prepare(`UPDATE transactions SET void_of = ? WHERE id = ?`).run(toId, fromId);
-  return { alreadyVoid: false };
+  return inTransaction(db, (): VoidMirrorOutcome => {
+    const select = db.prepare(
+      `SELECT amount, debit_account_id, credit_account_id, void_of FROM transactions WHERE id = ?`,
+    );
+    const from = select.get(fromId) as VoidCandidate | undefined;
+    if (!from) return { ok: false, reason: "not_found", message: `transaction "${fromId}" not found` };
+    const to = select.get(toId) as VoidCandidate | undefined;
+    if (!to) return { ok: false, reason: "not_found", message: `transaction "${toId}" not found` };
+
+    if (from.void_of !== null) return { ok: true, alreadyVoid: true };
+    if (to.void_of !== null) {
+      return {
+        ok: false,
+        reason: "target_voided",
+        message: `cannot merge into voided transaction "${toId}"`,
+      };
+    }
+
+    if (
+      from.amount !== to.amount ||
+      from.debit_account_id !== to.debit_account_id ||
+      from.credit_account_id !== to.credit_account_id
+    ) {
+      return {
+        ok: false,
+        reason: "not_mirrors",
+        message: `transactions "${fromId}" and "${toId}" are not mirrors (amount and both accounts must match)`,
+      };
+    }
+
+    db.prepare(`UPDATE transactions SET void_of = ? WHERE id = ?`).run(toId, fromId);
+    return { ok: true, alreadyVoid: false };
+  });
 }
 
 export interface DuplicateTransactionRow {

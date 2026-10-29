@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import type Database from "libsql";
 import { cappedSummary, runAction, type Invocation, type Output } from "../cli/output.js";
 import type { Column } from "../cli/format.js";
-import { fail, mapNotFoundError } from "../cli/errors.js";
+import { fail, failReason, type FailureCode } from "../cli/errors.js";
 import { redactionEnabled, requireYes } from "../cli/input.js";
 import { openLedger } from "../config/cli.js";
 import {
@@ -14,12 +14,16 @@ import {
   countTransactions,
   clampListLimit,
   findTransactionById,
+  validateTransaction,
   voidTransactionAsMirror,
   type BulkRecategorizeFilter,
+  type RecategorizeFailure,
+  type TransactionInput,
   type UpdateTransactionMetaFields,
   type ListTransactionsOptions,
   type TransactionRow,
   type TransactionCluster,
+  type VoidMirrorFailure,
 } from "./queries.js";
 import {
   commitTransaction,
@@ -254,6 +258,13 @@ const MERGE_TRANSACTIONS_SPEC = z.object({
   to: str(),
 });
 
+export const MERGE_TRANSACTIONS_EXIT: Record<VoidMirrorFailure, FailureCode> = {
+  same_transaction: "INVALID",
+  not_found: "NOT_FOUND",
+  target_voided: "INVALID",
+  not_mirrors: "INVALID",
+};
+
 interface MergeTransactionsOpts {
   from?: string;
   to?: string;
@@ -265,12 +276,8 @@ async function mergeTransactions(ctx: Invocation, opts: MergeTransactionsOpts): 
   requireYes(opts, "merging transactions");
   const { db } = await openLedger(ctx.configPath);
 
-  let result;
-  try {
-    result = voidTransactionAsMirror(db, parsed.from, parsed.to);
-  } catch (err) {
-    mapNotFoundError(err);
-  }
+  const result = voidTransactionAsMirror(db, parsed.from, parsed.to);
+  if (!result.ok) failReason(MERGE_TRANSACTIONS_EXIT, result);
 
   if (result.alreadyVoid) {
     const view: TransactionMergeAlreadyVoidResult = {
@@ -387,22 +394,24 @@ function addStrict(
     );
   }
 
-  let result: { id: string; duplicate: boolean };
-  try {
-    result = insertTransaction(db, {
-      date: raw.date,
-      description: raw.description,
-      debit_account_id: raw.debit_account_id,
-      credit_account_id: raw.credit_account_id,
-      amount: toMinorUnits(raw.amount, currency),
-      merchant: withNoiseTokens(raw.merchant, noise),
-      merchant_id: raw.merchant_id ?? null,
-      raw_descriptor: raw.raw_descriptor ?? null,
-      source_page: raw.source_page ?? null,
-    });
-  } catch (err) {
-    fail("INVALID", (err as Error).message);
+  const input: TransactionInput = {
+    date: raw.date,
+    description: raw.description,
+    debit_account_id: raw.debit_account_id,
+    credit_account_id: raw.credit_account_id,
+    amount: toMinorUnits(raw.amount, currency),
+    merchant: withNoiseTokens(raw.merchant, noise),
+    merchant_id: raw.merchant_id ?? null,
+    raw_descriptor: raw.raw_descriptor ?? null,
+    source_page: raw.source_page ?? null,
+  };
+  // insertTransaction throws on both; checked first so no other throw can read as bad input.
+  const check = validateTransaction(input);
+  if (!check.ok) fail("INVALID", check.message);
+  if (input.merchant && !input.merchant.canonical_name.trim()) {
+    fail("INVALID", "merchant canonical_name is required");
   }
+  const result = insertTransaction(db, input);
   const view: TransactionAddResult = { transaction_id: result.id, duplicate: result.duplicate };
   out.emitObject(view);
 }
@@ -459,6 +468,11 @@ const RECATEGORIZE_SPEC = z.object({
   filter_account: str(),
 });
 
+export const RECATEGORIZE_EXIT: Record<RecategorizeFailure, FailureCode> = {
+  same_account: "INVALID",
+  not_found: "NOT_FOUND",
+};
+
 // The `--filter-account` clarification is folded into the label so a missing flag still explains it.
 const RECATEGORIZE_LABELS = {
   filter_account: "--filter-account (recategorize moves that account's transactions)",
@@ -481,14 +495,8 @@ async function recategorizeTransactions(
   );
   const filter: BulkRecategorizeFilter = { accountId: parsed.filter_account };
 
-  // requireAccount above already rules out a missing target; the remaining
-  // throw reachable here is the same-account no-op.
-  let result;
-  try {
-    result = bulkRecategorize(db, filter, { accountId: parsed.set_account });
-  } catch (err) {
-    mapNotFoundError(err);
-  }
+  const result = bulkRecategorize(db, filter, { accountId: parsed.set_account });
+  if (!result.ok) failReason(RECATEGORIZE_EXIT, result);
   const view: TransactionRecategorizeResult = {
     affected: result.affected,
     skipped_self_transaction: result.skipped_self_transaction,
