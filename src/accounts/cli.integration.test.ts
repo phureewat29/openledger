@@ -3,6 +3,7 @@ import Database from "libsql";
 import { migrate } from "../db/schema.js";
 import { createAccount } from "./accounts.js";
 import { countAccounts, findAccountById, listLedgerCurrencies } from "./queries.js";
+import { countTransactions } from "../transactions/queries.js";
 import {
   createSandbox,
   makeRunCLI,
@@ -79,10 +80,10 @@ describe("accounts create (subprocess)", () => {
     expect(snapshot()).toEqual(before);
   }, 30000);
 
-  it("takes back the type root that a refused parent lookup opened", async () => {
+  it("never opens the type root a refused parent names", async () => {
     const before = snapshot();
-    // thb:expense doesn't exist yet; the hierarchy check opens it before discovering the
-    // types disagree, and one transaction rolls it back.
+    // thb:expense doesn't exist yet; the hierarchy check validates against the root it
+    // would open and refuses before writing it.
     const res = await runCLI([
       "accounts", "create", "--id", "thb:asset:x", "--name", "X",
       "--type", "asset", "--parent", "thb:expense", "--json",
@@ -139,5 +140,24 @@ describe("accounts create (subprocess)", () => {
     expect(error.code).toBe("E_NOT_FOUND");
     expect(error.message).toContain('Parent account "thb:expense:snacks" does not exist');
     expect(snapshot()).toEqual(before);
+  }, 30000);
+});
+
+describe("accounts adjust (subprocess)", () => {
+  it("refuses a non-ISO --date as USAGE (2) instead of booking it today", async () => {
+    const res = await runCLI([
+      "accounts", "adjust", "thb:asset:cash", "--to", "10", "--reason", "count",
+      "--date", "2024/01/31", "--json",
+    ]);
+    expect(res.code).toBe(2);
+
+    const { error } = JSON.parse(res.stderr.trim());
+    expect(error.code).toBe("E_USAGE");
+    expect(error.message).toBe('--date must be an ISO date (YYYY-MM-DD), got "2024/01/31"');
+
+    const db = new Database(dbPath);
+    const booked = countTransactions(db, { includeVoid: true });
+    db.close();
+    expect(booked).toBe(0);
   }, 30000);
 });

@@ -12,10 +12,14 @@ import {
   getPeriodLegSums,
   type AccountLegSumsOptions,
 } from "./balance-queries.js";
-import { insertTransaction } from "../transactions/queries.js";
+import {
+  insertTransaction,
+  validateTransaction,
+  type TransactionInput,
+} from "../transactions/queries.js";
+import { inTransaction } from "../db/transaction.js";
 import { currencyOf } from "../lib/ids.js";
 import { fromMinorUnits, toMinorUnits, type CurrencyTotals } from "../lib/money.js";
-import { todayIso, ISO_DATE_RE } from "../lib/date.js";
 import { ensureStructuralAccount, structuralAccountId } from "./accounts.js";
 
 export interface AccountBalanceMinor extends AccountRow {
@@ -175,59 +179,68 @@ interface AdjustAccountBalanceOpts {
   /** New desired balance in the account's currency, decimal, natural sign. */
   targetAmount: number;
   reason: string;
-  /** ISO YYYY-MM-DD. Defaults to today. */
-  date?: string;
+  /** ISO YYYY-MM-DD. */
+  date: string;
 }
 
-interface AdjustAccountBalanceResult {
-  /** Id of the balancing transaction, or null when already at target (no-op). */
-  transactionId: string | null;
-  /** target - current, decimal, natural sign. 0 on no-op. */
-  delta: number;
-}
+export type AdjustBalanceFailure = "not_found" | "balancing_account" | "invalid_transaction";
 
-/** Ledger comes from the target account, never config; delta math is integer minor units. */
+type AdjustAccountBalanceOutcome =
+  | {
+      ok: true;
+      /** Id of the balancing transaction, or null when already at target (no-op). */
+      transactionId: string | null;
+      /** target - current, decimal, natural sign. 0 on no-op. */
+      delta: number;
+    }
+  | { ok: false; reason: AdjustBalanceFailure; message: string };
+
+/**
+ * Ledger comes from the target account, never config; delta math is integer
+ * minor units. The balance is read under the write lock, so a concurrent
+ * write can't move it between the read and the balancing entry.
+ */
 export function adjustAccountBalance(
   db: Database.Database,
   opts: AdjustAccountBalanceOpts,
-): AdjustAccountBalanceResult {
-  const account = findAccountById(db, opts.accountId);
-  if (!account) throw new Error(`Account "${opts.accountId}" not found.`);
+): AdjustAccountBalanceOutcome {
+  return inTransaction(db, (): AdjustAccountBalanceOutcome => {
+    const account = findAccountById(db, opts.accountId);
+    if (!account) {
+      return { ok: false, reason: "not_found", message: `Account "${opts.accountId}" not found.` };
+    }
 
-  const currency = currencyOf(account.id);
-  const adjustmentsId = structuralAccountId(currency, "adjustments");
-  if (account.id === adjustmentsId) {
-    throw new Error(
-      `Account "${adjustmentsId}" is the balancing side of every adjustment on its own ledger, ` +
-        "so adjusting it would need both legs on one account. Adjust the account that is wrong instead.",
-    );
-  }
+    const currency = currencyOf(account.id);
+    const adjustmentsId = structuralAccountId(currency, "adjustments");
+    if (account.id === adjustmentsId) {
+      return {
+        ok: false,
+        reason: "balancing_account",
+        message:
+          `Account "${adjustmentsId}" is the balancing side of every adjustment on its own ledger, ` +
+          "so adjusting it would need both legs on one account. Adjust the account that is wrong instead.",
+      };
+    }
 
-  const currentMinor = getAccountBalanceMinor(db, account.id) ?? 0;
-  const targetMinor = toMinorUnits(opts.targetAmount, currency);
-  const deltaMinor = targetMinor - currentMinor;
-  if (deltaMinor === 0) return { transactionId: null, delta: 0 };
+    const currentMinor = getAccountBalanceMinor(db, account.id) ?? 0;
+    const targetMinor = toMinorUnits(opts.targetAmount, currency);
+    const deltaMinor = targetMinor - currentMinor;
+    if (deltaMinor === 0) return { ok: true, transactionId: null, delta: 0 };
 
-  const amount = Math.abs(deltaMinor);
-  const debitNormal = isDebitNormal(account.type);
-  const accountIsDebit = (debitNormal && deltaMinor > 0) || (!debitNormal && deltaMinor < 0);
-
-  const date =
-    opts.date && ISO_DATE_RE.test(opts.date) ? opts.date : todayIso();
-  const reason = String(opts.reason || "Balance adjustment").trim();
-
-  let transactionId = "";
-  const tx = db.transaction((): void => {
-    ensureStructuralAccount(db, currency, "adjustments");
-    transactionId = insertTransaction(db, {
-      date,
-      description: reason,
+    const debitNormal = isDebitNormal(account.type);
+    const accountIsDebit = (debitNormal && deltaMinor > 0) || (!debitNormal && deltaMinor < 0);
+    const entry: TransactionInput = {
+      date: opts.date,
+      description: String(opts.reason || "Balance adjustment").trim(),
       debit_account_id: accountIsDebit ? account.id : adjustmentsId,
       credit_account_id: accountIsDebit ? adjustmentsId : account.id,
-      amount,
-    }).id;
-  });
-  tx();
+      amount: Math.abs(deltaMinor),
+    };
+    const check = validateTransaction(entry);
+    if (!check.ok) return check;
 
-  return { transactionId, delta: fromMinorUnits(deltaMinor, currency) };
+    ensureStructuralAccount(db, currency, "adjustments");
+    const { id } = insertTransaction(db, entry);
+    return { ok: true, transactionId: id, delta: fromMinorUnits(deltaMinor, currency) };
+  });
 }

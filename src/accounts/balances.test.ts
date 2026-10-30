@@ -19,7 +19,6 @@ import {
   voidTransactionAsMirror,
   type TransactionInput,
 } from "../transactions/queries.js";
-import { todayIso } from "../lib/date.js";
 import { freshDb } from "../../fixtures/db.js";
 
 function seedThb(db: Database.Database): void {
@@ -353,12 +352,18 @@ describe("adjustAccountBalance", () => {
   let db: Database.Database;
   beforeEach(() => { db = freshDb(seedBoth); });
 
+  const DATE = "2026-05-01";
+
+  function adjusted(
+    opts: Omit<Parameters<typeof adjustAccountBalance>[1], "date">,
+  ): { transactionId: string | null; delta: number } {
+    const res = adjustAccountBalance(db, { ...opts, date: DATE });
+    if (!res.ok) throw new Error(`refused: ${res.message}`);
+    return res;
+  }
+
   it("balances against the target account's own ledger, and opens no other", () => {
-    const res = adjustAccountBalance(db, {
-      accountId: "jpy:asset:cash",
-      targetAmount: 1500,
-      reason: "counted the wallet",
-    });
+    const res = adjusted({ accountId: "jpy:asset:cash", targetAmount: 1500, reason: "counted the wallet" });
     expect(res.delta).toBe(1500);
 
     const tx = findTransactionById(db, res.transactionId!)!;
@@ -375,11 +380,7 @@ describe("adjustAccountBalance", () => {
   });
 
   it("credits a credit-normal account to raise it", () => {
-    const res = adjustAccountBalance(db, {
-      accountId: "thb:liability:card",
-      targetAmount: 500,
-      reason: "statement balance",
-    });
+    const res = adjusted({ accountId: "thb:liability:card", targetAmount: 500, reason: "statement balance" });
     expect(res.delta).toBe(500);
 
     const tx = findTransactionById(db, res.transactionId!)!;
@@ -391,56 +392,38 @@ describe("adjustAccountBalance", () => {
   it("is a no-op when already at target", () => {
     ins(db, { debit_account_id: "thb:asset:cash", credit_account_id: "thb:income:salary", amount: 150000 });
     expect(
-      adjustAccountBalance(db, {
-        accountId: "thb:asset:cash",
-        targetAmount: 1500,
-        reason: "already there",
-      }),
-    ).toEqual({ transactionId: null, delta: 0 });
+      adjustAccountBalance(db, { accountId: "thb:asset:cash", targetAmount: 1500, reason: "already there", date: DATE }),
+    ).toEqual({ ok: true, transactionId: null, delta: 0 });
   });
 
-  it("posts on the given date, and on today when the date is unusable", () => {
-    const dated = adjustAccountBalance(db, {
-      accountId: "thb:asset:cash",
-      targetAmount: 10,
-      reason: "x",
-      date: "2026-05-01",
-    });
-    expect(findTransactionById(db, dated.transactionId!)!.date).toBe("2026-05-01");
-
-    const undated = adjustAccountBalance(db, {
-      accountId: "thb:asset:cash",
-      targetAmount: 20,
-      reason: "x",
-      date: "yesterday",
-    });
-    expect(findTransactionById(db, undated.transactionId!)!.date).toBe(todayIso());
+  it("posts on the date the caller passes", () => {
+    const res = adjusted({ accountId: "thb:asset:cash", targetAmount: 10, reason: "x" });
+    expect(findTransactionById(db, res.transactionId!)!.date).toBe(DATE);
   });
 
-  it("throws for an unknown account", () => {
-    expect(() =>
-      adjustAccountBalance(db, { accountId: "thb:asset:nope", targetAmount: 10, reason: "x" }),
-    ).toThrow(/not found/);
+  it("refuses an unknown account as not_found", () => {
+    expect(
+      adjustAccountBalance(db, { accountId: "thb:asset:nope", targetAmount: 10, reason: "x", date: DATE }),
+    ).toEqual({ ok: false, reason: "not_found", message: 'Account "thb:asset:nope" not found.' });
   });
 
   it("refuses to adjust a ledger's own adjustments account", () => {
     // Counterparty of every adjustment on thb:; the balancing transaction
     // would need both legs on one account.
-    adjustAccountBalance(db, { accountId: "thb:asset:cash", targetAmount: 100, reason: "seed" });
-    expect(() =>
-      adjustAccountBalance(db, {
-        accountId: "thb:equity:adjustments",
-        targetAmount: 10,
-        reason: "x",
-      }),
-    ).toThrow(/balancing side of every adjustment/);
-    // The refusal is not a not-found: the CLI maps it to INVALID, not NOT_FOUND.
-    expect(() =>
-      adjustAccountBalance(db, {
-        accountId: "thb:equity:adjustments",
-        targetAmount: 10,
-        reason: "x",
-      }),
-    ).not.toThrow(/not found/);
+    adjusted({ accountId: "thb:asset:cash", targetAmount: 100, reason: "seed" });
+    const res = adjustAccountBalance(db, {
+      accountId: "thb:equity:adjustments",
+      targetAmount: 10,
+      reason: "x",
+      date: DATE,
+    });
+    expect(res).toMatchObject({ ok: false, reason: "balancing_account" });
+    expect(!res.ok && res.message).toMatch(/balancing side of every adjustment/);
+  });
+
+  it("refuses an entry the ledger can't hold before opening the adjustments account", () => {
+    const res = adjustAccountBalance(db, { accountId: "thb:asset:cash", targetAmount: 10, reason: "   ", date: DATE });
+    expect(res).toEqual({ ok: false, reason: "invalid_transaction", message: "description must not be empty." });
+    expect(findAccountById(db, "thb:equity:adjustments")).toBeNull();
   });
 });

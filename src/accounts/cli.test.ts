@@ -1,50 +1,30 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import type Database from "libsql";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ACCOUNT_FAILURE_EXIT,
-  createOneAccount,
+  ADJUST_ACCOUNT_EXIT,
+  DELETE_ACCOUNT_EXIT,
+  MERGE_ACCOUNTS_EXIT,
+  UPDATE_ACCOUNT_EXIT,
   createAccountsBatch,
   failAccountNotFound,
 } from "./cli.js";
-import type { AccountFailure } from "./accounts.js";
 import { findAccountById, insertAccount } from "./queries.js";
-import { failingAccountInsert, freshDb } from "../../fixtures/db.js";
-import { createOutput } from "../cli/output.js";
-import { failReason } from "../cli/errors.js";
+import { failingAccountInsert, freshDb, ledgerLockedAtTransaction } from "../../fixtures/db.js";
+import { createOutput, describeFailure } from "../cli/output.js";
+import { failReason, type FailureCode } from "../cli/errors.js";
 import { EXIT } from "../contract/exit.js";
 
-// createOneAccount unwraps RefusedCreate but must not treat any other throw as a refusal:
-// a broken database would otherwise misread as "account already exists".
-describe("createOneAccount refusal carrier", () => {
-  let db: Database.Database;
-  beforeEach(() => {
-    db = freshDb();
-  });
-
-  it("lets a broken write escape instead of reporting it as a refusal", () => {
-    // The account INSERT fails the way a full disk would; every other statement still works.
-    const broken = failingAccountInsert(db, "thb:asset:bank");
-
-    expect(() =>
-      createOneAccount(broken, { id: "thb:asset:bank", name: "KBank Savings", type: "asset" }),
-    ).toThrow(/disk I\/O/);
-
-    // The whole chain is one transaction: the ledger root it opened must not outlive the leaf.
-    expect(findAccountById(db, "thb:asset:bank")).toBeNull();
-    expect(findAccountById(db, "thb:asset")).toBeNull();
-  });
-
-  it("still reports a taken id as data, not as a throw", () => {
-    const first = createOneAccount(db, { id: "thb:asset:bank", name: "KBank", type: "asset" });
-    expect(first).toMatchObject({ ok: true, id: "thb:asset:bank" });
-
-    expect(createOneAccount(db, { id: "thb:asset:bank", name: "KBank", type: "asset" })).toEqual({
-      ok: false,
-      reason: "account_exists",
-      message: expect.any(String),
-    });
-  });
-});
+function jsonOutput(): { out: ReturnType<typeof createOutput>; lines: () => Record<string, unknown>[] } {
+  const chunks: string[] = [];
+  const out = createOutput({ json: true, tty: false, color: false, kind: "json" }, (s) => chunks.push(s));
+  const lines = (): Record<string, unknown>[] =>
+    chunks.join("").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
+  return { out, lines };
+}
 
 // A driver/constraint throw is hard to force through the CLI subprocess without
 // corrupting the sandbox db out-of-band, so this pins the batch loop directly.
@@ -58,11 +38,10 @@ describe("createAccountsBatch: a mid-batch throw stays that item's failure", () 
       { id: "thb:equity:good-b", name: "Good B", type: "equity" },
     ];
 
-    const chunks: string[] = [];
-    const out = createOutput({ json: true, tty: false, color: false, kind: "json" }, (s) => chunks.push(s));
+    const { out, lines } = jsonOutput();
     const exit = createAccountsBatch(out, broken, items);
 
-    const objs = chunks.join("").trimEnd().split("\n").map((l) => JSON.parse(l));
+    const objs = lines();
     const results = objs.filter((o) => o.type === "result");
 
     expect(results.map((r) => ({ index: r.index, ok: r.ok }))).toEqual([
@@ -81,6 +60,38 @@ describe("createAccountsBatch: a mid-batch throw stays that item's failure", () 
   });
 });
 
+describe("createAccountsBatch: a locked ledger stops the batch", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("exits BUSY (8), not PARTIAL, and keeps the rows that landed before the lock", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oled-accounts-busy-"));
+    dirs.push(dir);
+    const ledger = ledgerLockedAtTransaction(join(dir, "db.sqlite"), 2);
+    const { out, lines } = jsonOutput();
+
+    let thrown: unknown;
+    try {
+      createAccountsBatch(out, ledger.db, [
+        { id: "thb:equity:first", name: "First", type: "equity" },
+        { id: "thb:equity:second", name: "Second", type: "equity" },
+        { id: "thb:equity:third", name: "Third", type: "equity" },
+      ]);
+    } catch (err) {
+      thrown = err;
+    }
+    const landed = findAccountById(ledger.db, "thb:equity:first");
+    ledger.release();
+
+    expect(describeFailure(thrown, true).exitCode).toBe(EXIT.BUSY);
+    expect(lines()).toEqual([
+      { type: "result", index: 0, ok: true, id: "thb:equity:first", created: true, created_parents: ["thb:equity"] },
+    ]);
+    expect(landed).not.toBeNull();
+  });
+});
 
 interface ThrownCLIError {
   code: string;
@@ -148,23 +159,52 @@ describe("failAccountNotFound", () => {
   });
 });
 
-interface ReasonCase {
-  reason: AccountFailure;
-  exitCode: number;
+interface ReasonTable {
+  name: string;
+  table: Record<string, FailureCode>;
+  /** The exit code each reason's plain-Error message mapped to before it had a type. */
+  pinned: Record<string, number>;
 }
 
-/** Pinned as data, not read off ACCOUNT_FAILURE_EXIT: a re-pointed reason must fail here. */
-const REASON_CASES: ReasonCase[] = [
-  { reason: "account_exists", exitCode: EXIT.INVALID },
-  { reason: "parent_not_found", exitCode: EXIT.NOT_FOUND },
-  { reason: "invalid_hierarchy", exitCode: EXIT.INVALID },
+/** Pinned as data, not read off the tables: a re-pointed reason must fail here. */
+const REASON_TABLES: ReasonTable[] = [
+  {
+    name: "ACCOUNT_FAILURE_EXIT",
+    table: ACCOUNT_FAILURE_EXIT,
+    pinned: { account_exists: EXIT.INVALID, parent_not_found: EXIT.NOT_FOUND, invalid_hierarchy: EXIT.INVALID },
+  },
+  {
+    name: "MERGE_ACCOUNTS_EXIT",
+    table: MERGE_ACCOUNTS_EXIT,
+    pinned: {
+      same_account: EXIT.INVALID,
+      not_found: EXIT.NOT_FOUND,
+      cross_ledger: EXIT.INVALID,
+      has_children: EXIT.INVALID,
+    },
+  },
+  {
+    name: "DELETE_ACCOUNT_EXIT",
+    table: DELETE_ACCOUNT_EXIT,
+    pinned: { has_transactions: EXIT.INVALID, has_children: EXIT.INVALID },
+  },
+  {
+    name: "ADJUST_ACCOUNT_EXIT",
+    table: ADJUST_ACCOUNT_EXIT,
+    pinned: { not_found: EXIT.NOT_FOUND, balancing_account: EXIT.INVALID, invalid_transaction: EXIT.INVALID },
+  },
+  {
+    name: "UPDATE_ACCOUNT_EXIT",
+    table: UPDATE_ACCOUNT_EXIT,
+    pinned: { not_found: EXIT.NOT_FOUND, unreadable_metadata: EXIT.INVALID },
+  },
 ];
 
-describe("ACCOUNT_FAILURE_EXIT", () => {
-  it.each(REASON_CASES)("$reason exits $exitCode", ({ reason, exitCode }) => {
+describe.each(REASON_TABLES)("$name", ({ table, pinned }) => {
+  it.each(Object.entries(pinned))("%s exits %i", (reason, exitCode) => {
     let thrown: { code: keyof typeof EXIT } | undefined;
     try {
-      failReason(ACCOUNT_FAILURE_EXIT, { reason, message: "refused" });
+      failReason(table, { reason, message: "refused" });
     } catch (err) {
       thrown = err as { code: keyof typeof EXIT };
     }
@@ -172,6 +212,6 @@ describe("ACCOUNT_FAILURE_EXIT", () => {
   });
 
   it("assigns an exit code to every reason arm", () => {
-    expect(Object.keys(ACCOUNT_FAILURE_EXIT).sort()).toEqual(REASON_CASES.map((c) => c.reason).sort());
+    expect(Object.keys(table).sort()).toEqual(Object.keys(pinned).sort());
   });
 });

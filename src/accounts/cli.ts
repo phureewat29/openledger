@@ -3,16 +3,18 @@ import type Database from "libsql";
 import { camelCase } from "es-toolkit";
 import { runAction, type Invocation, type Output } from "../cli/output.js";
 import type { Column } from "../cli/format.js";
-import { fail, failReason, mapNotFoundError, type FailureCode } from "../cli/errors.js";
+import { fail, failReason, tryBatchItem, type FailureCode } from "../cli/errors.js";
 import { asRecord, readStdinBatch, redactionEnabled, requireYes } from "../cli/input.js";
 import { openLedger } from "../config/cli.js";
+import { inTransaction } from "../db/transaction.js";
 import {
-  createAccount as createAccountRow,
+  createOneAccount,
   mergeAccounts as mergeAccountRows,
   deleteAccount as deleteAccountRow,
-  validateAccountId,
   type AccountFailure,
-  type AccountRefusal,
+  type CreatedAccount,
+  type DeleteAccountFailure,
+  type MergeAccountsFailure,
 } from "./accounts.js";
 import {
   getAccountBalances,
@@ -20,6 +22,7 @@ import {
   getRollupBalance,
   adjustAccountBalance,
   type AccountBalanceMinor,
+  type AdjustBalanceFailure,
   type BalanceTreeNode,
 } from "./balances.js";
 import {
@@ -31,15 +34,14 @@ import {
   ACCOUNT_TYPES,
   type AccountRow,
   type AccountType,
-  type CreateAccountInput,
+  type UpdateAccountMetadataFailure,
   type UpdateAccountMetadataPatch,
 } from "./queries.js";
 import { findAccountsByFuzzyName, type FuzzyAccountMatch } from "./matching.js";
-import { ensureAccountAncestors } from "./resolve.js";
 import { isLedgerScopedId } from "../lib/ids.js";
 import { formatFixed, fromMinorUnits, toDecimalTotals } from "../lib/money.js";
+import { ISO_DATE_RE, todayIso } from "../lib/date.js";
 import { applyRedaction } from "../privacy/redactor.js";
-import { tryExecute } from "../lib/result.js";
 import * as z from "zod";
 import { parseInput, safeParse, str, num, int, json } from "../lib/validate.js";
 import type { ExitCode } from "../contract/exit.js";
@@ -272,72 +274,6 @@ const CREATE_ACCOUNT_ALIASES = {
   account_number_masked: ["masked"],
 };
 
-interface CreatedAccount {
-  readonly ok: true;
-  id: string;
-  created_parents: string[];
-  account_number_masked?: string | null;
-}
-
-type CreateOneAccountOutcome = CreatedAccount | AccountRefusal;
-
-// db.transaction rolls back only on throw, so a refusal must throw to undo any
-// parent-ledger write that preceded it.
-class RefusedCreate extends Error {
-  constructor(readonly failure: AccountRefusal) {
-    super(failure.message);
-  }
-}
-
-// Ancestors are auto-created only when --parent was omitted.
-export function createOneAccount(
-  db: Database.Database,
-  parsed: z.infer<typeof CREATE_ACCOUNT_SPEC>,
-): CreateOneAccountOutcome {
-  const grammar = validateAccountId(parsed.id, parsed.type);
-  if (!grammar.ok) return grammar;
-
-  try {
-    return db.transaction((): CreateOneAccountOutcome => {
-      let parentId = parsed.parent_id ?? null;
-      let createdParents: string[] = [];
-      if (parsed.parent_id === undefined) {
-        const ancestors = ensureAccountAncestors(db, parsed.id, parsed.type);
-        if (!ancestors.ok) throw new RefusedCreate(ancestors);
-        if (ancestors.parentId !== null) {
-          parentId = ancestors.parentId;
-          createdParents = ancestors.createdParents;
-        }
-      }
-
-      const input: CreateAccountInput = {
-        id: parsed.id,
-        name: parsed.name,
-        type: parsed.type,
-        parent_id: parentId,
-        subtype: parsed.subtype ?? null,
-        bank_name: parsed.bank_name ?? null,
-        account_number_masked: parsed.account_number_masked ?? null,
-        due_day: parsed.due_day ?? null,
-        statement_day: parsed.statement_day ?? null,
-        metadata: parsed.metadata ?? null,
-      };
-      const created = createAccountRow(db, input);
-      if (!created.ok) throw new RefusedCreate(created);
-
-      const result: CreatedAccount = { ok: true, id: input.id, created_parents: createdParents };
-      // Echo the stored (post-normalization) value rather than re-deriving it.
-      if (parsed.account_number_masked !== undefined) {
-        result.account_number_masked = findAccountById(db, input.id)?.account_number_masked ?? null;
-      }
-      return result;
-    })();
-  } catch (err) {
-    if (err instanceof RefusedCreate) return err.failure;
-    throw err;
-  }
-}
-
 function maskedResultField(result: CreatedAccount): Record<string, unknown> {
   return result.account_number_masked !== undefined
     ? { account_number_masked: result.account_number_masked }
@@ -371,18 +307,22 @@ type AccountsCreateBatchRow =
 
 /**
  * One result row per item plus a summary row; exits PARTIAL on any failure.
- * `account_exists` counts as success (`duplicate: true`); a throw from one
- * item becomes that item's failure row instead of aborting the batch.
+ * `account_exists` counts as success (`duplicate: true`). Rows are written as
+ * they land, so a ledger failure that aborts the batch leaves the landed ones reported.
  */
 export function createAccountsBatch(
   out: Output,
   db: Database.Database,
   items: unknown[],
 ): ExitCode | undefined {
-  const results: AccountsCreateBatchRow[] = [];
   let created = 0;
   let duplicates = 0;
   let failed = 0;
+
+  const report = (row: AccountsCreateBatchRow): void => {
+    if (out.mode.json) out.emit(row);
+    else out.emitObject(row);
+  };
 
   function failedRow(index: number, message: string): CreateAccountBatchFailure {
     failed++;
@@ -392,19 +332,19 @@ export function createAccountsBatch(
   for (let index = 0; index < items.length; index++) {
     const record = asRecord(items[index]);
     if (!record) {
-      results.push(failedRow(index, "each account must be a JSON object."));
+      report(failedRow(index, "each account must be a JSON object."));
       continue;
     }
 
     const parsed = safeParse(CREATE_ACCOUNT_SPEC, record, { aliases: CREATE_ACCOUNT_ALIASES });
     if (!parsed.ok) {
-      results.push(failedRow(index, parsed.error));
+      report(failedRow(index, parsed.error));
       continue;
     }
 
-    const attempt = tryExecute(() => createOneAccount(db, parsed.value));
+    const attempt = tryBatchItem(() => createOneAccount(db, parsed.value));
     if (!attempt.ok) {
-      results.push(failedRow(index, attempt.error));
+      report(failedRow(index, attempt.error));
       continue;
     }
     const one = attempt.value;
@@ -419,7 +359,7 @@ export function createAccountsBatch(
         created_parents: one.created_parents,
         ...maskedResultField(one),
       };
-      results.push(row);
+      report(row);
       continue;
     }
     if (one.reason === "account_exists") {
@@ -431,18 +371,16 @@ export function createAccountsBatch(
         id: parsed.value.id,
         duplicate: true,
       };
-      results.push(row);
+      report(row);
       continue;
     }
-    results.push(failedRow(index, one.message));
+    report(failedRow(index, one.message));
   }
 
   if (out.mode.json) {
-    for (const r of results) out.emit(r);
     const summary: Omit<CreateAccountBatchSummary, "type"> = { created, duplicates, failed };
     out.emitSummary(summary);
   } else {
-    for (const r of results) out.emitObject(r);
     out.write(`\n${created} created, ${duplicates} duplicate(s), ${failed} failed\n`);
   }
 
@@ -474,6 +412,18 @@ const MERGE_ACCOUNTS_SPEC = z.object({
   to: str(),
 });
 
+export const MERGE_ACCOUNTS_EXIT: Record<MergeAccountsFailure, FailureCode> = {
+  same_account: "INVALID",
+  not_found: "NOT_FOUND",
+  cross_ledger: "INVALID",
+  has_children: "INVALID",
+};
+
+export const DELETE_ACCOUNT_EXIT: Record<DeleteAccountFailure, FailureCode> = {
+  has_transactions: "INVALID",
+  has_children: "INVALID",
+};
+
 interface MergeAccountsOpts {
   from?: string;
   to?: string;
@@ -484,13 +434,8 @@ async function mergeAccounts(ctx: Invocation, opts: MergeAccountsOpts): Promise<
   const parsed = parseInput(MERGE_ACCOUNTS_SPEC, opts as Record<string, unknown>);
   requireYes(opts, "merging accounts");
   const { db } = await openLedger(ctx.configPath);
-  let merged;
-  try {
-    merged = mergeAccountRows(db, parsed.from, parsed.to);
-  } catch (err) {
-    // A cross-ledger merge's message matches neither not-found pattern, so it maps to INVALID.
-    mapNotFoundError(err);
-  }
+  const merged = mergeAccountRows(db, parsed.from, parsed.to);
+  if (!merged.ok) failReason(MERGE_ACCOUNTS_EXIT, merged);
   const result: MergeAccountsResult = {
     from: parsed.from,
     to: parsed.to,
@@ -505,11 +450,8 @@ async function deleteAccount(ctx: Invocation, id: string, opts: { yes?: boolean 
   const { db } = await openLedger(ctx.configPath);
   requireAccount(db, id);
   requireYes(opts, "deleting this account");
-  try {
-    deleteAccountRow(db, id);
-  } catch (err) {
-    mapNotFoundError(err);
-  }
+  const deleted = deleteAccountRow(db, id);
+  if (!deleted.ok) failReason(DELETE_ACCOUNT_EXIT, deleted);
   const result: DeleteAccountResult = { id, deleted: true };
   ctx.out.emitObject(result);
 }
@@ -520,25 +462,30 @@ const ADJUST_ACCOUNT_SPEC = z.object({
   date: str().optional(),
 });
 
+export const ADJUST_ACCOUNT_EXIT: Record<AdjustBalanceFailure, FailureCode> = {
+  not_found: "NOT_FOUND",
+  balancing_account: "INVALID",
+  invalid_transaction: "INVALID",
+};
+
 async function adjustAccount(
   ctx: Invocation,
   id: string,
   opts: Record<string, unknown>,
 ): Promise<void> {
   const parsed = parseInput(ADJUST_ACCOUNT_SPEC, opts);
+  if (parsed.date !== undefined && !ISO_DATE_RE.test(parsed.date)) {
+    fail("USAGE", `--date must be an ISO date (YYYY-MM-DD), got "${parsed.date}"`);
+  }
 
   const { db } = await openLedger(ctx.configPath);
-  let outcome;
-  try {
-    outcome = adjustAccountBalance(db, {
-      accountId: id,
-      targetAmount: parsed.to,
-      reason: parsed.reason,
-      date: parsed.date,
-    });
-  } catch (err) {
-    mapNotFoundError(err);
-  }
+  const outcome = adjustAccountBalance(db, {
+    accountId: id,
+    targetAmount: parsed.to,
+    reason: parsed.reason,
+    date: parsed.date ?? todayIso(),
+  });
+  if (!outcome.ok) failReason(ADJUST_ACCOUNT_EXIT, outcome);
   const result: AdjustAccountResult = { transaction_id: outcome.transactionId, delta: outcome.delta };
   ctx.out.emitObject(result);
 }
@@ -572,6 +519,11 @@ const UPDATE_ACCOUNT_ALIASES = {
   bank_name: ["bank"],
 };
 
+export const UPDATE_ACCOUNT_EXIT: Record<UpdateAccountMetadataFailure, FailureCode> = {
+  not_found: "NOT_FOUND",
+  unreadable_metadata: "INVALID",
+};
+
 // Reward points aren't a ledger unit, so they ride in the metadata blob rather than a stored column.
 function buildAccountPatch(
   parsed: Omit<z.infer<typeof UPDATE_ACCOUNT_SPEC>, "name">,
@@ -598,8 +550,8 @@ async function updateAccount(
 
   const { db } = await openLedger(ctx.configPath);
 
-  // One transaction: a metadata patch that throws must not leave the rename committed.
-  const result = db.transaction((): UpdateAccountResult => {
+  // One transaction: a metadata patch that fails must not leave the rename committed.
+  const result = inTransaction(db, (): UpdateAccountResult => {
     const out: UpdateAccountResult = { id };
 
     if (name !== undefined) {
@@ -610,18 +562,14 @@ async function updateAccount(
     }
 
     if (Object.keys(patch).length > 0) {
-      let metaResult;
-      try {
-        metaResult = updateAccountMetadata(db, id, patch);
-      } catch (err) {
-        mapNotFoundError(err);
-      }
+      const metaResult = updateAccountMetadata(db, id, patch);
+      if (!metaResult.ok) failReason(UPDATE_ACCOUNT_EXIT, metaResult);
       out.before = metaResult.before;
       out.after = metaResult.after;
     }
 
     return out;
-  })();
+  });
 
   ctx.out.emitObject(result);
 }

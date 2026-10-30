@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ValidationError } from "../lib/validate.js";
 import { DBBusyError, DBNotReadyError } from "../db/errors.js";
 import { EXIT } from "../contract/exit.js";
-import { fail, failReason, mapNotFoundError, toCLIError, type FailureCode } from "./errors.js";
+import { fail, failReason, toCLIError, tryBatchItem, type FailureCode } from "./errors.js";
 
 interface ThrownCLIError {
   code: keyof typeof EXIT;
@@ -145,49 +145,30 @@ describe("failReason", () => {
   });
 });
 
-interface NotFoundCase {
-  desc: string;
-  message: string;
-  code: "NOT_FOUND" | "INVALID";
-  exitCode: number;
-}
+describe("tryBatchItem", () => {
+  it("returns the item's value", () => {
+    expect(tryBatchItem(() => 42)).toEqual({ ok: true, value: 42 });
+  });
 
-const NOT_FOUND_CASES: NotFoundCase[] = [
-  {
-    desc: "a message matching /not found/i",
-    message: "account:1 not found",
-    code: "NOT_FOUND",
-    exitCode: 5,
-  },
-  {
-    desc: "a message matching /does not exist/i",
-    message: "merchant does not exist",
-    code: "NOT_FOUND",
-    exitCode: 5,
-  },
-  {
-    desc: "anything else",
-    message: "currency mismatch",
-    code: "INVALID",
-    exitCode: 6,
-  },
-];
+  it("turns an item's own throw into that item's failure", () => {
+    expect(tryBatchItem(() => { throw new Error("disk I/O error"); })).toEqual({
+      ok: false,
+      error: "disk I/O error",
+    });
+    expect(tryBatchItem(() => { throw new ValidationError("bad row"); })).toEqual({
+      ok: false,
+      error: "bad row",
+    });
+  });
 
-describe("mapNotFoundError", () => {
-  it.each(NOT_FOUND_CASES)("throws $code for $desc", ({ message, code, exitCode }) => {
-    const err = new Error(message);
-    let thrown: unknown;
-    try {
-      mapNotFoundError(err);
-    } catch (caught) {
-      thrown = caught;
-    }
-    // toCLIError's identity passthrough doubles as the CLIError instance check.
-    expect(thrown).toBeDefined();
-    expect(toCLIError(thrown)).toBe(thrown);
-    const cliErr = thrown as ThrownCLIError;
-    expect(cliErr.code).toBe(code);
-    expect(EXIT[cliErr.code]).toBe(exitCode);
-    expect(cliErr.message).toBe(message);
+  const LEDGER_FAILURES: { desc: string; thrown: unknown }[] = [
+    { desc: "SQLITE_BUSY", thrown: Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }) },
+    { desc: "a DBNotReadyError", thrown: new DBNotReadyError("not ready") },
+    { desc: "SQLITE_CORRUPT", thrown: Object.assign(new Error("malformed"), { code: "SQLITE_CORRUPT" }) },
+  ];
+
+  // Every later item would hit the same wall, so the batch must stop and exit BUSY or NOT_READY.
+  it.each(LEDGER_FAILURES)("rethrows $desc unchanged", ({ thrown }) => {
+    expect(() => tryBatchItem(() => { throw thrown; })).toThrow(thrown as Error);
   });
 });

@@ -9,8 +9,10 @@ import {
   type AccountType,
   type CreateAccountInput,
 } from "./queries.js";
+import { ensureAccountAncestors } from "./resolve.js";
 import { accountHasTransactions, repointTransactions } from "../transactions/queries.js";
 import { repointMerchantDefaultAccount } from "../merchants/queries.js";
+import { inTransaction } from "../db/transaction.js";
 import { STRUCTURAL_SUFFIX, currencyOf, typeFromId } from "../lib/ids.js";
 
 /** The DDL only GLOB-checks the currency head and the type position; this
@@ -136,8 +138,7 @@ export function validateAccountId(id: string, type: AccountType): AccountResult 
   return ACCOUNT_OK;
 }
 
-/** May open the named parent when it's a ledger root, so callers writing more
- *  than one account wrap the sequence in a transaction. */
+/** A missing ledger-root parent validates as the root `createAccount` opens for it. */
 function validateAccountHierarchy(
   db: Database.Database,
   input: CreateAccountInput,
@@ -156,11 +157,9 @@ function validateAccountHierarchy(
     return ACCOUNT_OK;
   }
 
-  let parent = findAccountById(db, parentId);
-  if (!parent && isLedgerRootId(parentId)) {
-    ensureLedgerRoot(db, currencyOf(parentId), typeFromId(parentId) as AccountType);
-    parent = findAccountById(db, parentId);
-  }
+  const parent =
+    findAccountById(db, parentId) ??
+    (isLedgerRootId(parentId) ? { id: parentId, type: typeFromId(parentId) } : null);
   if (!parent) {
     return refuse("parent_not_found", `Parent account "${parentId}" does not exist; create it first.`);
   }
@@ -181,61 +180,140 @@ function validateAccountHierarchy(
 }
 
 export function createAccount(db: Database.Database, input: CreateAccountInput): AccountResult {
-  const hierarchy = validateAccountHierarchy(db, input, input.parent_id ?? null);
-  if (!hierarchy.ok) return hierarchy;
-  if (!insertAccount(db, input).inserted) {
-    return refuse("account_exists", `Account "${input.id}" already exists.`);
-  }
-  return ACCOUNT_OK;
+  const parentId = input.parent_id ?? null;
+  return inTransaction(db, (): AccountResult => {
+    const hierarchy = validateAccountHierarchy(db, input, parentId);
+    if (!hierarchy.ok) return hierarchy;
+    if (parentId && isLedgerRootId(parentId)) {
+      ensureLedgerRoot(db, currencyOf(parentId), typeFromId(parentId) as AccountType);
+    }
+    if (!insertAccount(db, input).inserted) {
+      return refuse("account_exists", `Account "${input.id}" already exists.`);
+    }
+    return ACCOUNT_OK;
+  });
 }
 
-interface MergeAccountsResult {
-  moved: number;
-  // Deleted, not moved: re-pointing would collapse into a self-transaction (debit == credit).
-  deletedSelfTransactions: number;
-  /** Merchants whose default account followed the survivor. */
-  movedMerchantDefaults: number;
+export interface CreatedAccount {
+  readonly ok: true;
+  id: string;
+  created_parents: string[];
+  account_number_masked?: string | null;
 }
+
+/**
+ * An omitted `parent_id` opens every missing ancestor. A refusal can only come
+ * before the first write: the grammar check precedes the walk, and an id that
+ * already exists has every ancestor already.
+ */
+export function createOneAccount(
+  db: Database.Database,
+  input: CreateAccountInput,
+): CreatedAccount | AccountRefusal {
+  const grammar = validateAccountId(input.id, input.type);
+  if (!grammar.ok) return grammar;
+
+  return inTransaction(db, (): CreatedAccount | AccountRefusal => {
+    let parentId = input.parent_id ?? null;
+    let createdParents: string[] = [];
+    if (input.parent_id === undefined) {
+      const ancestors = ensureAccountAncestors(db, input.id, input.type);
+      if (!ancestors.ok) return ancestors;
+      parentId = ancestors.parentId;
+      createdParents = ancestors.createdParents;
+    }
+
+    const created = createAccount(db, { ...input, parent_id: parentId });
+    if (!created.ok) return created;
+
+    const result: CreatedAccount = { ok: true, id: input.id, created_parents: createdParents };
+    // Echo the stored (post-normalization) value rather than re-deriving it.
+    if (input.account_number_masked !== undefined) {
+      result.account_number_masked = findAccountById(db, input.id)?.account_number_masked ?? null;
+    }
+    return result;
+  });
+}
+
+export type MergeAccountsFailure = "same_account" | "not_found" | "cross_ledger" | "has_children";
+
+type MergeAccountsOutcome =
+  | {
+      readonly ok: true;
+      moved: number;
+      // Deleted, not moved: re-pointing would collapse into a self-transaction (debit == credit).
+      deletedSelfTransactions: number;
+      /** Merchants whose default account followed the survivor. */
+      movedMerchantDefaults: number;
+    }
+  | { readonly ok: false; readonly reason: MergeAccountsFailure; readonly message: string };
 
 export function mergeAccounts(
   db: Database.Database,
   fromId: string,
   toId: string,
-): MergeAccountsResult {
-  if (fromId === toId) throw new Error("Cannot merge an account into itself.");
-  const from = findAccountById(db, fromId);
-  if (!from) throw new Error(`Source account ${fromId} not found.`);
-  const to = findAccountById(db, toId);
-  if (!to) throw new Error(`Destination account ${toId} not found.`);
-  // The trigger only catches this once a row moves; an account with none
-  // would silently merge across ledgers.
-  if (currencyOf(fromId) !== currencyOf(toId)) {
-    throw new Error(
-      `Cannot merge across ledgers: ${fromId} is ${currencyOf(fromId)}, ${toId} is ${currencyOf(toId)}.`,
-    );
+): MergeAccountsOutcome {
+  if (fromId === toId) {
+    return { ok: false, reason: "same_account", message: "Cannot merge an account into itself." };
   }
 
-  const children = countChildAccounts(db, fromId);
-  if (children > 0) {
-    throw new Error(`Account ${fromId} has ${children} child account(s); merge or delete them first.`);
-  }
+  return inTransaction(db, (): MergeAccountsOutcome => {
+    if (!findAccountById(db, fromId)) {
+      return { ok: false, reason: "not_found", message: `Source account ${fromId} not found.` };
+    }
+    if (!findAccountById(db, toId)) {
+      return { ok: false, reason: "not_found", message: `Destination account ${toId} not found.` };
+    }
+    // The trigger only catches this once a row moves; an account with none
+    // would silently merge across ledgers.
+    if (currencyOf(fromId) !== currencyOf(toId)) {
+      return {
+        ok: false,
+        reason: "cross_ledger",
+        message: `Cannot merge across ledgers: ${fromId} is ${currencyOf(fromId)}, ${toId} is ${currencyOf(toId)}.`,
+      };
+    }
+    const children = countChildAccounts(db, fromId);
+    if (children > 0) {
+      return {
+        ok: false,
+        reason: "has_children",
+        message: `Account ${fromId} has ${children} child account(s); merge or delete them first.`,
+      };
+    }
 
-  // Not one transaction: repointTransactions self-wraps and libsql can't nest
-  // transactions. Each step is atomic; a re-run after a crash between steps completes the merge.
-  const { moved, deletedSelfTransactions } = repointTransactions(db, fromId, toId);
-  // Before the delete: the FK would otherwise null these defaults out.
-  const movedMerchantDefaults = repointMerchantDefaultAccount(db, fromId, toId);
-  deleteAccountRow(db, fromId);
-  return { moved, deletedSelfTransactions, movedMerchantDefaults };
+    const { moved, deletedSelfTransactions } = repointTransactions(db, fromId, toId);
+    // Before the delete: the FK would otherwise null these defaults out.
+    const movedMerchantDefaults = repointMerchantDefaultAccount(db, fromId, toId);
+    deleteAccountRow(db, fromId);
+    return { ok: true, moved, deletedSelfTransactions, movedMerchantDefaults };
+  });
 }
 
-export function deleteAccount(db: Database.Database, id: string): void {
-  if (accountHasTransactions(db, id)) {
-    throw new Error(`Account ${id} still has transactions; merge it first.`);
-  }
-  const children = countChildAccounts(db, id);
-  if (children > 0) {
-    throw new Error(`Account ${id} has ${children} child account(s); delete them first.`);
-  }
-  deleteAccountRow(db, id);
+export type DeleteAccountFailure = "has_transactions" | "has_children";
+
+type DeleteAccountOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: DeleteAccountFailure; readonly message: string };
+
+export function deleteAccount(db: Database.Database, id: string): DeleteAccountOutcome {
+  return inTransaction(db, (): DeleteAccountOutcome => {
+    if (accountHasTransactions(db, id)) {
+      return {
+        ok: false,
+        reason: "has_transactions",
+        message: `Account ${id} still has transactions; merge it first.`,
+      };
+    }
+    const children = countChildAccounts(db, id);
+    if (children > 0) {
+      return {
+        ok: false,
+        reason: "has_children",
+        message: `Account ${id} has ${children} child account(s); delete them first.`,
+      };
+    }
+    deleteAccountRow(db, id);
+    return { ok: true };
+  });
 }

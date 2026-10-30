@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { ValidationError } from "../lib/validate.js";
-import { errorMessage } from "../lib/result.js";
+import { errorMessage, type Result } from "../lib/result.js";
 import { DBBusyError, DBNotReadyError, isBusyError, sqliteErrorCode } from "../db/errors.js";
 import type { ExitCode } from "../contract/exit.js";
 
@@ -83,11 +83,18 @@ export function failReason<R extends string>(
   fail(table[failure.reason], failure.message, hint === undefined ? undefined : { hint });
 }
 
-// Matches error message text, for throw sites that use a plain `Error` instead of a typed reason.
-export function mapNotFoundError(err: unknown): never {
-  const message = errorMessage(err);
-  if (/not found|does not exist/i.test(message)) {
-    fail("NOT_FOUND", message);
+// Failures of the ledger itself, not of one item: every later item would hit them too.
+const LEDGER_FAILURES: FailureCode[] = ["BUSY", "NOT_READY"];
+
+/**
+ * A batch item's throw becomes that item's failure, except a ledger failure, which
+ * propagates so the boundary exits BUSY or NOT_READY instead of PARTIAL.
+ */
+export function tryBatchItem<T>(fn: () => T): Result<T> {
+  try {
+    return { ok: true, value: fn() };
+  } catch (thrown) {
+    if (LEDGER_FAILURES.includes(toCLIError(thrown).code)) throw thrown;
+    return { ok: false, error: errorMessage(thrown) };
   }
-  fail("INVALID", message);
 }

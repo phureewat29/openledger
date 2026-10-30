@@ -11,6 +11,7 @@ import { findMerchantById, upsertMerchant } from "../merchants/queries.js";
 import { insertTransaction } from "../transactions/queries.js";
 import {
   createAccount,
+  createOneAccount,
   deleteAccount,
   ensureLedgerRoot,
   ensureStructuralAccount,
@@ -23,7 +24,7 @@ import {
   type AccountResult,
   type StructuralKind,
 } from "./accounts.js";
-import { freshDb, seedAccount } from "../../fixtures/db.js";
+import { failingAccountInsert, failingStatement, freshDb, seedAccount } from "../../fixtures/db.js";
 
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -309,6 +310,7 @@ describe("mergeAccounts", () => {
     });
 
     expect(mergeAccounts(db, "thb:expense:fod", "thb:expense:food")).toEqual({
+      ok: true,
       moved: 1,
       deletedSelfTransactions: 1,
       movedMerchantDefaults: 1,
@@ -322,26 +324,61 @@ describe("mergeAccounts", () => {
     expect(row.debit_account_id).toBe("thb:expense:food");
   });
 
+  it("is one transaction: a failure at the final delete leaves the moved legs where they were", () => {
+    insertTransaction(db, {
+      id: "tx:lunch",
+      date: "2026-05-01",
+      description: "lunch",
+      debit_account_id: "thb:expense:fod",
+      credit_account_id: "thb:asset:cash",
+      amount: 10000,
+    });
+    const broken = failingStatement(db, "DELETE FROM accounts");
+
+    expect(() => mergeAccounts(broken, "thb:expense:fod", "thb:expense:food")).toThrow(/disk I\/O/);
+    expect(findAccountById(db, "thb:expense:fod")).not.toBeNull();
+    const row = db
+      .prepare(`SELECT debit_account_id FROM transactions WHERE id = 'tx:lunch'`)
+      .get() as { debit_account_id: string };
+    expect(row.debit_account_id).toBe("thb:expense:fod");
+  });
+
   it("refuses a cross-ledger merge even when nothing would move", () => {
     seedAccount(db, { id: "usd:expense:food" });
     // No transactions: the cross-ledger trigger would never fire without this explicit guard.
-    expect(() => mergeAccounts(db, "thb:expense:food", "usd:expense:food")).toThrow(
-      /Cannot merge across ledgers/,
-    );
+    expect(mergeAccounts(db, "thb:expense:food", "usd:expense:food")).toEqual({
+      ok: false,
+      reason: "cross_ledger",
+      message: "Cannot merge across ledgers: thb:expense:food is THB, usd:expense:food is USD.",
+    });
     expect(findAccountById(db, "thb:expense:food")).toBeTruthy();
   });
 
   it("refuses a source that still has children", () => {
     seedAccount(db, { id: "thb:expense:food:dining" });
-    expect(() => mergeAccounts(db, "thb:expense:food", "thb:expense:fod")).toThrow(
-      /has 1 child account/,
-    );
+    expect(mergeAccounts(db, "thb:expense:food", "thb:expense:fod")).toEqual({
+      ok: false,
+      reason: "has_children",
+      message: "Account thb:expense:food has 1 child account(s); merge or delete them first.",
+    });
   });
 
   it("refuses a self-merge and unknown accounts", () => {
-    expect(() => mergeAccounts(db, "thb:expense:food", "thb:expense:food")).toThrow(/into itself/);
-    expect(() => mergeAccounts(db, "thb:expense:nope", "thb:expense:food")).toThrow(/not found/);
-    expect(() => mergeAccounts(db, "thb:expense:food", "thb:expense:nope")).toThrow(/not found/);
+    expect(mergeAccounts(db, "thb:expense:food", "thb:expense:food")).toEqual({
+      ok: false,
+      reason: "same_account",
+      message: "Cannot merge an account into itself.",
+    });
+    expect(mergeAccounts(db, "thb:expense:nope", "thb:expense:food")).toEqual({
+      ok: false,
+      reason: "not_found",
+      message: "Source account thb:expense:nope not found.",
+    });
+    expect(mergeAccounts(db, "thb:expense:food", "thb:expense:nope")).toEqual({
+      ok: false,
+      reason: "not_found",
+      message: "Destination account thb:expense:nope not found.",
+    });
   });
 });
 
@@ -355,7 +392,7 @@ describe("deleteAccount", () => {
   });
 
   it("deletes an account nothing references", () => {
-    deleteAccount(db, "thb:expense:food");
+    expect(deleteAccount(db, "thb:expense:food")).toEqual({ ok: true });
     expect(findAccountById(db, "thb:expense:food")).toBeNull();
   });
 
@@ -367,12 +404,20 @@ describe("deleteAccount", () => {
       credit_account_id: "thb:asset:cash",
       amount: 10000,
     });
-    expect(() => deleteAccount(db, "thb:expense:food")).toThrow(/still has transactions/);
+    expect(deleteAccount(db, "thb:expense:food")).toEqual({
+      ok: false,
+      reason: "has_transactions",
+      message: "Account thb:expense:food still has transactions; merge it first.",
+    });
   });
 
   it("refuses while it has children", () => {
     seedAccount(db, { id: "thb:expense:food:dining" });
-    expect(() => deleteAccount(db, "thb:expense:food")).toThrow(/child account/);
+    expect(deleteAccount(db, "thb:expense:food")).toEqual({
+      ok: false,
+      reason: "has_children",
+      message: "Account thb:expense:food has 1 child account(s); delete them first.",
+    });
   });
 
   it("nulls out a merchant default pointed at the deleted account (FK ON DELETE SET NULL)", () => {
@@ -385,5 +430,45 @@ describe("deleteAccount", () => {
 
     expect(findAccountById(db, "thb:expense:food")).toBeNull();
     expect(findMerchantById(db, merchant.id)!.default_account_id).toBeNull();
+  });
+});
+
+describe("createOneAccount", () => {
+  let db: Database.Database;
+  beforeEach(() => {
+    db = freshDb();
+  });
+
+  it("opens every missing ancestor when no parent is named, root to leaf", () => {
+    expect(createOneAccount(db, { id: "thb:asset:bank:kbank", name: "KBank", type: "asset" })).toEqual({
+      ok: true,
+      id: "thb:asset:bank:kbank",
+      created_parents: ["thb:asset", "thb:asset:bank"],
+    });
+    expect(findAccountById(db, "thb:asset:bank")!.name).toBe("Bank");
+  });
+
+  it("lets a broken write escape instead of reporting it as a refusal", () => {
+    // The account INSERT fails the way a full disk would; every other statement still works.
+    const broken = failingAccountInsert(db, "thb:asset:bank");
+
+    expect(() =>
+      createOneAccount(broken, { id: "thb:asset:bank", name: "KBank Savings", type: "asset" }),
+    ).toThrow(/disk I\/O/);
+
+    // The whole chain is one transaction: the ledger root it opened must not outlive the leaf.
+    expect(findAccountById(db, "thb:asset:bank")).toBeNull();
+    expect(findAccountById(db, "thb:asset")).toBeNull();
+  });
+
+  it("still reports a taken id as data, not as a throw", () => {
+    const first = createOneAccount(db, { id: "thb:asset:bank", name: "KBank", type: "asset" });
+    expect(first).toMatchObject({ ok: true, id: "thb:asset:bank" });
+
+    expect(createOneAccount(db, { id: "thb:asset:bank", name: "KBank", type: "asset" })).toEqual({
+      ok: false,
+      reason: "account_exists",
+      message: expect.any(String),
+    });
   });
 });

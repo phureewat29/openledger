@@ -2,6 +2,7 @@ import type Database from "libsql";
 import { parseJsonOrNull } from "../lib/json.js";
 import { normalizeMaskedAccountNumber } from "../lib/masked.js";
 import { buildPatch, type PatchField } from "../lib/patch.js";
+import { inTransaction } from "../db/transaction.js";
 
 export const ACCOUNT_TYPES = ["asset", "liability", "income", "expense", "equity"] as const;
 
@@ -157,10 +158,11 @@ export function renameAccount(db: Database.Database, id: string, name: string): 
   return db.prepare(`UPDATE accounts SET name = ? WHERE id = ?`).run(name, id).changes;
 }
 
-interface UpdateAccountMetadataResult {
-  before: Record<string, unknown>;
-  after: Record<string, unknown>;
-}
+export type UpdateAccountMetadataFailure = "not_found" | "unreadable_metadata";
+
+type UpdateAccountMetadataOutcome =
+  | { ok: true; before: Record<string, unknown>; after: Record<string, unknown> }
+  | { ok: false; reason: UpdateAccountMetadataFailure; message: string };
 
 const ACCOUNT_PATCH: Record<string, PatchField> = {
   due_day: {},
@@ -178,33 +180,39 @@ export function updateAccountMetadata(
   db: Database.Database,
   id: string,
   patch: UpdateAccountMetadataPatch,
-): UpdateAccountMetadataResult {
-  const current = findAccountById(db, id);
-  if (!current) throw new Error(`Account "${id}" not found.`);
+): UpdateAccountMetadataOutcome {
+  return inTransaction(db, (): UpdateAccountMetadataOutcome => {
+    const current = findAccountById(db, id);
+    if (!current) return { ok: false, reason: "not_found", message: `Account "${id}" not found.` };
 
-  const { sets, params, before, after } = buildPatch(ACCOUNT_PATCH, current, patch);
+    const { sets, params, before, after } = buildPatch(ACCOUNT_PATCH, current, patch);
 
-  if (patch.metadata !== undefined) {
-    // A corrupt blob must error, not be silently overwritten with {}.
-    let existing: Record<string, unknown> = {};
-    if (current.metadata_json != null) {
-      const parsed = parseJsonOrNull(current.metadata_json);
-      if (parsed == null || typeof parsed !== "object") {
-        throw new Error(`Account "${id}" has unreadable metadata_json; refusing to overwrite it.`);
+    if (patch.metadata !== undefined) {
+      // A corrupt blob must error, not be silently overwritten with {}.
+      let existing: Record<string, unknown> = {};
+      if (current.metadata_json != null) {
+        const parsed = parseJsonOrNull(current.metadata_json);
+        if (parsed == null || typeof parsed !== "object") {
+          return {
+            ok: false,
+            reason: "unreadable_metadata",
+            message: `Account "${id}" has unreadable metadata_json; refusing to overwrite it.`,
+          };
+        }
+        existing = parsed as Record<string, unknown>;
       }
-      existing = parsed as Record<string, unknown>;
+      const merged = { ...existing, ...patch.metadata };
+      sets.push("metadata_json = ?");
+      params.push(JSON.stringify(merged));
+      before.metadata = existing;
+      after.metadata = merged;
     }
-    const merged = { ...existing, ...patch.metadata };
-    sets.push("metadata_json = ?");
-    params.push(JSON.stringify(merged));
-    before.metadata = existing;
-    after.metadata = merged;
-  }
 
-  if (sets.length === 0) return { before, after };
-  params.push(id);
-  db.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).run(...params);
-  return { before, after };
+    if (sets.length === 0) return { ok: true, before, after };
+    params.push(id);
+    db.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+    return { ok: true, before, after };
+  });
 }
 
 /** Deletes the row alone; transaction/child guards are the caller's (src/accounts/accounts.ts). */
