@@ -139,17 +139,6 @@ export type PrepareOutcome =
 
 export type PrepareSuccess = Extract<PrepareOutcome, { ok: true }>;
 
-function replaceFileRow(
-  db: Database.Database,
-  cacheDir: string,
-  priorId: string,
-  source: LoadedSource,
-  fileId: string,
-): void {
-  replaceFile(db, priorId, pendingRow(source, fileId));
-  cleanCache(cacheDir, priorId);
-}
-
 type UnlockedBytes =
   | { ok: true; bytes: Buffer }
   | {
@@ -312,6 +301,15 @@ export async function prepareFile(
     sourcePath: source.path,
   };
   const written = WRITE_ARTIFACTS[extracted.value.kind](extracted.value as never, target);
-  if (prior) replaceFileRow(db, cfg.cacheDir, prior.id, source, fileId);
+  if (!prior) return written;
+
+  // A failed swap leaves no row pointing at the new artifacts, so done/fail/drop could never purge them.
+  try {
+    replaceFile(db, prior.id, pendingRow(source, fileId));
+  } catch (err) {
+    cleanCache(cfg.cacheDir, fileId);
+    throw err;
+  }
+  cleanCache(cfg.cacheDir, prior.id);
   return written;
 }

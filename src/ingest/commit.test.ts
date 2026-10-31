@@ -14,7 +14,7 @@ import {
   type RawTransactionInput,
 } from "./commit.js";
 import { noiseTokens } from "../datasets/datasets.js";
-import { failingAccountInsert, freshDb } from "../../fixtures/db.js";
+import { failingAccountInsert, failingStatement, freshDb } from "../../fixtures/db.js";
 
 function seedAccountsAndFile(db: Database.Database): void {
   db.prepare(
@@ -125,6 +125,40 @@ describe("commitTransaction", () => {
     expect(countTransactions(db)).toBe(0);
     expect(findAccountById(db, "thb:expense:uncategorized")).toBeNull();
     expect(countQuestions(db)).toBe(0);
+  });
+
+  it("is one transaction: a throw after the insert leaves none of the row behind", () => {
+    // The uncategorized question is the row's last write; failing it must also undo the
+    // placeholder account and the transaction written before it.
+    const broken = failingStatement(db, "INSERT INTO questions");
+    expect(() =>
+      commitTransaction(
+        broken,
+        CTX,
+        raw({ debit_account_id: "thb:expense:uncategorized", row_index: 31 }),
+      ),
+    ).toThrow(/disk I\/O/);
+
+    expect(countTransactions(db)).toBe(0);
+    expect(findAccountById(db, "thb:expense:uncategorized")).toBeNull();
+  });
+
+  it("is one transaction for a compound row too: a later leg's throw undoes the earlier legs", () => {
+    const broken = failingStatement(db, "INSERT INTO questions");
+    expect(() =>
+      commitLinkedTransactions(
+        broken,
+        CTX,
+        { date: "2026-05-01", description: "Split", row_index: 32, source_page: 1 },
+        [
+          { debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 10 },
+          { debit_account_id: "thb:expense:uncategorized", credit_account_id: "thb:asset:cash", amount: 5 },
+        ],
+      ),
+    ).toThrow(/disk I\/O/);
+
+    expect(countTransactions(db)).toBe(0);
+    expect(findAccountById(db, "thb:expense:uncategorized")).toBeNull();
   });
 
   it("raises an uncategorized question when a leaf-only hint falls back to expense:uncategorized", () => {

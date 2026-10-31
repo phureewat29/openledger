@@ -15,14 +15,13 @@ import type {
   CommitStandaloneResult,
   CommitSummary,
 } from "../contract/ingest.js";
-import type { Invocation } from "../cli/output.js";
-import { fail } from "../cli/errors.js";
+import type { Invocation, Output } from "../cli/output.js";
+import { fail, tryBatchItem } from "../cli/errors.js";
 import { asRecord, readStdinBatch } from "../cli/input.js";
 import { openLedger } from "../config/cli.js";
 import { noiseTokens } from "../datasets/datasets.js";
 import type { ExitCode } from "../contract/exit.js";
 import { newBatchId } from "../lib/ids.js";
-import { errorMessage } from "../lib/result.js";
 import { findFileById } from "../files/queries.js";
 import { countTransactionsBySourceFile } from "../transactions/queries.js";
 import { countQuestions } from "../questions/queries.js";
@@ -194,7 +193,7 @@ function commitStandaloneRow(
   };
 }
 
-interface BatchContext {
+export interface BatchContext {
   batchId: string;
   /** The `--file` id every row inherits unless it names its own. */
   file?: string;
@@ -239,6 +238,34 @@ function commitRow(
   return commitStandaloneRow(db, counters, row);
 }
 
+/**
+ * Writes each row's result as it lands. A row with no source address posts under a
+ * random id, so when a ledger failure aborts the batch, the rows already written
+ * are the caller's only record of what posted.
+ */
+export function commitRows(
+  out: Output,
+  db: Database.Database,
+  batch: BatchContext,
+  items: unknown[],
+): Counters {
+  const counters: Counters = { posted: 0, duplicates: 0, failed: 0, raisedTotal: 0 };
+  for (let index = 0; index < items.length; index++) {
+    const committed = tryBatchItem(() => commitRow(db, counters, batch, items[index], index));
+    // Reason stays `unexpected_error` (not `dirty_input`): unknown whether the row or the database was at fault.
+    const result: CommitResult = committed.ok
+      ? committed.value
+      : failOutcome(counters, index, {
+          reason: "unexpected_error",
+          message: committed.error,
+          raisedQuestions: 0,
+        });
+    if (out.mode.json) out.emit(result);
+    else out.emitObject(result);
+  }
+  return counters;
+}
+
 export async function commitIngest(
   ctx: Invocation,
   opts: CommitIngestOpts,
@@ -260,9 +287,6 @@ export async function commitIngest(
 
   // Must be non-null: raise() no-ops when batchId is null, silently dropping every question.
   const batchId = newBatchId();
-  const counters: Counters = { posted: 0, duplicates: 0, failed: 0, raisedTotal: 0 };
-  const results: CommitResult[] = [];
-
   const batch: BatchContext = {
     batchId,
     file: opts.file,
@@ -270,21 +294,8 @@ export async function commitIngest(
     noise: noiseTokens(config.country),
   };
 
-  for (let index = 0; index < items.length; index++) {
-    try {
-      results.push(commitRow(db, counters, batch, items[index], index));
-    } catch (err) {
-      // A throw belongs to its own row, not the batch. Reason stays `unexpected_error`
-      // (not `dirty_input`): unknown whether the row or the database was at fault.
-      results.push(
-        failOutcome(counters, index, {
-          reason: "unexpected_error",
-          message: errorMessage(err),
-          raisedQuestions: 0,
-        }),
-      );
-    }
-  }
+  const { out } = ctx;
+  const counters = commitRows(out, db, batch, items);
 
   // Callers act on the summary, so an unfinished file has to be visible there.
   const pendingHint =
@@ -302,9 +313,7 @@ export async function commitIngest(
       }
     : null;
 
-  const { out } = ctx;
   if (out.mode.json) {
-    for (const r of results) out.emit(r);
     const summary: Omit<CommitSummary, "type"> = {
       batch_id: batchId,
       posted: counters.posted,
@@ -316,7 +325,6 @@ export async function commitIngest(
     };
     out.emitSummary(summary);
   } else {
-    for (const r of results) out.emitObject(r);
     out.write(
       `\nbatch ${batchId}: ${counters.posted} posted, ${counters.duplicates} duplicate(s), ${counters.failed} failed, ${counters.raisedTotal} question(s) raised\n`,
     );

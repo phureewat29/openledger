@@ -41,6 +41,7 @@ import {
   type TransactionSide,
 } from "./questions.js";
 import type { CommitMerchant, CommitSide } from "../contract/ingest.js";
+import { inTransaction } from "../db/transaction.js";
 
 export function withNoiseTokens(
   merchant: MerchantUpsertInput | null | undefined,
@@ -561,8 +562,17 @@ function reportStoredRow(
   return { sides, merchant: committedMerchant(prepared, () => stored?.merchant_id ?? null) };
 }
 
-/** A duplicate re-commit is a no-op: no questions raised, no balance change. */
+/** A duplicate re-commit is a no-op: no questions raised, no balance change. One
+ *  transaction, so a throw part-way leaves none of the row's writes behind. */
 export function commitTransaction(
+  db: Database.Database,
+  ctx: TransactionCommitContext,
+  input: RawTransactionInput,
+): TransactionCommitOutcome {
+  return inTransaction(db, () => commitOneRow(db, ctx, input));
+}
+
+function commitOneRow(
   db: Database.Database,
   ctx: TransactionCommitContext,
   input: RawTransactionInput,
@@ -650,6 +660,15 @@ function mergeHeaderLeg(
 
 /** Atomic under one group_id: every leg is prepared first; if any fails, nothing is inserted. */
 export function commitLinkedTransactions(
+  db: Database.Database,
+  ctx: TransactionCommitContext,
+  header: LinkedTransactionHeader,
+  legs: LinkedTransactionLeg[],
+): LinkedTransactionsOutcome {
+  return inTransaction(db, () => commitLinkedRow(db, ctx, header, legs));
+}
+
+function commitLinkedRow(
   db: Database.Database,
   ctx: TransactionCommitContext,
   header: LinkedTransactionHeader,

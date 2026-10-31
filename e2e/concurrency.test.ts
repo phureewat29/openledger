@@ -115,9 +115,8 @@ describe("a write against a ledger another process holds", () => {
 
   afterAll(() => sandbox.cleanup());
 
-  // `notes add` writes straight through. A write inside a deferred db.transaction (accounts
-  // create) reports the same BUSY, but from the lock upgrade, where SQLite skips the busy
-  // handler, so it never waits and would prove nothing about the timeout.
+  // `notes add` takes the lock at BEGIN IMMEDIATE, where SQLite's busy handler runs; a deferred
+  // transaction would fail its later lock upgrade at once and prove nothing about the timeout.
   it("waits out its busy timeout, then exits BUSY (8) with a re-run hint", async () => {
     const holder = spawnLockHolder(sandbox.dbPath);
     await whenHolding(holder);
