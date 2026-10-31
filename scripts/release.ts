@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import semver from "semver";
 
@@ -7,8 +7,9 @@ function fail(reason: string): never {
   process.exit(1);
 }
 
-function run(command: string): void {
-  execSync(command, { stdio: "inherit" });
+// argv arrays, not a shell string, so a version argument can never become a command.
+function run(file: string, args: string[]): void {
+  execFileSync(file, args, { stdio: "inherit" });
 }
 
 const current: string = JSON.parse(readFileSync("package.json", "utf8")).version;
@@ -22,13 +23,12 @@ if (!semver.gt(next, current)) fail(`${next} is not newer than the current ${cur
 
 console.log(`release: ${current} -> ${next}`);
 
-run("npm run build"); // Fail fast: a broken build must abort before the version changes.
-run(`npm version ${next} --no-git-tag-version`);
-const pluginManifest = JSON.parse(readFileSync("plugin.json", "utf8"));
-pluginManifest.version = next;
+run("npm", ["run", "build"]); // Fail fast: a broken build must abort before the version changes.
+run("npm", ["version", next, "--no-git-tag-version"]);
+const pluginManifest = { ...JSON.parse(readFileSync("plugin.json", "utf8")), version: next };
 writeFileSync("plugin.json", `${JSON.stringify(pluginManifest, null, 2)}\n`);
-run("git add package.json package-lock.json plugin.json");
-run(`git commit -m "release: ${next}"`);
-run("npm link");
+run("git", ["add", "package.json", "package-lock.json", "plugin.json"]);
+run("git", ["commit", "-m", `release: ${next}`]);
+run("npm", ["link"]);
 
 console.log(`release: published ${next}`);
