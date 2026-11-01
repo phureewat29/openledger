@@ -1,5 +1,6 @@
 import { escapeRegExp, uniqBy } from "es-toolkit";
 import { readContext } from "../config/context.js";
+import { homeRelative, relativizeHomeIn } from "../lib/path.js";
 
 /** Where redaction terms come from: the configured user plus their context.md. */
 export interface RedactionSource {
@@ -68,50 +69,40 @@ function extractSectionLines(context: string, heading: string): string[] {
 }
 
 function nameFrom(rule: SectionRule, line: string, userName: string): string | null {
-  for (const pattern of rule.patterns) {
-    const match = line.match(pattern);
-    if (!match) continue;
-    let name = match[1].trim();
-    if (rule.stripParen) name = name.replace(/\s*\(.*\)/, "").trim();
-    if (!name) return null;
-    if (rule.skipIfUser && name.toLowerCase() === userName.toLowerCase()) return null;
-    // "user" must never become a redaction term: it seeds context.md's Family
-    // section, and would rewrite the literal word elsewhere (e.g. file paths).
-    if (name.toLowerCase() === "user") return null;
-    return name;
-  }
-  return null;
+  const match = rule.patterns.map((pattern) => line.match(pattern)).find((m) => m !== null);
+  if (!match) return null;
+  const captured = match[1].trim();
+  const name = rule.stripParen ? captured.replace(/\s*\(.*\)/, "").trim() : captured;
+  if (!name) return null;
+  if (rule.skipIfUser && name.toLowerCase() === userName.toLowerCase()) return null;
+  // "user" must never become a redaction term: it seeds context.md's Family
+  // section, and would rewrite the literal word elsewhere (e.g. file paths).
+  if (name.toLowerCase() === "user") return null;
+  return name;
 }
 
-function buildRedactions(source: RedactionSource): RedactionEntry[] {
-  const { userName } = source;
+function userEntries(userName: string): RedactionEntry[] {
+  if (!userName || userName === "User") return [];
   const parts = userName.split(/\s+/);
-  const userEntries: RedactionEntry[] =
-    userName && userName !== "User"
-      ? [
-          { real: userName, token: "[USER]" },
-          ...(parts.length > 1
-            ? [
-                { real: parts[0], token: "[USER_FIRST]" },
-                { real: parts[parts.length - 1], token: "[USER_LAST]" },
-              ]
-            : []),
-        ]
-      : [];
+  if (parts.length === 1) return [{ real: userName, token: "[USER]" }];
+  return [
+    { real: userName, token: "[USER]" },
+    { real: parts[0], token: "[USER_FIRST]" },
+    { real: parts[parts.length - 1], token: "[USER_LAST]" },
+  ];
+}
 
-  const context = readContext(source.contextPath);
-  const contextEntries: RedactionEntry[] = context
-    ? SECTION_RULES.flatMap((rule) =>
-        extractSectionLines(context, rule.heading)
-          .filter((line) => !(rule.skipIfUser && line.toLowerCase() === userName.toLowerCase()))
-          .flatMap((line) => {
-            const name = nameFrom(rule, line, userName);
-            return name ? [{ real: name, token: rule.token }] : [];
-          }),
-      )
-    : [];
+function buildRedactions(userName: string, context: string): RedactionEntry[] {
+  const contextEntries = SECTION_RULES.flatMap((rule) =>
+    extractSectionLines(context, rule.heading)
+      .filter((line) => !(rule.skipIfUser && line.toLowerCase() === userName.toLowerCase()))
+      .flatMap((line) => {
+        const name = nameFrom(rule, line, userName);
+        return name ? [{ real: name, token: rule.token }] : [];
+      }),
+  );
 
-  const candidates = [...userEntries, ...contextEntries].map(({ real, token }) => ({
+  const candidates = [...userEntries(userName), ...contextEntries].map(({ real, token }) => ({
     real: real.trim(),
     token,
   }));
@@ -121,27 +112,29 @@ function buildRedactions(source: RedactionSource): RedactionEntry[] {
   ).sort((a, b) => b.real.length - a.real.length);
 }
 
-/** Returns a closure, not a `redact(text)`: the context read and pattern compile happen once, then amortize over every field of a payload. */
-function createRedactor(source: RedactionSource): (text: string) => string {
-  const redactions = buildRedactions(source);
+/** `context` is context.md's text; a closure, so the patterns compile once per payload rather than once per field. */
+export function createRedactor(userName: string, context: string): (text: string) => string {
   // ASCII lookarounds, not \b: Thai text has no spaces, so a Unicode letter
   // boundary would lose recall; this still blocks "User" matching inside "Users".
-  const patterns = redactions.map(
+  const termPatterns = buildRedactions(userName, context).map(
     ({ real, token }): [RegExp, string] => [
       new RegExp("(?<![A-Za-z0-9_])" + escapeRegExp(real) + "(?![A-Za-z0-9_])", "gu"),
       token,
     ],
   );
-  return (text: string): string => {
-    let result = text;
-    for (const [pattern, token] of patterns) {
-      result = result.replace(pattern, token);
-    }
-    for (const [pattern, replacement] of NUMERIC_PII_PATTERNS) {
-      result = result.replace(pattern, replacement);
-    }
-    return result;
-  };
+  const patterns = [...termPatterns, ...NUMERIC_PII_PATTERNS];
+  return (text: string): string =>
+    patterns.reduce((result, [pattern, token]) => result.replace(pattern, token), text);
+}
+
+// Fails closed: running without context.md's terms would print the very names it lists.
+function requireContext(contextPath: string): string {
+  const context = readContext(contextPath);
+  if (context.ok) return context.value;
+  const shown = homeRelative(contextPath);
+  throw new Error(
+    `cannot read ${shown} (${relativizeHomeIn(context.error, contextPath)}), so redaction cannot run: fix the file, or pass --no-redact`,
+  );
 }
 
 /** Redacts a string value only when its key is in the per-command `fields`
@@ -153,12 +146,12 @@ export function applyRedaction<T>(
   source: RedactionSource,
 ): T {
   if (!enabled) return data;
-  const redactor = createRedactor(source);
+  const redact = createRedactor(source.userName, requireContext(source.contextPath));
   const allow = new Set(fields);
 
   const walk = (value: unknown, key: string | undefined): unknown => {
     if (typeof value === "string") {
-      return key !== undefined && allow.has(key) ? redactor(value) : value;
+      return key !== undefined && allow.has(key) ? redact(value) : value;
     }
     if (Array.isArray(value)) {
       return value.map((item) => walk(item, key));

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
-import { expandHome, homeRelative } from "./path.js";
+import { expandHome, homeRelative, relativizeHomeIn } from "./path.js";
 
 describe("expandHome / homeRelative", () => {
   it("round-trips: what homeRelative prints, expandHome accepts back", () => {
@@ -24,4 +24,11 @@ describe("expandHome / homeRelative", () => {
       expect(expandHome("~\\x")).toBe("~\\x");
     },
   );
+
+  it("relativizes every occurrence of the path inside prose", () => {
+    const abs = resolve(homedir(), "ledger", "db.sqlite");
+    const shown = homeRelative(abs);
+    expect(relativizeHomeIn(`open ${abs}: ${abs} is locked`, abs)).toBe(`open ${shown}: ${shown} is locked`);
+    expect(relativizeHomeIn("disk I/O error", abs)).toBe("disk I/O error");
+  });
 });

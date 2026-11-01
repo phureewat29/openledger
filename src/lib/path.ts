@@ -29,3 +29,8 @@ export function homeRelative(p: string): string {
   const prefix = homedir() + sep;
   return fold(abs).startsWith(fold(prefix)) ? "~" + sep + abs.slice(prefix.length) : p;
 }
+
+/** Error prose names the paths it failed on; this swaps each occurrence of `path` for its `homeRelative` form. */
+export function relativizeHomeIn(text: string, path: string): string {
+  return text.replaceAll(path, homeRelative(path));
+}

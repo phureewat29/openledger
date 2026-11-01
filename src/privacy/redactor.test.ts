@@ -1,38 +1,24 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { resolve } from "node:path";
-import { applyRedaction, type RedactionSource } from "./redactor.js";
+import { describe, it, expect } from "vitest";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { applyRedaction, createRedactor, type RedactionSource } from "./redactor.js";
 
-let dir: string;
-let SOURCE: RedactionSource;
-
-beforeAll(() => {
-  dir = mkdtempSync(resolve(tmpdir(), "oled-redactor-"));
-  const contextPath = resolve(dir, "context.md");
-  writeFileSync(
-    contextPath,
-    `## Family
+const CONTEXT = `## Family
 - Partner: Corgi
 - User
 
 ## Income
 - 80,000 THB/month from Zentry Thailand Co.
-`,
-  );
-  SOURCE = { userName: "Alpaca Beagle", contextPath };
-});
+`;
 
-afterAll(() => {
-  rmSync(dir, { recursive: true, force: true });
-});
+const redact = createRedactor("Alpaca Beagle", CONTEXT);
 
-// createRedactor is private; exercised here through applyRedaction, round-tripping a single allowlisted field.
-function redact(text: string): string {
-  return applyRedaction({ text }, true, ["text"], SOURCE).text;
-}
+const HERE = fileURLToPath(new URL(".", import.meta.url));
 
-describe("applyRedaction (masking patterns)", () => {
+// No context.md at this path: allowlisting is exercised with the user's name and numeric PII alone.
+const SOURCE: RedactionSource = { userName: "Alpaca Beagle", contextPath: join(HERE, "no-context.md") };
+
+describe("createRedactor (masking patterns)", () => {
   it("redacts user full name", () => {
     expect(redact("Alpaca Beagle sent 1,000 baht")).toBe("[USER] sent 1,000 baht");
   });
@@ -130,14 +116,23 @@ describe("applyRedaction (field allowlisting)", () => {
     expect(out.memo).toBe("[PHONE]");
   });
 
-  it("reads sections from a CRLF context.md (Windows line endings)", () => {
-    const contextPath = resolve(dir, "context-crlf.md");
-    writeFileSync(
-      contextPath,
-      "## Family\r\n- Partner: Corgi\r\n\r\n## Income\r\n- 80,000 THB/month from Zentry Thailand Co.\r\n",
+  it("redacts the user's name with no context.md at all", () => {
+    expect(applyRedaction({ text: "Alpaca Beagle" }, true, ["text"], SOURCE).text).toBe("[USER]");
+  });
+});
+
+describe("applyRedaction (fail closed)", () => {
+  // A directory at the path is the portable stand-in for EACCES: it fails even as root.
+  const unreadable: RedactionSource = { userName: "Alpaca Beagle", contextPath: HERE };
+
+  it("refuses to run when context.md exists but cannot be read, naming the file and the way out", () => {
+    expect(() => applyRedaction({ text: "Corgi" }, true, ["text"], unreadable)).toThrow(
+      /cannot read .*so redaction cannot run: fix the file, or pass --no-redact/,
     );
-    const source = { userName: "Alpaca Beagle", contextPath };
-    const out = applyRedaction({ text: "Corgi paid Zentry Thailand Co." }, true, ["text"], source);
-    expect(out.text).toBe("[PARTNER] paid [EMPLOYER]");
+  });
+
+  it("never reads context.md when redaction is off", () => {
+    const data = { text: "Corgi" };
+    expect(applyRedaction(data, false, ["text"], unreadable)).toBe(data);
   });
 });
