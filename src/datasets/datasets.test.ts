@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   availableCountries,
-  countryFileSchema,
+  institutionsFileSchema,
   findCountryDefaults,
   institutionsDataset,
+  isDatasetName,
   listDatasets,
   noiseTokens,
   readDataset,
@@ -36,19 +37,19 @@ describe("institutions dataset", () => {
   });
 
   it("validates a country file's shape, rejecting an unknown kind or a missing field", () => {
-    const ok = countryFileSchema.safeParse({
+    const ok = institutionsFileSchema.safeParse({
       country: "XX",
       institutions: [{ code: "ACME", label: "Acme Bank", kind: "bank" }],
     });
     expect(ok.success).toBe(true);
 
-    const badKind = countryFileSchema.safeParse({
+    const badKind = institutionsFileSchema.safeParse({
       country: "XX",
       institutions: [{ code: "ACME", label: "Acme", kind: "not_a_kind" }],
     });
     expect(badKind.success).toBe(false);
 
-    const missingLabel = countryFileSchema.safeParse({
+    const missingLabel = institutionsFileSchema.safeParse({
       country: "XX",
       institutions: [{ code: "ACME", kind: "bank" }],
     });
@@ -56,7 +57,7 @@ describe("institutions dataset", () => {
   });
 
   it("flattens to no rows when a country file omits the institutions key", () => {
-    const parsed = countryFileSchema.parse({ country: "XX" });
+    const parsed = institutionsFileSchema.parse({ country: "XX" });
     expect(institutionsDataset.flatten(parsed)).toEqual([]);
   });
 });
@@ -127,7 +128,10 @@ describe("generic dataset surface", () => {
     expect(defaults).toEqual([{ country: "US", locale: "en-US", currency: "USD" }]);
   });
 
-  it("readDataset throws on an unknown dataset name", () => {
-    expect(() => readDataset("bogus")).toThrow(/unknown dataset/);
+  it("isDatasetName tells a registered dataset from an unknown name", () => {
+    expect(isDatasetName("institutions")).toBe(true);
+    expect(isDatasetName("bogus")).toBe(false);
+    // Own keys only: an inherited property name is not a dataset.
+    expect(isDatasetName("toString")).toBe(false);
   });
 });

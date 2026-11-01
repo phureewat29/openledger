@@ -7,6 +7,8 @@ import {
   readDataset,
   listDatasetNames,
   datasetHasKinds,
+  isDatasetName,
+  type DatasetName,
   type DatasetSummary,
 } from "./datasets.js";
 import type { DatasetRow } from "./loader.js";
@@ -36,14 +38,11 @@ const NOISE_COLUMNS: Column<DatasetRow>[] = [
   { header: "Country", value: (r) => r.country },
 ];
 
-// Falls back to the generic country column so an unmapped dataset still renders something.
-const COLUMNS_BY_DATASET: Record<string, Column<DatasetRow>[]> = {
+const COLUMNS_BY_DATASET: Record<DatasetName, Column<DatasetRow>[]> = {
   institutions: INSTITUTION_COLUMNS,
   defaults: DEFAULTS_COLUMNS,
   noise: NOISE_COLUMNS,
 };
-
-const GENERIC_COLUMNS: Column<DatasetRow>[] = [{ header: "Country", value: (r) => r.country }];
 
 interface ListDatasetsOpts {
   country?: string;
@@ -62,15 +61,16 @@ function listDatasets(ctx: Invocation, name: string | undefined, opts: ListDatas
     return;
   }
 
-  const names = listDatasetNames();
-  if (!names.includes(name)) {
-    fail("NOT_FOUND", `unknown dataset "${name}"`, { hint: `known datasets: ${names.join(", ")}` });
+  if (!isDatasetName(name)) {
+    fail("NOT_FOUND", `unknown dataset "${name}"`, {
+      hint: `known datasets: ${listDatasetNames().join(", ")}`,
+    });
   }
   if (opts.kind && !datasetHasKinds(name)) {
     fail("USAGE", `dataset "${name}" has no kinds; drop --kind`);
   }
   const rows = readDataset(name, { country: opts.country, kind: opts.kind });
-  ctx.out.emitList(rows, COLUMNS_BY_DATASET[name] ?? GENERIC_COLUMNS);
+  ctx.out.emitList(rows, COLUMNS_BY_DATASET[name]);
   const summary: Omit<DatasetsListSummary, "type"> = { returned: rows.length };
   ctx.out.emitSummary(summary);
 }

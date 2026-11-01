@@ -22,13 +22,13 @@ const institutionSchema = z.object({
   notes: z.string().optional(),
 });
 
-export const countryFileSchema = z.object({
+export const institutionsFileSchema = z.object({
   country: z.string(),
   institutions: z.array(institutionSchema).optional(),
 });
 
-export const institutionsDataset: DatasetDefinition<z.infer<typeof countryFileSchema>> = {
-  schema: countryFileSchema,
+export const institutionsDataset: DatasetDefinition<z.infer<typeof institutionsFileSchema>> = {
+  schema: institutionsFileSchema,
   flatten: (file) => file.institutions ?? [],
   sortKey: (row) => String(row.code ?? ""),
   kinds: INSTITUTION_KINDS,
@@ -91,45 +91,52 @@ export function noiseTokens(country: string): readonly string[] {
 }
 
 // `any` only erases each entry's own concrete `DatasetDefinition<...>` file shape, which the registry doesn't need.
-const REGISTRY: Record<string, DatasetDefinition<any>> = {
+const REGISTRY = {
   institutions: institutionsDataset,
   defaults: defaultsDataset,
   noise: noiseDataset,
-};
+} satisfies Record<string, DatasetDefinition<any>>;
 
-export function listDatasetNames(): string[] {
-  return Object.keys(REGISTRY);
+export type DatasetName = keyof typeof REGISTRY;
+
+function definition(name: DatasetName): DatasetDefinition<any> {
+  return REGISTRY[name];
+}
+
+export function isDatasetName(name: string): name is DatasetName {
+  return Object.hasOwn(REGISTRY, name);
+}
+
+export function listDatasetNames(): DatasetName[] {
+  return Object.keys(REGISTRY) as DatasetName[];
 }
 
 /** Drives the CLI `--kind` guard. */
-export function datasetHasKinds(name: string): boolean {
-  return !!REGISTRY[name]?.kinds;
+export function datasetHasKinds(name: DatasetName): boolean {
+  return !!definition(name).kinds;
 }
 
 export interface DatasetSummary {
-  name: string;
+  name: DatasetName;
   countries: string[];
   rows: number;
 }
 
 export function listDatasets(): DatasetSummary[] {
-  return Object.entries(REGISTRY).map(([name, def]) => {
-    const rows = loadDatasetRows(def);
+  return listDatasetNames().map((name) => {
+    const rows = loadDatasetRows(definition(name));
     const countries = uniq(rows.map((r) => r.country)).sort();
     return { name, countries, rows: rows.length };
   });
 }
 
-/** Throws on an unknown name: the CLI validates the name first for a clean error. */
 export function readDataset(
-  name: string,
+  name: DatasetName,
   filter: { country?: string; kind?: string } = {},
 ): DatasetRow[] {
-  const def = REGISTRY[name];
-  if (!def) throw new Error(`unknown dataset "${name}"`);
   const country = filter.country?.toUpperCase();
   const { kind } = filter;
-  return loadDatasetRows(def).filter(
+  return loadDatasetRows(definition(name)).filter(
     (r) => (!country || r.country === country) && (!kind || r.kind === kind),
   );
 }
