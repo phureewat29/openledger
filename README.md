@@ -143,16 +143,16 @@ OpenLedger reads one JSON config file per run and nothing else: no environment v
 
 ### Config Properties
 
-Each property is set with an `oled config` flag and read back with bare `oled config`. Values resolve file, then default.
+Each property is set with an `oled config` flag and read back with bare `oled config`. Values resolve file, then default. The database, data and cache directories default to the config file's directory. Path flags are stored as absolute paths: a relative one resolves against the directory you run the command from, and a hand-edited relative path resolves against the config file's directory. Read commands refuse to run when `context.md` exists but cannot be read, so redaction never silently weakens; pass `--no-redact` to bypass.
 
 | Property | Flag | Meaning | Default |
 | --- | --- | --- | --- |
 | `country` | `--country` | Country whose reference data applies; also seeds locale and currency | `TH` |
 | `displayLocale` | `--locale` | Locale used to format money | from country |
 | `displayCurrency` | `--currency` | Display currency; also seeds that ledger's structural accounts | from country |
-| `dbPath` | `--db` | Database file path | `~/.oled/db.sqlite` |
-| `dataDir` | `--data-dir` | Statement drop folder | `~/.oled/data` |
-| `cacheDir` | `--cache-dir` | Extracted text and page image cache | `~/.oled/cache` |
+| `dbPath` | `--db` | Database file path | `<config dir>/db.sqlite` |
+| `dataDir` | `--data-dir` | Statement drop folder | `<config dir>/data` |
+| `cacheDir` | `--cache-dir` | Extracted text and page image cache | `<config dir>/cache` |
 | `userName` | `--user-name` | Your name; redaction masks it | `User` |
 | `ocrBaseUrl` | `--ocr-base-url` | Base URL of an OpenAI-compatible OCR endpoint, version segment included; OCR is off until this is set | unset (OCR off) |
 | `ocrModel` | `--ocr-model` | Model id, or any fragment of it; matched case-insensitively against the ids the endpoint serves, so `typhoon-ocr1.5` covers all 2b, 3b variant. | `typhoon-ocr1.5` |
