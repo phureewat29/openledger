@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { isDeepStrictEqual } from "node:util";
-import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import {
   createSandbox,
   makeRunCLI,
   parseNdjson,
   parseOne,
+  stubOpenerEnv,
   type CLIRunner,
   type Sandbox,
 } from "../../fixtures/sandbox.js";
@@ -57,19 +57,6 @@ function assertEveryLineMatches(stdout: string, contract: CommandContract): void
   const lines = parseNdjson(stdout);
   expect(lines.length, "expected at least one NDJSON line").toBeGreaterThan(0);
   for (const line of lines) assertMatchesContract(line, contract);
-}
-
-/** Stubs the platform opener so `open --json` never pops a real file-manager window
- *  under a CI run: a no-op script wins the PATH lookup ahead of the real binary. */
-function stubOpenerEnv(sandbox: Sandbox): NodeJS.ProcessEnv {
-  const bin = join(sandbox.root, "fake-opener-bin");
-  mkdirSync(bin, { recursive: true });
-  for (const name of ["open", "xdg-open"]) {
-    const script = join(bin, name);
-    writeFileSync(script, "#!/bin/sh\nexit 0\n");
-    chmodSync(script, 0o755);
-  }
-  return { ...sandbox.env, PATH: `${bin}:${sandbox.env.PATH ?? ""}` };
 }
 
 describe("contract-core: live --json output matches the published contract", () => {

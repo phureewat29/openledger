@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import Database from "libsql";
 import { migrate } from "../../db/schema.js";
 import { createAccount } from "../../accounts/accounts.js";
@@ -11,6 +12,7 @@ import {
   makeRunCLI,
   parseNdjson,
   parseOne,
+  stubOpenerEnv,
   type CLIRunner,
   type Sandbox,
 } from "../../../fixtures/sandbox.js";
@@ -74,6 +76,48 @@ describe("system CLI integration (subprocess)", () => {
         const cfg = parseOne(show.stdout);
         expect(cfg.dataDir).toBe(setupDataDir);
         expect(cfg.dbPath).toBe(setupDbPath);
+      } finally {
+        isolated.cleanup();
+      }
+    },
+    30000,
+  );
+
+  it(
+    "status and doctor name an unopenable ledger home-relative, never by the account's own path",
+    async () => {
+      const isolated = createSandbox("oled-system-unopenable-it-");
+      try {
+        const run = makeRunCLI(isolated);
+        expect((await run(["config", "--init", "--json"])).code).toBe(0);
+        writeFileSync(isolated.dbPath, Buffer.from("not a sqlite file"));
+
+        const [status, doctor] = await Promise.all([run(["status", "--json"]), run(["doctor", "--json"])]);
+        const report = parseOne(status.stdout);
+        expect(report.db.reachable).toBe(false);
+        expect(report.db.error).toContain("~/.oled/db.sqlite");
+        const dbOpen = parseOne(doctor.stdout).checks.find((c: { name: string }) => c.name === "db_open");
+        expect(dbOpen.ok).toBe(false);
+        expect(dbOpen.detail).toContain("~/.oled/db.sqlite");
+        for (const { stdout } of [status, doctor]) expect(stdout).not.toContain(isolated.home);
+      } finally {
+        isolated.cleanup();
+      }
+    },
+    30000,
+  );
+
+  it(
+    "open recreates a missing data dir owner-only (0700), as config --init creates it",
+    async () => {
+      const isolated = createSandbox("oled-system-open-it-");
+      try {
+        const dataDir = join(isolated.root, "statements");
+        writeConfig(isolated, { dataDir });
+        const res = await makeRunCLI(isolated)(["open", "--json"], { env: stubOpenerEnv(isolated) });
+        expect(res.code, res.stderr).toBe(0);
+        expect(parseOne(res.stdout).path).toBe(dataDir);
+        expect(statSync(dataDir).mode & 0o777).toBe(0o700);
       } finally {
         isolated.cleanup();
       }

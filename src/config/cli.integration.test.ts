@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   createSandbox,
   makeRunCLI,
@@ -51,6 +52,52 @@ describe("config --currency (subprocess)", () => {
     expect(error.message).toBe("--currency must be a 3-letter currency code, e.g. THB");
     // Persisting it would abort every later converge on `us:expense:uncategorized`, an id the CHECK rejects.
     expect(existsSync(sandbox.configPath)).toBe(false);
+  }, 30000);
+});
+
+describe("config --locale (subprocess)", () => {
+  it("refuses a tag Intl cannot format with, before anything is persisted", async () => {
+    const { stderr, code } = await runCLI(["config", "--init", "--locale", "xx_!!", "--json"]);
+    expect(code).toBe(2);
+
+    const { error } = JSON.parse(stderr.trim());
+    expect(error.code).toBe("E_USAGE");
+    expect(error.message).toBe("--locale must be a BCP 47 locale, e.g. th-TH");
+    // Persisting it would make every later `oled status` on a terminal throw while formatting money.
+    expect(existsSync(sandbox.configPath)).toBe(false);
+  }, 30000);
+});
+
+describe("relative path flags (subprocess)", () => {
+  it("persist absolute, resolved from the invoking cwd, so another cwd reaches the same ledger", async () => {
+    const isolated = createSandbox("oled-config-relative-it-");
+    try {
+      const run = makeRunCLI(isolated);
+      const work = join(isolated.root, "work");
+      mkdirSync(work);
+      const init = await run(
+        ["config", "--init", "--db", "ledger.sqlite", "--data-dir", "statements", "--cache-dir", "cache", "--json"],
+        { cwd: work },
+      );
+      expect(init.code, init.stderr).toBe(0);
+
+      // The child's cwd is the physical path (macOS tmpdir sits behind a symlink).
+      const base = realpathSync(work);
+      expect(JSON.parse(readFileSync(isolated.configPath, "utf8"))).toMatchObject({
+        dbPath: join(base, "ledger.sqlite"),
+        dataDir: join(base, "statements"),
+        cacheDir: join(base, "cache"),
+      });
+      expect(existsSync(join(base, "ledger.sqlite"))).toBe(true);
+
+      const elsewhere = await run(["status", "--json"], { cwd: isolated.root });
+      expect(elsewhere.code).toBe(0);
+      expect(parseOne(elsewhere.stdout).db.reachable).toBe(true);
+      // The old bug: a relative path re-resolved here and silently opened a fresh, empty ledger.
+      expect(existsSync(join(isolated.root, "ledger.sqlite"))).toBe(false);
+    } finally {
+      isolated.cleanup();
+    }
   }, 30000);
 });
 
@@ -133,6 +180,35 @@ describe("the config-file gate (subprocess)", () => {
     }
   }, 30000);
 
+  it("two profiles initialized without --db each keep their own ledger beside their config", async () => {
+    const isolated = createSandbox("oled-config-profiles-it-");
+    try {
+      const run = makeRunCLI(isolated);
+      const dbs: string[] = [];
+      for (const name of ["p1", "p2"]) {
+        const dir = join(isolated.root, name);
+        const init = await run(["config", join(dir, "conf.json"), "--init", "--json"]);
+        expect(init.code, init.stderr).toBe(0);
+        const shown = parseOne(init.stdout);
+        expect(shown.dbPath).toBe(join(dir, "db.sqlite"));
+        expect(shown.dataDir).toBe(join(dir, "data"));
+        expect(shown.cacheDir).toBe(join(dir, "cache"));
+        expect(existsSync(join(dir, "db.sqlite"))).toBe(true);
+        dbs.push(shown.dbPath as string);
+      }
+      expect(new Set(dbs).size).toBe(2);
+      // The default profile keeps its historical locations.
+      const def = await run(["config", "--json"]);
+      expect(parseOne(def.stdout)).toMatchObject({
+        dbPath: join(isolated.oledDir, "db.sqlite"),
+        dataDir: join(isolated.oledDir, "data"),
+        cacheDir: join(isolated.oledDir, "cache"),
+      });
+    } finally {
+      isolated.cleanup();
+    }
+  }, 30000);
+
   it("--init refuses a fully initialized setup, and rebuilds a deleted ledger", async () => {
     const isolated = createSandbox("oled-config-reinit-it-");
     try {
@@ -178,6 +254,43 @@ describe("a broken config file (subprocess)", () => {
       expect(JSON.parse(write.stderr.trim()).error.code).toBe("E_NOT_READY");
       // The hand-edited bytes survive untouched.
       expect(readFileSync(isolated.configPath, "utf8")).toBe("not json\n");
+    } finally {
+      isolated.cleanup();
+    }
+  }, 30000);
+});
+
+describe("a malformed config file never echoes its content (subprocess)", () => {
+  it("no surface shows a fragment of the half-typed API key in it", async () => {
+    const isolated = createSandbox("oled-config-leak-it-");
+    try {
+      const run = makeRunCLI(isolated);
+      // Unquoted, so V8's own parse message would quote the bytes around the bad token.
+      writeFileSync(isolated.configPath, '{"ocrApiKey": sk-live-SECRET123}\n');
+
+      const [show, showHuman, status, statusVerbatim, doctor, gated, converge] = await Promise.all([
+        run(["config", "--json"]),
+        run(["config"]),
+        run(["status", "--json"]),
+        run(["status", "--no-redact", "--json"]),
+        run(["doctor", "--json"]),
+        run(["notes", "list", "--json"]),
+        run(["config", "--user-name", "Bob", "--json"]),
+      ]);
+      for (const { stdout, stderr } of [show, showHuman, status, statusVerbatim, doctor, gated, converge]) {
+        expect(stdout + stderr).not.toMatch(/sk-live|SECRET/);
+      }
+
+      expect(parseOne(show.stdout).problem).toBe("it is not valid JSON");
+      expect(parseOne(status.stdout).config_problem).toBe("it is not valid JSON");
+      expect(JSON.parse(gated.stderr.trim()).error.code).toBe("E_NOT_READY");
+      const readable = parseOne(doctor.stdout).checks.find(
+        (c: { name: string }) => c.name === "config_readable",
+      );
+      // Home-relative, like every other path status and doctor print.
+      expect(readable.detail).toBe(
+        "~/.oled/config.json is unusable, so defaults are in use: it is not valid JSON",
+      );
     } finally {
       isolated.cleanup();
     }

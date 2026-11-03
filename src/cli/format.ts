@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { isPlainObject } from "es-toolkit";
 import { EXIT, type ExitCode } from "../contract/exit.js";
 
 // eslint-disable-next-line no-control-regex
@@ -45,6 +46,15 @@ export function renderTable<T>(rows: readonly T[], columns: Column<T>[], color: 
     columns.map((c, i) => pad(r[i], widths[i], c.align)).join("  ").trimEnd(),
   );
   return [header, ...body].join("\n") + "\n";
+}
+
+/** One `key.nested` row per entry of a one-level nested record, in insertion order. */
+export function flattenRows(obj: Record<string, unknown>): [string, string][] {
+  return Object.entries(obj).flatMap(([key, value]): [string, string][] =>
+    isPlainObject(value)
+      ? Object.entries(value).map(([nested, v]): [string, string] => [`${key}.${nested}`, String(v)])
+      : [[key, String(value)]],
+  );
 }
 
 // Human output only (TTY: aligned two-column, piped: tab-separated); the caller owns --json.

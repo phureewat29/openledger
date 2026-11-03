@@ -1,9 +1,9 @@
 /** Lives beside the other fixtures, not in src/, so it never ships in the published package. */
 
-import { execFile } from "node:child_process";
+import { execFile, type ExecFileException } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface Sandbox {
@@ -58,6 +58,16 @@ export function writeConfig(sandbox: Sandbox, values: Record<string, unknown>): 
   writeFileSync(sandbox.configPath, JSON.stringify(values, null, 2) + "\n");
 }
 
+/** A no-op `open`/`xdg-open` first on PATH, so `oled open` never pops a real file-manager window. */
+export function stubOpenerEnv(sandbox: Sandbox): NodeJS.ProcessEnv {
+  const bin = join(sandbox.root, "fake-opener-bin");
+  mkdirSync(bin, { recursive: true });
+  for (const name of ["open", "xdg-open"]) {
+    writeFileSync(join(bin, name), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
+  return { ...sandbox.env, PATH: `${bin}${delimiter}${sandbox.env.PATH ?? ""}` };
+}
+
 /** This file lives in fixtures/, so the repo root is one level up. */
 export const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const cliEntry = resolve(repoRoot, "src", "cli", "index.ts");
@@ -86,6 +96,12 @@ const CLI_COMMAND: Record<CLITarget, { file: string; argv: string[] }> = {
   dist: { file: process.execPath, argv: [distEntry] },
 };
 
+// A spawn failure carries a string code (ENOENT) rather than an exit status; it reads as a generic 1.
+function exitCodeOf(error: ExecFileException | null): number {
+  if (!error) return 0;
+  return typeof error.code === "number" ? error.code : 1;
+}
+
 /** Resolves with the exit code instead of rejecting, since every caller asserts on it. */
 export function makeRunCLI(sandbox: Sandbox, target: CLITarget = "src"): CLIRunner {
   const { file, argv } = CLI_COMMAND[target];
@@ -101,13 +117,7 @@ export function makeRunCLI(sandbox: Sandbox, target: CLITarget = "src"): CLIRunn
           maxBuffer: 10 * 1024 * 1024,
         },
         (error, stdout, stderr) => {
-          const code =
-            error && typeof (error as { code?: unknown }).code === "number"
-              ? (error as { code: number }).code
-              : error
-                ? 1
-                : 0;
-          resolvePromise({ stdout: stdout ?? "", stderr: stderr ?? "", code });
+          resolvePromise({ stdout: stdout ?? "", stderr: stderr ?? "", code: exitCodeOf(error) });
         },
       );
       if (opts.stdin != null) child.stdin?.write(opts.stdin);

@@ -1,15 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_SKILLS_DIR, installSkill, skillMd, SkillPackVersionError } from "./install.js";
+import { DEFAULT_SKILLS_DIR, installSkill, installedVersion, skillMd } from "./install.js";
 import { getVersion } from "../lib/version.js";
 import {
   createSandbox,
@@ -67,16 +60,18 @@ describe("skillMd (checked-in skills/openledger/SKILL.md)", () => {
   });
 });
 
-// macOS tmpdir is a symlink (/var -> /private/var); realpath matches what process.cwd() canonicalizes.
+// For --dir cases, which never resolve against the roots; a stray default install fails loudly here.
+const UNUSED_ROOTS = { cwd: "/nonexistent/oled-cwd", home: "/nonexistent/oled-home" };
+
 describe("installSkill: target resolution", () => {
   it("--dir D is the skills dir itself: the pack lands at D/openledger, nothing appended", () => {
     const dir = tmp("oled-install-dir-");
     try {
-      const target = installSkill({ dir });
+      const target = installSkill({ dir }, UNUSED_ROOTS);
       const skillDir = join(dir, "openledger");
-      expect(target).toMatchObject({ path: skillDir, version: getVersion() });
+      expect(target).toEqual({ ok: true, path: skillDir, version: getVersion() });
       expect(existsSync(join(skillDir, "SKILL.md"))).toBe(true);
-      expect(readFileSync(join(skillDir, "VERSION"), "utf8").trim()).toBe(getVersion());
+      expect(installedVersion(dir)).toBe(getVersion());
       const fm = parseFrontmatter(readFileSync(join(skillDir, "SKILL.md"), "utf8"));
       expect(fm.name).toBe("openledger");
     } finally {
@@ -88,64 +83,85 @@ describe("installSkill: target resolution", () => {
     const base = tmp("oled-install-host-dir-");
     const dir = join(base, ".claude", "skills");
     try {
-      const target = installSkill({ dir });
-      expect(target.path).toBe(join(base, ".claude", "skills", "openledger"));
-      expect(existsSync(join(target.path, "SKILL.md"))).toBe(true);
+      const target = installSkill({ dir }, UNUSED_ROOTS);
+      expect(target).toMatchObject({ ok: true, path: join(base, ".claude", "skills", "openledger") });
+      expect(existsSync(join(dir, "openledger", "SKILL.md"))).toBe(true);
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
   });
 
-  it(`defaults to ${DEFAULT_SKILLS_DIR} under the cwd when no --dir is given`, () => {
-    const cwd = tmp("oled-install-default-");
-    const prevCwd = process.cwd();
+  it("a relative --dir resolves against the cwd it is given", () => {
+    const cwd = tmp("oled-install-relative-");
     try {
-      process.chdir(cwd);
-      const target = installSkill({});
-      expect(realpathSync(target.path)).toBe(
-        realpathSync(join(cwd, ...DEFAULT_SKILLS_DIR.split("/"), "openledger")),
-      );
-      expect(existsSync(join(target.path, "SKILL.md"))).toBe(true);
-      expect(target.version).toBe(getVersion());
+      const target = installSkill({ dir: "skills" }, { cwd, home: cwd });
+      expect(target).toMatchObject({ ok: true, path: join(cwd, "skills", "openledger") });
     } finally {
-      process.chdir(prevCwd);
       rmSync(cwd, { recursive: true, force: true });
     }
   });
 
+  it(`defaults to ${DEFAULT_SKILLS_DIR} under the cwd, or under home with --global`, () => {
+    const cwd = tmp("oled-install-default-cwd-");
+    const home = tmp("oled-install-default-home-");
+    try {
+      const local = installSkill({}, { cwd, home });
+      expect(local).toEqual({
+        ok: true,
+        path: join(cwd, ...DEFAULT_SKILLS_DIR.split("/"), "openledger"),
+        version: getVersion(),
+      });
+      const global = installSkill({ global: true }, { cwd, home });
+      expect(global).toMatchObject({ ok: true, path: join(home, ...DEFAULT_SKILLS_DIR.split("/"), "openledger") });
+      expect(installedVersion(join(home, DEFAULT_SKILLS_DIR))).toBe(getVersion());
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("installSkill: version guard", () => {
   it("is idempotent when re-installed at the same version", () => {
     const dir = tmp("oled-install-idem-");
     try {
-      installSkill({ dir });
-      expect(() => installSkill({ dir })).not.toThrow();
-      expect(readFileSync(join(dir, "openledger", "VERSION"), "utf8").trim()).toBe(getVersion());
+      installSkill({ dir }, UNUSED_ROOTS);
+      expect(installSkill({ dir }, UNUSED_ROOTS)).toMatchObject({ ok: true });
+      expect(installedVersion(dir)).toBe(getVersion());
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("throws SkillPackVersionError on a version clash without --force, succeeds with it", () => {
+  it("refuses a version clash without --force, leaving the pack untouched, and overwrites with it", () => {
     const dir = tmp("oled-install-clash-");
     try {
-      installSkill({ dir });
-      const versionPath = join(dir, "openledger", "VERSION");
-      writeFileSync(versionPath, "0.0.1\n");
+      installSkill({ dir }, UNUSED_ROOTS);
+      writeFileSync(join(dir, "openledger", "VERSION"), "0.0.1\n");
 
-      let err: unknown;
-      try {
-        installSkill({ dir });
-      } catch (e) {
-        err = e;
-      }
-      expect(err).toBeInstanceOf(SkillPackVersionError);
-      expect((err as SkillPackVersionError).installedVersion).toBe("0.0.1");
-      expect((err as SkillPackVersionError).cliVersion).toBe(getVersion());
+      const clash = installSkill({ dir }, UNUSED_ROOTS);
+      expect(clash).toMatchObject({
+        ok: false,
+        reason: "version_mismatch",
+        path: join(dir, "openledger"),
+        installedVersion: "0.0.1",
+        cliVersion: getVersion(),
+      });
+      expect(installedVersion(dir)).toBe("0.0.1");
 
-      expect(() => installSkill({ dir, force: true })).not.toThrow();
-      expect(readFileSync(versionPath, "utf8").trim()).toBe(getVersion());
+      expect(installSkill({ dir, force: true }, UNUSED_ROOTS)).toMatchObject({ ok: true });
+      expect(installedVersion(dir)).toBe(getVersion());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("installedVersion", () => {
+  it("is null for a skills dir with no pack", () => {
+    const dir = tmp("oled-install-none-");
+    try {
+      expect(installedVersion(dir)).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

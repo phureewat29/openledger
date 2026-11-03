@@ -1,11 +1,12 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { createHash } from "crypto";
 import { dirname, resolve } from "path";
-import { homedir } from "os";
+import { isPlainObject, mapValues, pick, pickBy } from "es-toolkit";
 import { DEFAULT_MODEL_ID } from "../extract/cards/index.js";
 import { expandHome } from "../lib/path.js";
 import { decodeUserText } from "../lib/text.js";
 import { chmod600 } from "../lib/perms.js";
+import { tryExecute } from "../lib/result.js";
 
 export interface OpenLedgerConfig {
   country: string;
@@ -38,24 +39,26 @@ export interface LoadedConfig {
   problem: string | null;
 }
 
-function defaultOledDir(): string {
-  return resolve(homedir(), ".oled");
+export interface PathRoots {
+  cwd: string;
+  home: string;
 }
 
-function defaultConfigPath(): string {
-  return resolve(defaultOledDir(), "config.json");
+/** The default config file lives here. */
+function oledDir(home: string): string {
+  return resolve(home, ".oled");
 }
 
 /** Also the persisted-key list: unknown keys on disk are tolerated on read, dropped on next write (`saveConfig` writes only these fields). */
-const CONFIG_FIELDS: Record<keyof OpenLedgerConfig, { default: () => string }> = {
+const CONFIG_FIELDS: Record<keyof OpenLedgerConfig, { default: (configDir: string) => string }> = {
   /** Picks `datasets/<cc>.json`; deliberately not derived from `displayLocale`, which only formats numbers and dates. */
   country: { default: () => "TH" },
   displayLocale: { default: () => "th-TH" },
   /** Resolved value only; no module may hardcode a currency. `config --init` overrides it. */
   displayCurrency: { default: () => "THB" },
-  dbPath: { default: () => resolve(defaultOledDir(), "db.sqlite") },
-  dataDir: { default: () => resolve(defaultOledDir(), "data") },
-  cacheDir: { default: () => resolve(defaultOledDir(), "cache") },
+  dbPath: { default: (configDir) => resolve(configDir, "db.sqlite") },
+  dataDir: { default: (configDir) => resolve(configDir, "data") },
+  cacheDir: { default: (configDir) => resolve(configDir, "cache") },
   userName: { default: () => "User" },
   ocrBaseUrl: { default: () => "" },
   ocrModel: { default: () => DEFAULT_MODEL_ID },
@@ -72,60 +75,68 @@ export function keyFingerprint(key: string): string {
   return `sha256:${createHash("sha256").update(key).digest("hex").slice(0, 8)}`;
 }
 
-/** `null` and arrays parse fine but would break every `file[key]` read below. */
-function isConfigObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** Known keys with string values only: drops `undefined` (so a patch can never
  *  delete a persisted key by accident) and hand-edited non-strings alike. */
 function pickConfigFields(obj: Record<string, unknown>): Partial<OpenLedgerConfig> {
-  const out: Partial<OpenLedgerConfig> = {};
-  for (const key of CONFIG_KEYS) {
-    if (typeof obj[key] === "string") out[key] = obj[key] as string;
-  }
-  return out;
+  return pickBy(pick(obj, CONFIG_KEYS), (value) => typeof value === "string") as Partial<OpenLedgerConfig>;
 }
 
-function readFileValues(configPath: string): {
+// V8's message quotes the input around a bad token, and this file holds ocrApiKey.
+const JSON_POSITION_RE = /at position (\d+)/;
+
+/** A fixed message with at most a line and column; never any of the file's text. */
+function jsonProblem(text: string, parseError: string): string {
+  const position = JSON_POSITION_RE.exec(parseError)?.[1];
+  if (!position) return "it is not valid JSON";
+  const before = text.slice(0, Number(position));
+  const line = before.split("\n").length;
+  const column = before.length - before.lastIndexOf("\n");
+  return `it is not valid JSON at line ${line}, column ${column}`;
+}
+
+interface FileValues {
   fileValues: Partial<OpenLedgerConfig>;
   problem: string | null;
   exists: boolean;
-} {
+}
+
+function unusable(problem: string): FileValues {
+  return { fileValues: {}, problem, exists: true };
+}
+
+function readFileValues(configPath: string): FileValues {
   if (!existsSync(configPath)) return { fileValues: {}, problem: null, exists: false };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(decodeUserText(readFileSync(configPath)));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { fileValues: {}, problem: message, exists: true };
-  }
-  if (!isConfigObject(parsed)) {
-    return { fileValues: {}, problem: "it does not hold a JSON object", exists: true };
-  }
-  return { fileValues: pickConfigFields(parsed), problem: null, exists: true };
+  const text = tryExecute(() => decodeUserText(readFileSync(configPath)));
+  if (!text.ok) return unusable(text.error);
+  const parsed = tryExecute((): unknown => JSON.parse(text.value));
+  if (!parsed.ok) return unusable(jsonProblem(text.value, parsed.error));
+  if (!isPlainObject(parsed.value)) return unusable("it does not hold a JSON object");
+  return { fileValues: pickConfigFields(parsed.value), problem: null, exists: true };
 }
 
 /** Fields naming filesystem locations: `~/x` in any of them must expand, not resolve under the cwd. */
 const PATH_FIELDS = ["dbPath", "dataDir", "cacheDir"] as const;
 
 /** Precedence: file > default. `||`, not `??`, so an empty-string value means unset. */
-function withDefaults(fileValues: Partial<OpenLedgerConfig>): OpenLedgerConfig {
-  const out = {} as OpenLedgerConfig;
-  for (const key of CONFIG_KEYS) {
-    out[key] = fileValues[key] || CONFIG_FIELDS[key].default();
-  }
-  for (const key of PATH_FIELDS) out[key] = expandHome(out[key]);
-  return out;
+function withDefaults(
+  fileValues: Partial<OpenLedgerConfig>,
+  configPath: string,
+): OpenLedgerConfig {
+  // Defaults sit beside the config file, so each profile is its own ledger.
+  const configDir = dirname(configPath);
+  const values = mapValues(CONFIG_FIELDS, (field, key) => fileValues[key] || field.default(configDir));
+  // A hand-edited relative path resolves against the config file's dir, so it names one place from every cwd.
+  const paths = mapValues(pick(values, PATH_FIELDS), (path) => resolve(configDir, expandHome(path)));
+  return { ...values, ...paths };
 }
 
-/** Reads the config file (default: `~/.oled/config.json`). A broken file degrades
+/** Reads the config file (default: `<home>/.oled/config.json`). A broken file degrades
  *  to defaults with `problem` set; the caller decides whether that is fatal. */
-export function loadConfig(configPath?: string): LoadedConfig {
-  const resolved = resolve(expandHome(configPath ?? defaultConfigPath()));
+export function loadConfig(configPath: string | undefined, home: string): LoadedConfig {
+  const resolved = resolve(expandHome(configPath ?? resolve(oledDir(home), "config.json")));
   const { fileValues, problem, exists } = readFileValues(resolved);
   const config: ResolvedConfig = {
-    ...withDefaults(fileValues),
+    ...withDefaults(fileValues, resolved),
     configPath: resolved,
     contextPath: resolve(dirname(resolved), "context.md"),
     exists,
@@ -135,10 +146,16 @@ export function loadConfig(configPath?: string): LoadedConfig {
 
 /** Merges the file's values with the DEFINED entries of `patch`, writes 0600,
  *  and returns the merged values with defaults folded in. No module state. */
-export function saveConfig(configPath: string, patch: Partial<OpenLedgerConfig>): OpenLedgerConfig {
+export function saveConfig(
+  configPath: string,
+  patch: Partial<OpenLedgerConfig>,
+  home: string,
+): OpenLedgerConfig {
   const dir = dirname(configPath);
   // 0700 like the cache dir: this tree holds financial data.
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // Only the default dir is oled's own to tighten; a profile's dir is the caller's, and may be shared.
+  if (dir === oledDir(home) && process.platform !== "win32") chmodSync(dir, 0o700);
 
   // A broken file degrades to {} here; the write below repairs it.
   const { fileValues } = readFileValues(configPath);
@@ -146,5 +163,5 @@ export function saveConfig(configPath: string, patch: Partial<OpenLedgerConfig>)
   writeFileSync(configPath, JSON.stringify(merged, null, 2) + "\n", { mode: 0o600 });
   chmod600(configPath);
 
-  return withDefaults(merged);
+  return withDefaults(merged, configPath);
 }

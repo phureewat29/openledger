@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
+import { homedir } from "os";
 import { uniq } from "es-toolkit";
 import { getNetWorth } from "../../accounts/balances.js";
 import type { LoadedConfig } from "../../config/config.js";
@@ -11,15 +12,12 @@ import { countQuestions } from "../../questions/queries.js";
 import { countTransactions } from "../../transactions/queries.js";
 import { countNewFiles } from "../../files/files.js";
 import { applyRedaction } from "../../privacy/redactor.js";
-import { existsSync } from "fs";
 import { homeRelative } from "../../lib/path.js";
 import { formatAmount, toDecimalTotals } from "../../lib/money.js";
-import { banner, visibleLength, ANSI_RE, formatInt } from "../format.js";
+import { banner, visibleLength, ANSI_RE, formatInt, flattenRows } from "../format.js";
 import { runAction, type Invocation } from "../output.js";
 import { redactionEnabled } from "../input.js";
-import { tryExecute } from "../../lib/result.js";
-import { inspectConfig } from "../../config/cli.js";
-import { openDb } from "../../db/connection.js";
+import { inspectConfig, probeLedger, type LedgerProbe } from "../../config/cli.js";
 import { getVersion } from "../../lib/version.js";
 import { CONTRACT_VERSION } from "../../contract/version.js";
 import type { StatusReport } from "../../contract/status.js";
@@ -29,9 +27,9 @@ const NO_LEDGER = "no ledger yet";
 
 // Exported for tests: lets the default-profile-problem path be pinned directly, without a
 // subprocess or a real ~/.oled to leave a broken file in.
-export async function buildReport(loaded: LoadedConfig): Promise<StatusReport> {
+export function buildReport(loaded: LoadedConfig, ledger: LedgerProbe): StatusReport {
   const cfg = loaded.config;
-  const report: StatusReport = {
+  const base: StatusReport = {
     type: "status",
     contract_version: CONTRACT_VERSION,
     version: getVersion(),
@@ -56,61 +54,61 @@ export async function buildReport(loaded: LoadedConfig): Promise<StatusReport> {
     net_worth: null,
   };
 
-  // openDb() would migrate a missing file into existence, so check existsSync first.
-  if (!existsSync(cfg.dbPath)) {
-    report.db.error = NO_LEDGER;
+  if (ledger.state === "missing") {
     // Nothing is registered without a ledger, so every readable file is new.
-    report.files.new = countNewFiles(null, cfg.dataDir);
-    return report;
+    return {
+      ...base,
+      db: { ...base.db, error: NO_LEDGER },
+      files: { ...base.files, new: countNewFiles(null, cfg.dataDir) },
+    };
   }
-
   // Opening the db is the only reachability check; a failing count query must not read as not-ready.
-  const opened = await tryExecute(() => openDb(cfg.dbPath));
-  if (!opened.ok) {
-    report.db.error = homeRelative(opened.error);
-    return report;
-  }
-  const db = opened.value;
-  report.db.reachable = true;
+  if (ledger.state === "unreachable") return { ...base, db: { ...base.db, error: ledger.error } };
 
-  report.counts = {
-    accounts: countAccounts(db),
-    transactions: countTransactions(db),
-    merchants: countMerchants(db),
-    notes: countNotes(db),
-  };
-  report.files = { new: countNewFiles(db, cfg.dataDir), ...countFiles(db) };
+  const { db } = ledger;
   const open = countQuestions(db);
   const total = countQuestions(db, { includeDeferred: true });
-  report.questions = { open, deferred: Math.max(0, total - open) };
   const worth = getNetWorth(db);
-  report.net_worth = {
-    assets: toDecimalTotals(worth.assets),
-    liabilities: toDecimalTotals(worth.liabilities),
-    net_worth: toDecimalTotals(worth.net_worth),
+  return {
+    ...base,
+    db: { ...base.db, reachable: true },
+    counts: {
+      accounts: countAccounts(db),
+      transactions: countTransactions(db),
+      merchants: countMerchants(db),
+      notes: countNotes(db),
+    },
+    files: { new: countNewFiles(db, cfg.dataDir), ...countFiles(db) },
+    questions: { open, deferred: Math.max(0, total - open) },
+    net_worth: {
+      assets: toDecimalTotals(worth.assets),
+      liabilities: toDecimalTotals(worth.liabilities),
+      net_worth: toDecimalTotals(worth.net_worth),
+    },
   };
-
-  return report;
 }
 
-// Paths are home-relativized facts, not free text; only error prose, user_name, and a
-// broken file's parse message can still carry PII.
+// Paths are home-relativized facts, not free text; only error prose and user_name can still carry PII.
 const STATUS_REDACT_FIELDS = ["error", "user_name", "config_problem"] as const;
 
+interface ShowStatusOpts {
+  redact?: boolean;
+}
+
 // Redaction defaults on, so bare `oled` (no --no-redact flag) masks the same fields `status` does.
-export async function showStatus(ctx: Invocation, opts: { redact?: boolean }): Promise<void> {
-  const loaded = inspectConfig(ctx.configPath);
-  const cfg = loaded.config;
-  let report = await buildReport(loaded);
-  // Decided before redaction: paths and error prose are display strings, not facts to branch on.
-  const ledgerMissing = !report.db.reachable && !existsSync(cfg.dbPath);
-  if (redactionEnabled(opts)) {
-    report = applyRedaction(report, true, STATUS_REDACT_FIELDS, cfg);
-  }
+export async function showStatus(ctx: Invocation, opts: ShowStatusOpts): Promise<void> {
+  const loaded = inspectConfig(ctx.configPath, homedir());
+  const ledger = await probeLedger(loaded.config.dbPath);
+  const report = applyRedaction(
+    buildReport(loaded, ledger),
+    redactionEnabled(opts),
+    STATUS_REDACT_FIELDS,
+    loaded.config,
+  );
   const { out } = ctx;
   out.render({
     json: () => out.emit(report),
-    tty: () => out.write(renderTty(report, out.mode.color, ledgerMissing)),
+    tty: () => out.write(renderTty(report, out.mode.color, ledger.state === "missing")),
     plain: () => out.write(renderPlain(report)),
   });
 }
@@ -150,14 +148,8 @@ function renderPlain(r: StatusReport): string {
       ["questions_deferred", r.questions.deferred],
     );
   }
-  if (r.net_worth) {
-    // One key per currency, never a scalar: different currencies must not be added together.
-    for (const [label, totals] of Object.entries(r.net_worth)) {
-      for (const [currency, amount] of Object.entries(totals)) {
-        lines.push([`${label}.${currency}`, amount]);
-      }
-    }
-  }
+  // One key per currency, never a scalar: different currencies must not be added together.
+  if (r.net_worth) lines.push(...flattenRows(r.net_worth));
   return lines.map(([k, v]) => `${k}\t${v}`).join("\n") + "\n";
 }
 
@@ -213,10 +205,9 @@ export function renderTty(r: StatusReport, color: boolean, ledgerMissing = false
     );
   }
 
-  const fileExtras: string[] = [];
-  if (r.files.new > 0) fileExtras.push(`${r.files.new} new`);
-  if (r.files.pending > 0) fileExtras.push(`${r.files.pending} pending`);
-  if (r.files.failed > 0) fileExtras.push(`${r.files.failed} failed`);
+  const fileExtras = (["new", "pending", "failed"] as const)
+    .filter((state) => r.files[state] > 0)
+    .map((state) => `${r.files[state]} ${state}`);
 
   const pipeline: [string, string][] = [
     [
@@ -249,17 +240,15 @@ function financialRows(
     ...Object.keys(worth.liabilities),
   ]).sort();
 
-  const rows: [string, string][] = [];
-  for (const currency of currencies) {
+  return currencies.flatMap((currency): [string, string][] => {
     const amount = (totals: Record<string, number>): string =>
       formatAmount(totals[currency] ?? 0, currency, locale);
-    rows.push(
+    return [
       [`${currency} net worth`, amount(worth.net_worth)],
       [`${currency} assets`, dim(amount(worth.assets))],
       [`${currency} liabilities`, dim(amount(worth.liabilities))],
-    );
-  }
-  return rows;
+    ];
+  });
 }
 
 function stripBanner(): string {

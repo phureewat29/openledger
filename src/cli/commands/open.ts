@@ -1,6 +1,5 @@
 import { spawn } from "child_process";
-import { existsSync, mkdirSync } from "fs";
-import { resolve } from "path";
+import { mkdirSync } from "fs";
 import chalk from "chalk";
 import type { Command } from "commander";
 import { requireConfig } from "../../config/cli.js";
@@ -29,8 +28,9 @@ function spawnOpener(cmd: string, dataDir: string): Promise<string | undefined> 
 
 // The path is reported even when the opener fails: it is still useful on its own.
 async function openDataDir(ctx: Invocation): Promise<void> {
-  const dataDir = resolve(requireConfig(ctx.configPath).dataDir);
-  if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+  const { dataDir } = requireConfig(ctx.configPath);
+  // 0700 like config --init creates it: the data dir holds the raw statements.
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
   const cmd = openerCommand();
   const spawnError = cmd

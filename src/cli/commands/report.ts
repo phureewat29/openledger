@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { getPeriodTotals, subtractTotals } from "../../accounts/balances.js";
-import { formatKeyValues } from "../format.js";
+import { flattenRows, formatKeyValues } from "../format.js";
 import { openLedger } from "../../config/cli.js";
 import { runAction, type Invocation } from "../output.js";
 import { fail } from "../errors.js";
@@ -42,20 +42,7 @@ async function showReport(ctx: Invocation, opts: ShowReportOpts): Promise<void> 
     ctx.out.emit(result);
     return;
   }
-  const rows: [string, string | number][] = [
-    ["from", result.from],
-    ["to", result.to],
-  ];
-  for (const [label, amounts] of [
-    ["income", result.income],
-    ["expenses", result.expenses],
-    ["net", result.net],
-  ] as const) {
-    for (const [currency, amount] of Object.entries(amounts)) {
-      rows.push([`${label}.${currency}`, amount]);
-    }
-  }
-  ctx.out.write(formatKeyValues(rows, { tty: mode.tty, bold: mode.color }));
+  ctx.out.write(formatKeyValues(flattenRows(result), { tty: mode.tty, bold: mode.color }));
 }
 
 export function registerReport(program: Command): void {

@@ -1,13 +1,8 @@
 import type { Command } from "commander";
+import { homedir } from "os";
 import { runAction, type Invocation } from "../cli/output.js";
 import { fail } from "../cli/errors.js";
-import {
-  DEFAULT_SKILLS_DIR,
-  installSkill,
-  skillMd,
-  SkillPackVersionError,
-  type InstallOptions,
-} from "./install.js";
+import { DEFAULT_SKILLS_DIR, installSkill, skillMd } from "./install.js";
 import type { SetupInstallResult } from "../contract/setup.js";
 
 interface SetupSkillOpts {
@@ -17,7 +12,7 @@ interface SetupSkillOpts {
   print?: boolean;
 }
 
-async function setupSkill(ctx: Invocation, opts: SetupSkillOpts): Promise<void> {
+function setupSkill(ctx: Invocation, opts: SetupSkillOpts): void {
   // --print dumps SKILL.md as raw markdown (not NDJSON) even when --json is set.
   if (opts.print) {
     const md = skillMd();
@@ -27,39 +22,30 @@ async function setupSkill(ctx: Invocation, opts: SetupSkillOpts): Promise<void> 
 
   if (opts.global && opts.dir) {
     fail("USAGE", "--global and --dir are mutually exclusive", {
-      hint: "pass --dir with the exact skills directory, or --global for ~/.agents/skills",
+      hint: `pass --dir with the exact skills directory, or --global for ~/${DEFAULT_SKILLS_DIR}`,
     });
   }
 
-  const installOpts: InstallOptions = {
-    global: opts.global,
-    dir: opts.dir,
-    force: opts.force,
-  };
-
-  let target;
-  try {
-    target = installSkill(installOpts);
-  } catch (err) {
-    if (err instanceof SkillPackVersionError) {
-      fail("INVALID", err.message, {
-        hint: "re-run with --force to overwrite the installed skill pack",
-        details: {
-          installed_version: err.installedVersion,
-          cli_version: err.cliVersion,
-          path: err.path,
-        },
-      });
-    }
-    throw err;
+  const installed = installSkill(opts, { cwd: process.cwd(), home: homedir() });
+  if (!installed.ok) {
+    fail("INVALID", installed.message, {
+      hint: "re-run with --force to overwrite the installed skill pack",
+      details: {
+        installed_version: installed.installedVersion,
+        cli_version: installed.cliVersion,
+        path: installed.path,
+      },
+    });
   }
 
   if (ctx.out.mode.json) {
-    const result: SetupInstallResult = { installed: [target] };
+    const result: SetupInstallResult = {
+      installed: [{ path: installed.path, version: installed.version }],
+    };
     ctx.out.emit(result);
-  } else {
-    ctx.out.write(`${target.path}\t${target.version}\n`);
+    return;
   }
+  ctx.out.write(`${installed.path}\t${installed.version}\n`);
 }
 
 export function registerSetup(program: Command): void {

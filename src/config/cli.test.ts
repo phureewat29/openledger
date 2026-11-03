@@ -62,7 +62,7 @@ describe("requireConfig (unchanged by the assertUsable extraction)", () => {
 describe("inspectConfig: a named --config must still resolve", () => {
   it("fails NOT_READY when the named path does not exist", () => {
     const missing = join(dir, "nope.json");
-    const thrown = thrownBy(() => inspectConfig(missing));
+    const thrown = thrownBy(() => inspectConfig(missing, dir));
     expect(thrown.code).toBe("NOT_READY");
     expect(thrown.message).toBe(`no config file at ${missing}`);
   });
@@ -70,7 +70,7 @@ describe("inspectConfig: a named --config must still resolve", () => {
   it("fails NOT_READY when the named path exists but is unusable", () => {
     const broken = join(dir, "broken.json");
     writeFileSync(broken, "not json\n");
-    const thrown = thrownBy(() => inspectConfig(broken));
+    const thrown = thrownBy(() => inspectConfig(broken, dir));
     expect(thrown.code).toBe("NOT_READY");
     expect(thrown.message).toContain(`config file ${broken} is unusable`);
   });
@@ -78,7 +78,7 @@ describe("inspectConfig: a named --config must still resolve", () => {
   it("returns the resolved config when the named path exists and parses", () => {
     const good = join(dir, "good.json");
     writeFileSync(good, JSON.stringify({ displayCurrency: "USD" }));
-    const loaded = inspectConfig(good);
+    const loaded = inspectConfig(good, dir);
     expect(loaded.problem).toBeNull();
     expect(loaded.config.exists).toBe(true);
     expect(loaded.config.displayCurrency).toBe("USD");
@@ -86,43 +86,19 @@ describe("inspectConfig: a named --config must still resolve", () => {
 });
 
 describe("inspectConfig: no --config stays lenient about the default profile", () => {
-  // loadConfig resolves the default path from homedir(), which reads process.env.HOME on
-  // every call; overriding it for the test body, then restoring it, keeps this off the
-  // real ~/.oled without needing to touch any global state permanently.
-  function withSandboxHome<T>(fn: (home: string) => T): T {
-    const home = mkdtempSync(resolve(tmpdir(), "oled-config-home-"));
-    const originalHome = process.env.HOME;
-    const originalUserProfile = process.env.USERPROFILE;
-    process.env.HOME = home;
-    process.env.USERPROFILE = home;
-    try {
-      return fn(home);
-    } finally {
-      if (originalHome === undefined) delete process.env.HOME;
-      else process.env.HOME = originalHome;
-      if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-      else process.env.USERPROFILE = originalUserProfile;
-      rmSync(home, { recursive: true, force: true });
-    }
-  }
-
   it("with no default file, reports exists:false instead of failing", () => {
-    withSandboxHome(() => {
-      const loaded = inspectConfig(undefined);
-      expect(loaded.config.exists).toBe(false);
-      expect(loaded.problem).toBeNull();
-    });
+    const loaded = inspectConfig(undefined, dir);
+    expect(loaded.config.exists).toBe(false);
+    expect(loaded.problem).toBeNull();
   });
 
   it("with a broken default file, reports the problem instead of failing", () => {
-    withSandboxHome((home) => {
-      const oledDir = join(home, ".oled");
-      mkdirSync(oledDir, { recursive: true });
-      writeFileSync(join(oledDir, "config.json"), "not json\n");
+    const oledDir = join(dir, ".oled");
+    mkdirSync(oledDir, { recursive: true });
+    writeFileSync(join(oledDir, "config.json"), "not json\n");
 
-      const loaded = inspectConfig(undefined);
-      expect(loaded.config.exists).toBe(true);
-      expect(loaded.problem).toBeTruthy();
-    });
+    const loaded = inspectConfig(undefined, dir);
+    expect(loaded.config.exists).toBe(true);
+    expect(loaded.problem).toBe("it is not valid JSON");
   });
 });

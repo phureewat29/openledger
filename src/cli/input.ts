@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { decodeUserText } from "../lib/text.js";
-import { errorMessage } from "../lib/result.js";
+import { tryExecute } from "../lib/result.js";
 import { fail } from "./errors.js";
 
 export function requireYes(opts: { yes?: boolean }, what: string): void {
@@ -27,49 +27,44 @@ async function readStdinToEnd(): Promise<string> {
   return decodeUserText(Buffer.concat(chunks));
 }
 
+function readInputFile(inputPath: string): string {
+  const read = tryExecute(() => decodeUserText(readFileSync(inputPath)));
+  if (!read.ok) {
+    fail("NOT_FOUND", `cannot read --input file: ${read.error}`, {
+      hint: "pass a readable NDJSON (or JSON array) file path",
+    });
+  }
+  return read.value;
+}
+
 // Auto-detects a JSON array (leading `[`) vs NDJSON; row validation is the caller's job.
 export async function readStdinBatch(inputPath?: string): Promise<unknown[]> {
   const from = inputPath ?? "stdin";
-  let source: string;
-  if (inputPath) {
-    try {
-      source = decodeUserText(readFileSync(inputPath));
-    } catch (err) {
-      fail("NOT_FOUND", `cannot read --input file: ${errorMessage(err)}`, {
-        hint: "pass a readable NDJSON (or JSON array) file path",
-      });
-    }
-  } else {
-    source = await readStdinToEnd();
-  }
+  const source = inputPath ? readInputFile(inputPath) : await readStdinToEnd();
   const firstNonWs = source.match(/\S/);
-  if (!firstNonWs)
+  if (!firstNonWs) {
     fail("USAGE", `${from}: no rows`, {
       hint: "pass NDJSON rows via --input <file> or pipe them on stdin",
     });
+  }
 
   if (firstNonWs[0] === "[") {
-    try {
-      return JSON.parse(source) as unknown[];
-    } catch (err) {
-      fail("USAGE", `${from}: invalid JSON array: ${errorMessage(err)}`);
-    }
+    const parsed = tryExecute(() => JSON.parse(source) as unknown[]);
+    if (!parsed.ok) fail("USAGE", `${from}: invalid JSON array: ${parsed.error}`);
+    return parsed.value;
   }
 
-  const out: unknown[] = [];
-  const lines = source.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    try {
-      out.push(JSON.parse(line));
-    } catch (err) {
-      fail("USAGE", `${from}: invalid JSON on line ${i + 1}: ${errorMessage(err)}`, {
-        details: { line: i + 1 },
+  return source.split(/\r?\n/).flatMap((raw, index) => {
+    const line = raw.trim();
+    if (!line) return [];
+    const parsed = tryExecute((): unknown => JSON.parse(line));
+    if (!parsed.ok) {
+      fail("USAGE", `${from}: invalid JSON on line ${index + 1}: ${parsed.error}`, {
+        details: { line: index + 1 },
       });
     }
-  }
-  return out;
+    return [parsed.value];
+  });
 }
 
 export function asRecord(value: unknown): Record<string, unknown> | null {

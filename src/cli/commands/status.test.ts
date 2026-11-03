@@ -87,10 +87,10 @@ describe("renderTty (the only surface that formats money for humans)", () => {
     expect(clean).not.toContain("unusable");
 
     const broken = renderTty(
-      report({ config_problem: "Unexpected token o in JSON at position 1" }),
+      report({ config_problem: "it is not valid JSON at line 1, column 2" }),
       false,
     );
-    expect(broken).toContain("unusable: Unexpected token o in JSON at position 1");
+    expect(broken).toContain("unusable: it is not valid JSON at line 1, column 2");
   });
 });
 
@@ -125,22 +125,29 @@ describe("buildReport: the default profile's own problem", () => {
     };
   }
 
-  it("carries a broken default file's problem into the report without failing", async () => {
+  it("carries a broken default file's problem into the report without failing", () => {
     const loaded: LoadedConfig = {
       config: fixtureConfig(),
       fileValues: {},
       problem: "it does not hold a JSON object",
     };
 
-    const built = await buildReport(loaded);
+    const built = buildReport(loaded, { state: "missing" });
     expect(built.config_problem).toBe("it does not hold a JSON object");
     // A broken file still resolves to defaults, so `configured` reads the same as any other run.
     expect(built.configured).toBe(true);
   });
 
-  it("carries config_problem:null when the file is fine", async () => {
+  it("carries config_problem:null when the file is fine", () => {
     const loaded: LoadedConfig = { config: fixtureConfig(), fileValues: {}, problem: null };
-    const built = await buildReport(loaded);
+    const built = buildReport(loaded, { state: "missing" });
     expect(built.config_problem).toBeNull();
+  });
+
+  it("reports an unreachable ledger's error as given, with no counts", () => {
+    const loaded: LoadedConfig = { config: fixtureConfig(), fileValues: {}, problem: null };
+    const built = buildReport(loaded, { state: "unreachable", error: "Cannot open database at ~/x" });
+    expect(built.db).toEqual({ path: join(dir, "db.sqlite"), reachable: false, error: "Cannot open database at ~/x" });
+    expect(built.counts).toBeNull();
   });
 });

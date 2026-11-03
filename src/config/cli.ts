@@ -1,6 +1,9 @@
 import type { Command } from "commander";
 import type Database from "libsql";
 import { existsSync, mkdirSync } from "fs";
+import { homedir } from "os";
+import { resolve } from "path";
+import { mapValues, pick } from "es-toolkit";
 import { openDb } from "../db/connection.js";
 import { STRUCTURAL_ACCOUNTS, ensureStructuralAccount } from "../accounts/accounts.js";
 import {
@@ -10,18 +13,20 @@ import {
   saveConfig,
   type LoadedConfig,
   type OpenLedgerConfig,
+  type PathRoots,
   type ResolvedConfig,
 } from "./config.js";
-import { expandHome } from "../lib/path.js";
+import { expandHome, relativizeHomeIn } from "../lib/path.js";
+import { tryExecute } from "../lib/result.js";
 import { findCountryDefaults, availableCountries } from "../datasets/datasets.js";
 import { createContextTemplate } from "./context.js";
 import { DEFAULT_MODEL_ID } from "../extract/cards/index.js";
-import { formatKeyValues } from "../cli/format.js";
+import { flattenRows, formatKeyValues } from "../cli/format.js";
 import { runAction, type Invocation, type Output } from "../cli/output.js";
 import { fail } from "../cli/errors.js";
 import * as z from "zod";
 import { parseInput, str, bool } from "../lib/validate.js";
-import type { ConfigShowResult, ConfigConvergeResult } from "../contract/config.js";
+import type { ConfigShowResult, ConfigConvergeResult, ConfigSecretStatus } from "../contract/config.js";
 
 /** Fails NOT_READY on a config that can't back a command: an unusable file, or a path with
  *  nothing at it. Shared by `requireConfig` (always) and `inspectConfig` (only once a
@@ -43,7 +48,7 @@ function assertUsable(loaded: LoadedConfig): ResolvedConfig {
 
 /** For commands that operate on the ledger: no config file, no ledger. */
 export function requireConfig(path: string | undefined): ResolvedConfig {
-  return assertUsable(loadConfig(path));
+  return assertUsable(loadConfig(path, homedir()));
 }
 
 export async function openLedger(
@@ -59,26 +64,39 @@ export async function openLedger(
  * leniently. But a --config the caller actually named must still resolve: otherwise the
  * report would silently describe the default profile's ledger instead of the one asked for.
  */
-export function inspectConfig(path: string | undefined): LoadedConfig {
-  const loaded = loadConfig(path);
+export function inspectConfig(path: string | undefined, home: string): LoadedConfig {
+  const loaded = loadConfig(path, home);
   // An explicit empty path still counts as "named"; only true absence stays lenient.
   if (path !== undefined) assertUsable(loaded);
   return loaded;
 }
 
+export type LedgerProbe =
+  | { state: "missing" }
+  | { state: "unreachable"; error: string }
+  | { state: "open"; db: Database.Database };
+
+/** Opens the ledger only if it exists (`openDb` would create it); the error names the path home-relative. */
+export async function probeLedger(dbPath: string): Promise<LedgerProbe> {
+  if (!existsSync(dbPath)) return { state: "missing" };
+  const opened = await tryExecute(() => openDb(dbPath));
+  if (!opened.ok) {
+    return { state: "unreachable", error: relativizeHomeIn(opened.error, dbPath) };
+  }
+  return { state: "open", db: opened.value };
+}
+
 type SecretKey = (typeof CONFIG_SECRETS)[number];
 
-type RedactedConfig = Omit<OpenLedgerConfig, SecretKey> &
-  Record<SecretKey, { set: boolean; fingerprint?: string }>;
+type RedactedConfig = Omit<OpenLedgerConfig, SecretKey> & Record<SecretKey, ConfigSecretStatus>;
+
+function secretStatus(value: string): ConfigSecretStatus {
+  return value ? { set: true, fingerprint: keyFingerprint(value) } : { set: false };
+}
 
 /** Every CONFIG_SECRETS key surfaces as {set, fingerprint}, never plaintext: config output is safe to paste into shells/logs/bug reports. */
 function redactConfig(cfg: OpenLedgerConfig): RedactedConfig {
-  const redacted = { ...cfg } as Record<string, unknown>;
-  for (const key of CONFIG_SECRETS) {
-    const value = cfg[key];
-    redacted[key] = value ? { set: true, fingerprint: keyFingerprint(value) } : { set: false };
-  }
-  return redacted as RedactedConfig;
+  return { ...cfg, ...mapValues(pick(cfg, CONFIG_SECRETS), secretStatus) };
 }
 
 /** Strips the resolution fields (config path, context path, exists); those render as their own rows. */
@@ -98,20 +116,6 @@ function showPayload(loaded: LoadedConfig): ConfigShowResult {
   };
 }
 
-function flattenRows(obj: Record<string, unknown>): [string, string][] {
-  const rows: [string, string][] = [];
-  for (const [k, v] of Object.entries(obj)) {
-    if (v && typeof v === "object" && !Array.isArray(v)) {
-      for (const [nk, nv] of Object.entries(v as Record<string, unknown>)) {
-        rows.push([`${k}.${nk}`, String(nv)]);
-      }
-    } else {
-      rows.push([k, String(v)]);
-    }
-  }
-  return rows;
-}
-
 function printConfig(out: Output, data: Record<string, unknown>): void {
   if (out.mode.json) {
     out.emit(data);
@@ -124,13 +128,24 @@ function printConfig(out: Output, data: Record<string, unknown>): void {
  *  letters can never become one. */
 const CURRENCY_CODE_RE = /^[a-z]{3}$/i;
 
+// A tag Intl rejects would make every later money format throw; "" stays allowed and means unset.
+function checkLocale(value: string, ctx: z.RefinementCtx): void {
+  if (!value || tryExecute(() => Intl.getCanonicalLocales(value)).ok) return;
+  ctx.addIssue({
+    code: "invalid_format",
+    format: "locale",
+    input: value,
+    message: "must be a BCP 47 locale, e.g. th-TH",
+  });
+}
+
 /** Every flag the `config` action accepts; snake_case so parseInput auto-bridges commander's camelCase opts. */
 const CONVERGE_FLAGS_SPEC = z.object({
   data_dir: str().optional(),
   db: str().optional(),
   cache_dir: str().optional(),
   init: bool().optional(),
-  locale: str().optional(),
+  locale: str().superRefine(checkLocale).optional(),
   // Not str(): must fail USAGE before saveConfig persists a bad code.
   currency: z
     .string()
@@ -155,7 +170,7 @@ type ConvergedConfig = Omit<OpenLedgerConfig, "ocrApiKey"> & { ocrApiKey?: strin
 
 // Precedence: flag > file > default; country is validated first so an unknown
 // name never reaches the file.
-function resolveConvergedConfig(flags: SettingFlags, loaded: LoadedConfig): ConvergedConfig {
+function resolveConvergedConfig(flags: SettingFlags, loaded: LoadedConfig, cwd: string): ConvergedConfig {
   const current = loaded.config;
   const country = flags.country ?? current.country;
   const defaults = findCountryDefaults(country);
@@ -165,13 +180,16 @@ function resolveConvergedConfig(flags: SettingFlags, loaded: LoadedConfig): Conv
     });
   }
   const persisted = loaded.fileValues;
+  // Persisted absolute so the path means the same from every later cwd; `~` is expanded
+  // because Windows shells pass it through literally. "" stays "", which means unset.
+  const pathFlag = (flag: string | undefined, fallback: string): string =>
+    flag === undefined ? fallback : flag && resolve(cwd, expandHome(flag));
 
   return {
     country: defaults.country,
-    // Windows shells pass `~` through literally; unexpanded it would mkdir and persist a `~` dir under the cwd.
-    dataDir: expandHome(flags.data_dir ?? current.dataDir),
-    dbPath: expandHome(flags.db ?? current.dbPath),
-    cacheDir: expandHome(flags.cache_dir ?? current.cacheDir),
+    dataDir: pathFlag(flags.data_dir, current.dataDir),
+    dbPath: pathFlag(flags.db, current.dbPath),
+    cacheDir: pathFlag(flags.cache_dir, current.cacheDir),
     displayLocale: flags.locale || persisted.displayLocale || defaults.locale,
     displayCurrency: flags.currency || persisted.displayCurrency || defaults.currency,
     userName: flags.user_name ?? current.userName,
@@ -187,13 +205,14 @@ async function convergeConfig(
   out: Output,
   flags: SettingFlags,
   loaded: LoadedConfig,
+  roots: PathRoots,
 ): Promise<void> {
-  const converged = resolveConvergedConfig(flags, loaded);
+  const converged = resolveConvergedConfig(flags, loaded, roots.cwd);
   // 0700: the data dir holds the raw statements, the most sensitive files here.
   mkdirSync(converged.dataDir, { recursive: true, mode: 0o700 });
 
   const configPath = loaded.config.configPath;
-  const merged = saveConfig(configPath, converged);
+  const merged = saveConfig(configPath, converged, roots.home);
 
   // After saveConfig, and from the returned values, so the migration lands on the new db path.
   const db = await openDb(merged.dbPath);
@@ -234,7 +253,8 @@ async function configureHarness(
     });
   }
   const flags = parseInput(CONVERGE_FLAGS_SPEC, opts);
-  const loaded = loadConfig(path);
+  const roots: PathRoots = { cwd: process.cwd(), home: homedir() };
+  const loaded = loadConfig(path, roots.home);
   const { init, ...settings } = flags;
   const writing = init || Object.keys(settings).length > 0;
 
@@ -262,7 +282,7 @@ async function configureHarness(
       hint: "drop --init to change settings",
     });
   }
-  await convergeConfig(ctx.out, settings, loaded);
+  await convergeConfig(ctx.out, settings, loaded, roots);
 }
 
 export function registerConfig(program: Command): void {
