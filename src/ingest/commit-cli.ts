@@ -35,6 +35,18 @@ interface CommitIngestOpts {
   input?: string;
 }
 
+// The store trims canonical_name too; validating here turns a malformed merchant into dirty input, not a row crash.
+const MERCHANT_INPUT = json(
+  z.object({
+    canonical_name: z.string().trim().min(1),
+    alias: z.string().optional(),
+    default_account_id: z.string().nullable().optional(),
+  }) satisfies z.ZodType<MerchantUpsertInput>,
+  "a merchant object with a non-empty canonical_name",
+)
+  .nullable()
+  .default(null);
+
 // validateRawTransaction is the validity authority: missing fields default to "" and surface as dirty_input.
 // amount is excluded so its raw type reaches the validator's typeof check, unconverted by num().
 const LINKED_HEADER_SPEC = z.object({
@@ -42,7 +54,7 @@ const LINKED_HEADER_SPEC = z.object({
   description: str().default(""),
   raw_descriptor: str().nullable().default(null),
   source_page: num().nullable().default(null),
-  merchant: json<MerchantUpsertInput>().nullable().default(null),
+  merchant: MERCHANT_INPUT,
   merchant_id: str().nullable().default(null),
   group_id: str().nullable().default(null),
   row_index: num().nullable().default(null),
@@ -62,7 +74,7 @@ const STANDALONE_SPEC = z.object({
   raw_descriptor: str().nullable().default(null),
   source_page: num().nullable().default(null),
   row_index: num().nullable().default(null),
-  merchant: json<MerchantUpsertInput>().nullable().default(null),
+  merchant: MERCHANT_INPUT,
   merchant_id: str().nullable().default(null),
   debit_account_id: str().default(""),
   credit_account_id: str().default(""),

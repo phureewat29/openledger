@@ -64,11 +64,19 @@ describe("validate: coercions", () => {
   });
 
   it("parses JSON strings and passes already-parsed values through", () => {
-    expect(parseInput(z.object({ m: json() }), { m: '{"a":1}' }).m).toEqual({ a: 1 });
-    expect(parseInput(z.object({ m: json() }), { m: { a: 1 } }).m).toEqual({ a: 1 });
-    const bad = safeParse(z.object({ m: json() }), { m: "{bad" });
+    const spec = z.object({ m: json(z.record(z.string(), z.unknown()), "a JSON object") });
+    expect(parseInput(spec, { m: '{"a":1}' }).m).toEqual({ a: 1 });
+    expect(parseInput(spec, { m: { a: 1 } }).m).toEqual({ a: 1 });
+    const bad = safeParse(spec, { m: "{bad" });
     expect(bad.ok).toBe(false);
     expect(bad.ok === false && bad.error).toMatch(/^--m must be valid JSON: /);
+  });
+
+  it("rejects well-formed JSON of the wrong shape with the expected clause", () => {
+    const spec = z.object({ m: json(z.record(z.string(), z.unknown()), "a JSON object") });
+    for (const raw of ['"abc"', "5", "[1,2]", "null"]) {
+      expect(safeParse(spec, { m: raw })).toEqual({ ok: false, error: "--m must be a JSON object" });
+    }
   });
 });
 

@@ -1,5 +1,5 @@
 import * as z from "zod";
-import type { Result } from "./result.js";
+import { ok, tryExecute, type Result } from "./result.js";
 
 /** Thrown by `parseInput`; `src/lib/` can't depend on `src/cli/`, so the CLI layer maps this to its own error/exit-code type. */
 export class ValidationError extends Error {
@@ -43,16 +43,21 @@ export function bool() {
   return z.preprocess(toBooleanInput, z.boolean());
 }
 
-/** A parse failure raises a custom issue carrying the JSON.parse message. */
-export function json<T = unknown>() {
-  return z.unknown().transform((value, ctx): T => {
-    if (typeof value !== "string") return value as T;
-    try {
-      return JSON.parse(value) as T;
-    } catch (err) {
-      ctx.addIssue({ code: "custom", message: (err as Error).message });
+/** A JSON string (or an already-parsed value) checked against `schema`; `expected`
+ *  completes the "<label> must be …" clause when the shape is wrong. */
+export function json<S extends z.ZodType>(schema: S, expected: string) {
+  return z.unknown().transform((value, ctx): z.output<S> => {
+    const parsed = typeof value === "string" ? tryExecute((): unknown => JSON.parse(value)) : ok(value);
+    if (!parsed.ok) {
+      ctx.addIssue({ code: "custom", message: `must be valid JSON: ${parsed.error}` });
       return z.NEVER;
     }
+    const checked = schema.safeParse(parsed.value);
+    if (!checked.success) {
+      ctx.addIssue({ code: "custom", message: `must be ${expected}` });
+      return z.NEVER;
+    }
+    return checked.data;
   });
 }
 
@@ -124,7 +129,7 @@ const EXPECTED_TYPE_LABEL = new Map([
 /** Render one non-missing issue into the pinned `<label> <constraint>` clause,
  *  echoing the raw pre-coercion value in `got "<value>"`. */
 function constraintClause(label: string, issue: Issue, raw: unknown): string {
-  if (issue.code === "custom") return `${label} must be valid JSON: ${issue.message}`;
+  if (issue.code === "custom") return `${label} ${issue.message}`;
   if (issue.code === "invalid_value") {
     return `${label} must be one of ${(issue.values ?? []).join(", ")}, got "${String(raw)}"`;
   }

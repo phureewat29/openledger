@@ -255,6 +255,9 @@ async function showAccount(
   );
 }
 
+// A record, not any JSON: a scalar or array stored here would refuse every later metadata patch.
+const METADATA_INPUT = json(z.record(z.string(), z.unknown()), "a JSON object").optional();
+
 const CREATE_ACCOUNT_SPEC = z.object({
   id: str(),
   name: str(),
@@ -265,7 +268,7 @@ const CREATE_ACCOUNT_SPEC = z.object({
   account_number_masked: str().optional(),
   due_day: int().optional(),
   statement_day: int().optional(),
-  metadata: json<Record<string, unknown>>().optional(),
+  metadata: METADATA_INPUT,
 });
 
 const CREATE_ACCOUNT_ALIASES = {
@@ -510,7 +513,7 @@ const UPDATE_ACCOUNT_SPEC = z.object({
   points_balance: int().optional().nullable(),
   account_number_masked: str().optional().nullable(),
   bank_name: str().optional().nullable(),
-  metadata: json<Record<string, unknown>>().optional(),
+  metadata: METADATA_INPUT,
 });
 
 const UPDATE_ACCOUNT_ALIASES = {

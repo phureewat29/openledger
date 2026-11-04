@@ -23,8 +23,8 @@ describe("z.infer: worked shapes", () => {
     expectTypeOf<z.infer<typeof spec>>().toEqualTypeOf<{ currency: string }>();
   });
 
-  it("json<T> carries its type parameter through optional", () => {
-    const spec = z.object({ metadata: json<Record<string, unknown>>().optional() });
+  it("json(schema) carries the schema output type through optional", () => {
+    const spec = z.object({ metadata: json(z.record(z.string(), z.unknown()), "a JSON object").optional() });
     expectTypeOf<z.infer<typeof spec>>().toEqualTypeOf<{ metadata?: Record<string, unknown> }>();
   });
 });

@@ -10,7 +10,7 @@ describe("z.infer: real call-site type", () => {
       statement_day: int().optional().nullable(),
       account_number_masked: str().optional().nullable(),
       bank_name: str().optional().nullable(),
-      metadata: json<Record<string, unknown>>().optional(),
+      metadata: json(z.record(z.string(), z.unknown()), "a JSON object").optional(),
     });
     expectTypeOf<z.infer<typeof patchSpec>>().toMatchTypeOf<UpdateAccountMetadataPatch>();
   });
