@@ -6,6 +6,9 @@ import {
   type DuplicateTransactionRow,
 } from "./queries.js";
 
+/** One transaction can reach the ledger from two sources a day or two apart (posting vs value date). */
+const TOLERANCE_DAYS = 2;
+
 /** Candidate duplicates share an amount and an account pair. */
 export function bucketDuplicateCandidates(
   rows: DuplicateTransactionRow[],
@@ -14,12 +17,9 @@ export function bucketDuplicateCandidates(
   return Object.values(buckets);
 }
 
-/** Two rows join a component when within `toleranceDays` and not already
- *  sharing a group_id. Components chain transitively. */
-export function proximityComponents(
-  bucket: DuplicateTransactionRow[],
-  toleranceDays: number,
-): DuplicateTransactionRow[][] {
+/** Two rows join a component when within `TOLERANCE_DAYS` and not sharing a group_id
+ *  (a split's legs aren't duplicates). Components chain transitively. */
+export function proximityComponents(bucket: DuplicateTransactionRow[]): DuplicateTransactionRow[][] {
   const n = bucket.length;
   const parent = range(n);
   const find = (x: number): number => {
@@ -30,31 +30,21 @@ export function proximityComponents(
     return x;
   };
   const union = (a: number, b: number): void => {
-    const ra = find(a);
-    const rb = find(b);
-    if (ra !== rb) parent[ra] = rb;
+    parent[find(a)] = find(b);
   };
 
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
       const a = bucket[i];
       const b = bucket[j];
-      if (dayDiff(a.date, b.date) > toleranceDays) continue;
-      if (a.group_id && b.group_id && a.group_id === b.group_id) continue;
+      if (dayDiff(a.date, b.date) > TOLERANCE_DAYS) continue;
+      if (a.group_id && a.group_id === b.group_id) continue;
       union(i, j);
     }
   }
 
-  // Not groupBy: a Record hoists the numeric root keys into ascending order,
-  // while cluster order on the wire must follow first appearance.
-  const comps = new Map<number, DuplicateTransactionRow[]>();
-  bucket.forEach((row, i) => {
-    const root = find(i);
-    const rows = comps.get(root) ?? [];
-    rows.push(row);
-    comps.set(root, rows);
-  });
-  return [...comps.values()];
+  // Prefixed: a Record hoists integer-like keys, and components must keep first-appearance order.
+  return Object.values(groupBy(bucket, (_row, i) => `root:${find(i)}`));
 }
 
 /** Whole-day distance between two ISO dates; +Infinity on unparseable input. */
@@ -65,41 +55,17 @@ export function dayDiff(a: string, b: string): number {
   return Math.abs(Math.round((bDate - aDate) / 86_400_000));
 }
 
-/** Keeps only components of size >= 2; a lone candidate isn't a duplicate. */
+/** A lone candidate isn't a duplicate, so only components of two or more survive. */
 export function clusterDuplicateCandidates(
   rows: DuplicateTransactionRow[],
-  toleranceDays: number,
 ): DuplicateTransactionRow[][] {
-  const groups: DuplicateTransactionRow[][] = [];
-  for (const bucket of bucketDuplicateCandidates(rows)) {
-    if (bucket.length < 2) continue;
-    for (const comp of proximityComponents(bucket, toleranceDays)) {
-      if (comp.length >= 2) groups.push(comp);
-    }
-  }
-  return groups;
+  return bucketDuplicateCandidates(rows)
+    .flatMap((bucket) => proximityComponents(bucket))
+    .filter((component) => component.length >= 2);
 }
 
-interface FindDuplicateTransactionsOptions {
-  /** Day slack when grouping by date. 0 = same-day only. Default 2: the same
-   *  transaction can reach the ledger from two sources dated a day or two
-   *  apart (one by posting, one by value), which same-day-only would miss. */
-  toleranceDays?: number;
-  /** Skip transactions below this amount (minor units). */
-  minAmount?: number;
-}
-
-/**
- * Rows sharing a non-null group_id never match each other (a salary's legs
- * aren't duplicates); returns components of size >= 2.
- */
-export function findDuplicateTransactions(
-  db: Database.Database,
-  opts: FindDuplicateTransactionsOptions = {},
-): DuplicateTransactionRow[][] {
-  const toleranceDays = Math.max(0, Math.floor(opts.toleranceDays ?? 2));
-  const rows = listDuplicateCandidateTransactions(db, { minAmount: opts.minAmount });
-  return clusterDuplicateCandidates(rows, toleranceDays);
+export function findDuplicateTransactions(db: Database.Database): DuplicateTransactionRow[][] {
+  return clusterDuplicateCandidates(listDuplicateCandidateTransactions(db));
 }
 
 /** Voids cross-statement mirrors into the earliest transaction, never deletes:
@@ -112,7 +78,8 @@ export function autoMergeStrictDuplicateTransactions(db: Database.Database): { m
 
 /** One cluster: how many of its rows were voided into the earliest. */
 function autoMergeStrictGroup(db: Database.Database, group: DuplicateTransactionRow[]): number {
-  const sorted = sortBy(group, ["date", "id"]);
+  // Stable: same-day rows keep the candidate query's insertion order.
+  const sorted = sortBy(group, ["date"]);
   const head = sorted[0];
   if (!head.merchant_id || !head.source_file_id) return 0;
 
@@ -123,21 +90,14 @@ function autoMergeStrictGroup(db: Database.Database, group: DuplicateTransaction
   );
   if (new Set(contenders.map((r) => r.source_file_id)).size !== contenders.length) return 0;
 
-  let merged = 0;
-  for (let i = 1; i < sorted.length; i++) {
-    const cand = sorted[i];
-    if (
-      cand.merchant_id === head.merchant_id &&
-      !!cand.source_file_id &&
-      cand.source_file_id !== head.source_file_id &&
-      cand.date === head.date &&
-      cand.amount === head.amount
-    ) {
-      const voided = voidTransactionAsMirror(db, cand.id, head.id);
-      // The bucket key (amount and both accounts) already made these mirrors.
-      if (!voided.ok) throw new Error(voided.message);
-      if (!voided.alreadyVoid) merged++;
-    }
-  }
-  return merged;
+  const mirrors = contenders.slice(1).filter((r) => r.source_file_id);
+  return sumBy(mirrors, (mirror) => voidIntoHead(db, mirror.id, head.id));
+}
+
+/** 1 when this call voided the mirror, 0 when it already was. */
+function voidIntoHead(db: Database.Database, mirrorId: string, headId: string): number {
+  const voided = voidTransactionAsMirror(db, mirrorId, headId);
+  // The bucket key (amount and both accounts) already made these mirrors.
+  if (!voided.ok) throw new Error(voided.message);
+  return voided.alreadyVoid ? 0 : 1;
 }

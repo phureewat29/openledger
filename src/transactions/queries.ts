@@ -1,9 +1,9 @@
 import type Database from "libsql";
-import { chunk } from "es-toolkit";
+import { chunk, groupBy, pick, sumBy } from "es-toolkit";
 import { accountCurrencySQL, accountExists } from "../accounts/queries.js";
 import { upsertMerchant, type MerchantUpsertInput } from "../merchants/queries.js";
 import { buildPatch, type PatchField } from "../lib/patch.js";
-import { STRUCTURAL_SUFFIX, currencyOf, newGroupId, newTransactionId } from "../lib/ids.js";
+import { STRUCTURAL_SUFFIX, currencyOf, newTransactionId } from "../lib/ids.js";
 import { clampLimit, clampOffset } from "../lib/limit.js";
 import { ISO_DATE_RE } from "../lib/date.js";
 import { inTransaction } from "../db/transaction.js";
@@ -87,13 +87,13 @@ export function validateTransactionFields(input: TransactionFields): ValidateTra
   if (!ISO_DATE_RE.test(input.date ?? "")) {
     return invalidTransaction("date must be an ISO date (YYYY-MM-DD).");
   }
-  if (!input.description || !input.description.trim()) {
+  if (!input.description?.trim()) {
     return invalidTransaction("description must not be empty.");
   }
-  if (!input.debit_account_id || !input.debit_account_id.trim()) {
+  if (!input.debit_account_id?.trim()) {
     return invalidTransaction("debit_account_id must not be empty.");
   }
-  if (!input.credit_account_id || !input.credit_account_id.trim()) {
+  if (!input.credit_account_id?.trim()) {
     return invalidTransaction("credit_account_id must not be empty.");
   }
   if (input.debit_account_id === input.credit_account_id) {
@@ -165,25 +165,19 @@ interface InsertLinkedTransactionsResult {
   group_id: string;
 }
 
-/**
- * Insert several transactions sharing one group_id, atomically (any leg's
- * failure rolls back all). group_id: `opts.group_id`, else the first input's, else a fresh `tg:`.
- */
+/** Every leg takes `opts.group_id`; any leg's failure rolls back all of them. */
 export function insertLinkedTransactions(
   db: Database.Database,
   inputs: TransactionInput[],
-  opts: { group_id?: string } = {},
+  opts: { group_id: string },
 ): InsertLinkedTransactionsResult {
   if (inputs.length === 0) {
     throw new Error("insertLinkedTransactions requires at least one transaction.");
   }
-  const groupId =
-    opts.group_id ?? inputs.find((i) => i.group_id)?.group_id ?? newGroupId();
-
   const results = inTransaction(db, () =>
-    inputs.map((input) => insertTransaction(db, { ...input, group_id: groupId })),
+    inputs.map((input) => insertTransaction(db, { ...input, group_id: opts.group_id })),
   );
-  return { results, group_id: groupId };
+  return { results, group_id: opts.group_id };
 }
 
 // Shared by listing and counts so a `--query` filter (reads joined names) matches in both.
@@ -192,9 +186,6 @@ const LIST_FROM = `FROM transactions t
    LEFT JOIN accounts ca ON ca.id = t.credit_account_id
    LEFT JOIN merchants m ON m.id = t.merchant_id`;
 
-/** `currency` reads off the debit account only: the cross-ledger insert
- *  trigger guarantees the credit side matches. Same projection as
- *  `accountCurrencySQL` (accounts.ts). */
 const ROW_SELECT = `SELECT t.id, t.group_id, t.date, t.description, t.merchant_id,
         t.raw_descriptor, t.source_file_id, t.source_page,
         t.debit_account_id, t.credit_account_id, t.amount,
@@ -223,32 +214,29 @@ export interface ListTransactionsOptions {
   ledger?: string;
   from?: string;
   to?: string;
-  /** LIKE over description, raw_descriptor, merchant name, either account name. */
+  /** Literal substring of description, raw_descriptor, merchant name, or either account name. */
   query?: string;
   /** Exact match on the stored minor-unit amount. */
   amount?: number;
   limit?: number;
   /** Page with `offset += returned` while the summary says `has_more`. */
   offset?: number;
-  /** When true, fold rows into per-group_id clusters (NULLs stay standalone). */
-  group?: boolean;
   /** Voided mirrors are hidden by default, so counts agree with balances. */
   includeVoid?: boolean;
 }
 
-export interface TransactionCluster {
-  group_id: string | null;
-  transactions: TransactionRow[];
+type ListFilters = Omit<ListTransactionsOptions, "limit" | "offset">;
+
+const QUERY_COLUMNS = ["t.description", "t.raw_descriptor", "m.canonical_name", "da.name", "ca.name"];
+
+const QUERY_SQL = `(${QUERY_COLUMNS.map((column) => `${column} LIKE ? ESCAPE '\\'`).join(" OR ")})`;
+
+function escapeLike(text: string): string {
+  return text.replace(/[\\%_]/g, "\\$&");
 }
 
-type ListFilters = Pick<
-  ListTransactionsOptions,
-  "account" | "ledger" | "from" | "to" | "query" | "amount" | "includeVoid"
->;
-
-// Shared by listTransactions/countTransactions so a filtered count matches the list.
-// `params` align positionally with the `?` placeholders in `whereSql`.
-function buildListWhere(opts: ListFilters): { whereSql: string; params: unknown[] } {
+// Shared by listTransactions and countTransactions so a filtered count matches the list.
+function buildListWhere(opts: ListFilters): { whereSQL: string; params: unknown[] } {
   const conditions: string[] = [];
   const params: unknown[] = [];
 
@@ -271,19 +259,17 @@ function buildListWhere(opts: ListFilters): { whereSql: string; params: unknown[
     params.push(opts.to);
   }
   if (opts.query) {
-    conditions.push(
-      "(t.description LIKE ? OR t.raw_descriptor LIKE ? OR m.canonical_name LIKE ? OR da.name LIKE ? OR ca.name LIKE ?)",
-    );
-    const like = `%${opts.query}%`;
-    params.push(like, like, like, like, like);
+    const like = `%${escapeLike(opts.query)}%`;
+    conditions.push(QUERY_SQL);
+    params.push(...QUERY_COLUMNS.map(() => like));
   }
   if (opts.amount !== undefined) {
     conditions.push("t.amount = ?");
     params.push(opts.amount);
   }
 
-  const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  return { whereSql, params };
+  const whereSQL = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  return { whereSQL, params };
 }
 
 const DEFAULT_LIST_LIMIT = 50;
@@ -293,47 +279,15 @@ export function clampListLimit(limit?: number): number {
   return clampLimit(limit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
 }
 
-export function listTransactions(
-  db: Database.Database,
-  opts: ListTransactionsOptions & { group: true },
-): TransactionCluster[];
-export function listTransactions(
-  db: Database.Database,
-  opts?: ListTransactionsOptions & { group?: false },
-): TransactionRow[];
+/** Newest date first; same-day rows newest insert first, since random ids can't break that tie stably. */
 export function listTransactions(
   db: Database.Database,
   opts: ListTransactionsOptions = {},
-): TransactionRow[] | TransactionCluster[] {
-  const { whereSql, params } = buildListWhere(opts);
-  const limit = clampListLimit(opts.limit);
-  const offset = clampOffset(opts.offset);
-
-  const rows = db
-    .prepare(`${ROW_SELECT} ${whereSql} ORDER BY t.date DESC, t.id DESC LIMIT ? OFFSET ?`)
-    .all(...params, limit, offset) as TransactionRow[];
-
-  return opts.group ? clusterByGroup(rows) : rows;
-}
-
-/** Preserves incoming order for cluster first-appearance; null `group_id` rows each become their own cluster. */
-function clusterByGroup(rows: TransactionRow[]): TransactionCluster[] {
-  const clusters: TransactionCluster[] = [];
-  const byGroup = new Map<string, TransactionCluster>();
-  for (const row of rows) {
-    if (row.group_id == null) {
-      clusters.push({ group_id: null, transactions: [row] });
-      continue;
-    }
-    let cluster = byGroup.get(row.group_id);
-    if (!cluster) {
-      cluster = { group_id: row.group_id, transactions: [] };
-      byGroup.set(row.group_id, cluster);
-      clusters.push(cluster);
-    }
-    cluster.transactions.push(row);
-  }
-  return clusters;
+): TransactionRow[] {
+  const { whereSQL, params } = buildListWhere(opts);
+  return db
+    .prepare(`${ROW_SELECT} ${whereSQL} ORDER BY t.date DESC, t.rowid DESC LIMIT ? OFFSET ?`)
+    .all(...params, clampListLimit(opts.limit), clampOffset(opts.offset)) as TransactionRow[];
 }
 
 /** Deleting a surviving twin un-voids its mirrors (`void_of` ON DELETE SET NULL). */
@@ -348,15 +302,6 @@ export function deleteTransaction(
     const deleted = db.prepare(`DELETE FROM transactions WHERE id = ?`).run(id).changes > 0;
     return { deleted, unvoided: deleted ? mirrors : 0 };
   });
-}
-
-export interface BulkRecategorizeFilter {
-  /** Recategorize transactions touching this account (either side). */
-  accountId: string;
-}
-
-interface BulkRecategorizeSet {
-  accountId: string;
 }
 
 /** Spot-check sample, not the full id list. */
@@ -381,21 +326,44 @@ type BulkRecategorizeOutcome =
   | ({ ok: true } & BulkRecategorizeResult)
   | { ok: false; reason: RecategorizeFailure; message: string };
 
+interface RecategorizeCandidate {
+  id: string;
+  debit_account_id: string;
+  credit_account_id: string;
+}
+
+type RecategorizeFate = "self_transaction" | "currency_mismatch" | "update";
+
+function recategorizeFate(row: RecategorizeCandidate, from: string, to: string): RecategorizeFate {
+  const other = row.debit_account_id === from ? row.credit_account_id : row.debit_account_id;
+  if (other === to) return "self_transaction";
+  if (currencyOf(other) !== currencyOf(to)) return "currency_mismatch";
+  return "update";
+}
+
+function repointSides(db: Database.Database, from: string, to: string, ids: string[]): number {
+  return db
+    .prepare(
+      `UPDATE transactions
+         SET debit_account_id  = CASE WHEN debit_account_id  = ? THEN ? ELSE debit_account_id  END,
+             credit_account_id = CASE WHEN credit_account_id = ? THEN ? ELSE credit_account_id END
+       WHERE id IN (${ids.map(() => "?").join(",")})`,
+    )
+    .run(from, to, from, to, ...ids).changes;
+}
+
 /**
- * Re-points every matching transaction's `:from` side to `:to`. Rows whose
- * other side already equals `:to` are skipped (would violate the debit<>credit
- * CHECK); rows on another ledger are skipped before the cross-ledger trigger
- * would abort the statement.
+ * Re-points the `filter.accountId` side of every transaction touching it onto
+ * `set.accountId`, skipping the rows the debit<>credit CHECK or the
+ * cross-ledger trigger would abort the statement on.
  */
 export function bulkRecategorize(
   db: Database.Database,
-  filter: BulkRecategorizeFilter,
-  set: BulkRecategorizeSet,
+  filter: { accountId: string },
+  set: { accountId: string },
 ): BulkRecategorizeOutcome {
   const from = filter.accountId;
   const to = set.accountId;
-  if (!from) throw new Error("bulkRecategorize: filter.accountId is required.");
-  if (!to) throw new Error("bulkRecategorize: set.accountId is required.");
   if (from === to) {
     return {
       ok: false,
@@ -404,54 +372,32 @@ export function bulkRecategorize(
     };
   }
 
-  const whereSql = "(t.debit_account_id = ? OR t.credit_account_id = ?)";
-  const params: unknown[] = [from, from];
-
-  const toCurrency = currencyOf(to);
   return inTransaction(db, (): BulkRecategorizeOutcome => {
     if (!accountExists(db, to)) {
       return { ok: false, reason: "not_found", message: `account "${to}" not found` };
     }
-    let affected = 0;
-    let skipped = 0;
-    let skippedCurrency = 0;
     const rows = db
       .prepare(
-        `SELECT t.id, t.debit_account_id, t.credit_account_id FROM transactions t WHERE ${whereSql}`,
+        `SELECT id, debit_account_id, credit_account_id FROM transactions
+          WHERE debit_account_id = ? OR credit_account_id = ?`,
       )
-      .all(...params) as { id: string; debit_account_id: string; credit_account_id: string }[];
+      .all(from, from) as RecategorizeCandidate[];
+    const {
+      self_transaction = [],
+      currency_mismatch = [],
+      update = [],
+    } = groupBy(rows, (row) => recategorizeFate(row, from, to));
 
-    const toUpdate: string[] = [];
-    for (const r of rows) {
-      const other = r.debit_account_id === from ? r.credit_account_id : r.debit_account_id;
-      if (other === to) {
-        skipped++;
-        continue;
-      }
-      if (currencyOf(other) !== toCurrency) {
-        skippedCurrency++;
-        continue;
-      }
-      toUpdate.push(r.id);
-    }
-
-    for (const batch of chunk(toUpdate, RECATEGORIZE_UPDATE_CHUNK_SIZE)) {
-      const placeholders = batch.map(() => "?").join(",");
-      affected += db
-        .prepare(
-          `UPDATE transactions
-             SET debit_account_id  = CASE WHEN debit_account_id  = ? THEN ? ELSE debit_account_id  END,
-                 credit_account_id = CASE WHEN credit_account_id = ? THEN ? ELSE credit_account_id END
-           WHERE id IN (${placeholders})`,
-        )
-        .run(from, to, from, to, ...batch).changes;
-    }
+    const ids = update.map((row) => row.id);
+    const affected = sumBy(chunk(ids, RECATEGORIZE_UPDATE_CHUNK_SIZE), (batch) =>
+      repointSides(db, from, to, batch),
+    );
     return {
       ok: true,
       affected,
-      skipped_self_transaction: skipped,
-      skipped_currency_mismatch: skippedCurrency,
-      sample_transaction_ids: toUpdate.slice(0, RECATEGORIZE_SAMPLE_LIMIT),
+      skipped_self_transaction: self_transaction.length,
+      skipped_currency_mismatch: currency_mismatch.length,
+      sample_transaction_ids: ids.slice(0, RECATEGORIZE_SAMPLE_LIMIT),
     };
   });
 }
@@ -489,9 +435,9 @@ export function repointTransactions(
 
 /** Same filters as listTransactions, no limit; with no opts it counts every live row (voided mirrors excluded). */
 export function countTransactions(db: Database.Database, opts: ListFilters = {}): number {
-  const { whereSql, params } = buildListWhere(opts);
+  const { whereSQL, params } = buildListWhere(opts);
   return (
-    db.prepare(`SELECT COUNT(*) AS n ${LIST_FROM} ${whereSql}`).get(...params) as { n: number }
+    db.prepare(`SELECT COUNT(*) AS n ${LIST_FROM} ${whereSQL}`).get(...params) as { n: number }
   ).n;
 }
 
@@ -517,13 +463,13 @@ export interface UpdateTransactionMetaFields {
   merchant_id?: string | null;
 }
 
-const TRANSACTION_META_PATCH: Record<string, PatchField> = {
+const TRANSACTION_META_PATCH: Record<keyof UpdateTransactionMetaFields, PatchField> = {
   date: {},
   description: {},
   merchant_id: {},
 };
 
-/** Amount and account columns aren't accepted here: moving accounts is `bulkRecategorize`'s job, and amount edits go through delete + re-record. */
+/** Amount and account columns aren't accepted here: moving accounts is `bulkRecategorize`'s job, and amount edits go through delete and re-add. */
 export function updateTransactionMeta(
   db: Database.Database,
   id: string,
@@ -531,8 +477,9 @@ export function updateTransactionMeta(
 ): number {
   const { sets, params } = buildPatch(TRANSACTION_META_PATCH, {}, fields);
   if (sets.length === 0) return 0;
-  params.push(id);
-  return db.prepare(`UPDATE transactions SET ${sets.join(", ")} WHERE id = ?`).run(...params).changes;
+  return db
+    .prepare(`UPDATE transactions SET ${sets.join(", ")} WHERE id = ?`)
+    .run(...params, id).changes;
 }
 
 interface VoidCandidate {
@@ -600,44 +547,33 @@ export function voidTransactionAsMirror(
   });
 }
 
-export interface DuplicateTransactionRow {
-  id: string;
-  group_id: string | null;
-  date: string;
-  description: string;
-  amount: number;
-  currency: string;
-  source_file_id: string | null;
-  merchant_id: string | null;
-  debit_account_id: string;
-  credit_account_id: string;
-  debit_account_name: string | null;
-  credit_account_name: string | null;
-}
+// Key order is the `transactions dedupe` wire order.
+const DUPLICATE_FIELDS = [
+  "id",
+  "group_id",
+  "date",
+  "description",
+  "amount",
+  "currency",
+  "source_file_id",
+  "merchant_id",
+  "debit_account_id",
+  "credit_account_id",
+  "debit_account_name",
+  "credit_account_name",
+] as const;
+
+export type DuplicateTransactionRow = Pick<TransactionRow, (typeof DUPLICATE_FIELDS)[number]>;
 
 /** Adjustments legitimately repeat on one account/amount/day and aren't duplicate statement rows. */
 const NOT_ADJUSTMENT = `t.debit_account_id NOT LIKE '%:${STRUCTURAL_SUFFIX.adjustments}'
           AND t.credit_account_id NOT LIKE '%:${STRUCTURAL_SUFFIX.adjustments}'`;
 
-/** Live, non-adjustment rows eligible for duplicate detection; clustering them
- *  lives beside its caller in `src/transactions/duplicates.ts`. */
-export function listDuplicateCandidateTransactions(
-  db: Database.Database,
-  opts: { minAmount?: number } = {},
-): DuplicateTransactionRow[] {
-  return db
-    .prepare(
-      `SELECT t.id, t.group_id, t.date, t.description, t.amount,
-              ${accountCurrencySQL("da")} AS currency,
-              t.source_file_id, t.merchant_id, t.debit_account_id, t.credit_account_id,
-              da.name AS debit_account_name, ca.name AS credit_account_name
-         FROM transactions t
-         LEFT JOIN accounts da ON da.id = t.debit_account_id
-         LEFT JOIN accounts ca ON ca.id = t.credit_account_id
-        WHERE t.void_of IS NULL
-          AND t.amount >= ?
-          AND ${NOT_ADJUSTMENT}
-        ORDER BY t.date, t.id`,
-    )
-    .all(opts.minAmount ?? 0) as DuplicateTransactionRow[];
+/** Live, non-adjustment rows by date, then insertion order, which dedupe's group
+ *  order and auto-merge's choice of survivor both follow. */
+export function listDuplicateCandidateTransactions(db: Database.Database): DuplicateTransactionRow[] {
+  const rows = db
+    .prepare(`${ROW_SELECT} WHERE t.void_of IS NULL AND ${NOT_ADJUSTMENT} ORDER BY t.date, t.rowid`)
+    .all() as TransactionRow[];
+  return rows.map((row) => pick(row, DUPLICATE_FIELDS));
 }

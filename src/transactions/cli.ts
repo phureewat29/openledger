@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import type Database from "libsql";
+import { groupBy } from "es-toolkit";
 import { cappedSummary, runAction, type Invocation, type Output } from "../cli/output.js";
 import type { Column } from "../cli/format.js";
 import { fail, failReason, type FailureCode } from "../cli/errors.js";
@@ -16,13 +17,11 @@ import {
   findTransactionById,
   validateTransaction,
   voidTransactionAsMirror,
-  type BulkRecategorizeFilter,
   type RecategorizeFailure,
   type TransactionInput,
   type UpdateTransactionMetaFields,
   type ListTransactionsOptions,
   type TransactionRow,
-  type TransactionCluster,
   type VoidMirrorFailure,
 } from "./queries.js";
 import {
@@ -40,7 +39,7 @@ import { requireAccount } from "../accounts/cli.js";
 import { formatFixed, fromMinorUnits, toMinorUnits } from "../lib/money.js";
 import { clampOffset } from "../lib/limit.js";
 import { currencyOf, newBatchId } from "../lib/ids.js";
-import { applyRedaction, type RedactionSource } from "../privacy/redactor.js";
+import { applyRedaction } from "../privacy/redactor.js";
 import { todayIso } from "../lib/date.js";
 import * as z from "zod";
 import { parseInput, str, num } from "../lib/validate.js";
@@ -59,9 +58,6 @@ import type {
   TransactionMergeAlreadyVoidResult,
 } from "../contract/transactions.js";
 
-// Amounts are minor units in the DB; this module converts to/from decimals at the CLI boundary.
-
-// Free-text fields that may carry PII; ids, amount, currency, and dates are structured and left intact.
 const TRANSACTION_REDACT_FIELDS = [
   "description",
   "raw_descriptor",
@@ -115,43 +111,42 @@ function amountFilterCurrency(account?: string, currency?: string): string {
 
 async function listTransactions(ctx: Invocation, opts: ListTransactionsOpts): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
-  const parsed = parseInput(LIST_TRANSACTIONS_SPEC, opts as Record<string, unknown>);
-  const listOpts: Omit<ListTransactionsOptions, "group"> = { includeVoid: !!opts.includeVoid };
-  if (parsed.account) listOpts.account = parsed.account;
-  if (parsed.currency) listOpts.ledger = parsed.currency;
-  if (parsed.from) listOpts.from = parsed.from;
-  if (parsed.to) listOpts.to = parsed.to;
-  if (parsed.query) listOpts.query = parsed.query;
-  if (parsed.amount !== undefined) {
-    listOpts.amount = toMinorUnits(
-      parsed.amount,
-      amountFilterCurrency(parsed.account, parsed.currency),
-    );
-  }
-  if (parsed.limit !== undefined) listOpts.limit = parsed.limit;
-  if (parsed.offset !== undefined) listOpts.offset = parsed.offset;
+  const { currency, amount, ...filters } = parseInput(LIST_TRANSACTIONS_SPEC, opts);
+  const listOpts: ListTransactionsOptions = {
+    ...filters,
+    ledger: currency,
+    amount:
+      amount === undefined
+        ? undefined
+        : toMinorUnits(amount, amountFilterCurrency(filters.account, currency)),
+    includeVoid: opts.includeVoid,
+  };
 
   const total = countTransactions(db, listOpts);
-  const limit = clampListLimit(listOpts.limit);
-  const offset = clampOffset(listOpts.offset);
-
-  if (opts.group) {
-    // Offset pages rows before clustering, so a group can straddle a page, same as the limit.
-    const clusters = queryTransactions(db, { ...listOpts, group: true });
-    emitClusters(ctx.out, clusters, redactionEnabled(opts), config);
-    const returned = clusters.reduce((n, c) => n + c.transactions.length, 0);
-    ctx.out.emitSummary(cappedSummary(total, returned, limit, offset));
-    return;
-  }
-
   const rows = applyRedaction(
     queryTransactions(db, listOpts).map(presentTransaction),
     redactionEnabled(opts),
     TRANSACTION_REDACT_FIELDS,
     config,
   );
-  ctx.out.emitList<TransactionView>(rows, LIST_COLUMNS);
-  ctx.out.emitSummary(cappedSummary(total, rows.length, limit, offset));
+  // Offset pages rows before clustering, so a group can straddle a page, same as the limit.
+  if (opts.group) emitClusters(ctx.out, clusterByGroup(rows));
+  else ctx.out.emitList<TransactionView>(rows, LIST_COLUMNS);
+  ctx.out.emitSummary(
+    cappedSummary(total, rows.length, clampListLimit(listOpts.limit), clampOffset(listOpts.offset)),
+  );
+}
+
+/** Clusters in first-appearance order; a row with no group_id is a cluster of its own. */
+export function clusterByGroup(rows: TransactionView[]): TransactionClusterView[] {
+  // Prefixed: a Record hoists integer-like keys, and a group id must never meet a row id.
+  const clusters = groupBy(rows, (row) =>
+    row.group_id === null ? `row:${row.id}` : `group:${row.group_id}`,
+  );
+  return Object.values(clusters).map((transactions) => ({
+    group_id: transactions[0].group_id,
+    transactions,
+  }));
 }
 
 function renderClusterRow(t: TransactionView): string {
@@ -165,23 +160,12 @@ function renderClusters(view: TransactionClusterView[]): string {
     .join("");
 }
 
-function emitClusters(
-  out: Output,
-  clusters: TransactionCluster[],
-  redact: boolean,
-  source: RedactionSource,
-): void {
-  const raw: TransactionClusterView[] = clusters.map((c) => ({
-    group_id: c.group_id,
-    transactions: c.transactions.map(presentTransaction),
-  }));
-  // One redactor build (and one context.md read) for the whole view, not one per cluster.
-  const view = applyRedaction(raw, redact, TRANSACTION_REDACT_FIELDS, source);
+function emitClusters(out: Output, clusters: TransactionClusterView[]): void {
   if (out.mode.json) {
-    for (const c of view) out.emit(c);
+    for (const c of clusters) out.emit(c);
     return;
   }
-  out.write(renderClusters(view));
+  out.write(renderClusters(clusters));
 }
 
 async function showTransaction(
@@ -193,8 +177,10 @@ async function showTransaction(
   const detail = findTransactionById(db, id);
   if (!detail) fail("NOT_FOUND", `transaction "${id}" not found`);
 
-  const view: TransactionShowView = presentTransaction(detail);
-  if (detail.group) view.group = detail.group.map(presentTransaction);
+  const view: TransactionShowView = {
+    ...presentTransaction(detail),
+    ...(detail.group && { group: detail.group.map(presentTransaction) }),
+  };
   ctx.out.emitObject(
     applyRedaction(view, redactionEnabled(opts), TRANSACTION_REDACT_FIELDS, config),
   );
@@ -220,14 +206,13 @@ interface DedupeTransactionsOpts {
   redact?: boolean;
 }
 
+const DEDUPE_HINT =
+  "merge a pair with `oled transactions merge --from <mirror> --to <survivor> --yes --json`, " +
+  "or collapse cross-statement mirrors with --auto-merge";
+
 async function dedupeTransactions(ctx: Invocation, opts: DedupeTransactionsOpts): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
-
-  let autoMerged: number | undefined;
-  if (opts.autoMerge) {
-    autoMerged = autoMergeStrictDuplicateTransactions(db).merged;
-  }
-
+  const autoMerged = opts.autoMerge ? autoMergeStrictDuplicateTransactions(db).merged : undefined;
   const groups = findDuplicateTransactions(db);
   const rows: TransactionDuplicateRow[] = applyRedaction(
     groups.flatMap((group, i) =>
@@ -242,13 +227,7 @@ async function dedupeTransactions(ctx: Invocation, opts: DedupeTransactionsOpts)
   const summary: Omit<TransactionDedupeSummary, "type"> = {
     groups: groups.length,
     ...(autoMerged !== undefined ? { auto_merged: autoMerged } : {}),
-    ...(!opts.autoMerge && groups.length > 0
-      ? {
-          hint:
-            "merge a pair with `oled transactions merge --from <mirror> --to <survivor> --yes --json`, " +
-            "or collapse cross-statement mirrors with --auto-merge",
-        }
-      : {}),
+    ...(!opts.autoMerge && groups.length > 0 ? { hint: DEDUPE_HINT } : {}),
   };
   ctx.out.emitSummary(summary);
 }
@@ -272,24 +251,17 @@ interface MergeTransactionsOpts {
 }
 
 async function mergeTransactions(ctx: Invocation, opts: MergeTransactionsOpts): Promise<void> {
-  const parsed = parseInput(MERGE_TRANSACTIONS_SPEC, opts as Record<string, unknown>);
+  const parsed = parseInput(MERGE_TRANSACTIONS_SPEC, opts);
   requireYes(opts, "merging transactions");
   const { db } = await openLedger(ctx.configPath);
 
   const result = voidTransactionAsMirror(db, parsed.from, parsed.to);
   if (!result.ok) failReason(MERGE_TRANSACTIONS_EXIT, result);
 
-  if (result.alreadyVoid) {
-    const view: TransactionMergeAlreadyVoidResult = {
-      from: parsed.from,
-      to: parsed.to,
-      voided: false,
-      already_void: true,
-    };
-    ctx.out.emitObject(view);
-    return;
-  }
-  const view: TransactionMergeResult = { from: parsed.from, to: parsed.to, voided: true };
+  const { from, to } = parsed;
+  const view: TransactionMergeResult | TransactionMergeAlreadyVoidResult = result.alreadyVoid
+    ? { from, to, voided: false, already_void: true }
+    : { from, to, voided: true };
   ctx.out.emitObject(view);
 }
 
@@ -318,27 +290,22 @@ const ADD_TRANSACTION_FLAGS_OPTS = {
 
 // Decimal amount, no account validation: that's the caller's job.
 function buildRawTransaction(opts: AddTransactionOpts): RawTransactionInput {
-  const parsed = parseInput(
-    ADD_TRANSACTION_FLAGS_SPEC,
-    opts as Record<string, unknown>,
-    ADD_TRANSACTION_FLAGS_OPTS,
-  );
+  const parsed = parseInput(ADD_TRANSACTION_FLAGS_SPEC, opts, ADD_TRANSACTION_FLAGS_OPTS);
   // str() accepts "" and whitespace alike (the flag not being passed); must fail USAGE
   // here, not NOT_FOUND downstream.
   if (!parsed.debit_account_id.trim() || !parsed.credit_account_id.trim()) {
     fail("USAGE", "--debit-account and --credit-account cannot be empty");
   }
 
-  const raw: RawTransactionInput = {
+  return {
     date: parsed.date ?? todayIso(),
     description: parsed.description ?? opts.merchantName ?? "Manual entry",
     debit_account_id: parsed.debit_account_id,
     credit_account_id: parsed.credit_account_id,
     amount: parsed.amount,
     currency: null,
+    ...(opts.merchantName ? { merchant: { canonical_name: opts.merchantName } } : {}),
   };
-  if (opts.merchantName) raw.merchant = { canonical_name: opts.merchantName };
-  return raw;
 }
 
 function addViaResolve(
@@ -347,21 +314,18 @@ function addViaResolve(
   noise: readonly string[],
   raw: RawTransactionInput,
 ): void {
-  const batchId = newBatchId();
   const commitCtx: TransactionCommitContext = {
-    batchId,
+    batchId: newBatchId(),
     fileId: null,
     fileHash: null,
     noise,
   };
   const outcome = commitTransaction(db, commitCtx, raw);
-  if (!outcome.ok) {
-    // The conversion-pair hint only fits a mismatch between two ledgers that both exist.
-    if (outcome.reason === "currency_mismatch" && !outcome.unopenedLedger) {
-      fail("INVALID", outcome.message, { hint: CURRENCY_MISMATCH_HINT });
-    }
-    fail("INVALID", outcome.message);
+  // The conversion-pair hint only fits a mismatch between two ledgers that both exist.
+  if (!outcome.ok && outcome.reason === "currency_mismatch" && !outcome.unopenedLedger) {
+    fail("INVALID", outcome.message, { hint: CURRENCY_MISMATCH_HINT });
   }
+  if (!outcome.ok) fail("INVALID", outcome.message);
   const view: TransactionAddResolveResult = {
     transaction_id: outcome.transactionId,
     duplicate: outcome.duplicate,
@@ -385,11 +349,10 @@ function addStrict(
   // Same both-legs-one-ledger rule commitTransaction enforces, via the shared check: this
   // path raises no questions, so it can't delegate to commitTransaction's mismatch path.
   const currency = currencyOf(debit.id);
-  const creditCurrency = currencyOf(credit.id);
   if (crossLedger(db, debit.id, credit.id)) {
     fail(
       "INVALID",
-      `debit ${debit.id} is ${currency}, credit ${credit.id} is ${creditCurrency}; a single transaction can't cross currencies`,
+      `debit ${debit.id} is ${currency}, credit ${credit.id} is ${currencyOf(credit.id)}; a single transaction can't cross currencies`,
       { hint: CURRENCY_MISMATCH_HINT },
     );
   }
@@ -458,7 +421,6 @@ async function deleteTransaction(
   const { db } = await openLedger(ctx.configPath);
   const { deleted, unvoided } = deleteTransactionRow(db, id);
   if (!deleted) fail("NOT_FOUND", `transaction "${id}" not found`);
-  // Deleting a survivor puts its mirrors back into balance derivation.
   const view: TransactionDeleteResult = { transaction_id: id, deleted: true, unvoided };
   ctx.out.emitObject(view);
 }
@@ -493,9 +455,11 @@ async function recategorizeTransactions(
     parsed.set_account,
     "run `oled accounts tree --json` for the ids this ledger has, or create it with `oled accounts create`",
   );
-  const filter: BulkRecategorizeFilter = { accountId: parsed.filter_account };
-
-  const result = bulkRecategorize(db, filter, { accountId: parsed.set_account });
+  const result = bulkRecategorize(
+    db,
+    { accountId: parsed.filter_account },
+    { accountId: parsed.set_account },
+  );
   if (!result.ok) failReason(RECATEGORIZE_EXIT, result);
   const view: TransactionRecategorizeResult = {
     affected: result.affected,

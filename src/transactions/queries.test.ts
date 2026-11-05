@@ -144,23 +144,28 @@ describe("insertLinkedTransactions", () => {
   let db: Database.Database;
   beforeEach(() => { db = freshDb(seedChartOfAccounts); });
 
-  it("shares one group id across every leg", () => {
-    const res = insertLinkedTransactions(db, [
-      tf({ id: "tx:a" }),
-      tf({ id: "tx:b", debit_account_id: "thb:expense:transport" }),
-    ]);
+  it("stamps the given group id on every leg, over any a leg carries", () => {
+    const res = insertLinkedTransactions(
+      db,
+      [tf({ id: "tx:a", group_id: "tg:stale" }), tf({ id: "tx:b", debit_account_id: "thb:expense:transport" })],
+      { group_id: "tg:pair" },
+    );
     expect(res.results.map((r) => r.id)).toEqual(["tx:a", "tx:b"]);
-    expect(res.group_id.startsWith("tg:")).toBe(true);
-    expect(findTransactionById(db, "tx:a")?.group_id).toBe(res.group_id);
-    expect(findTransactionById(db, "tx:b")?.group_id).toBe(res.group_id);
+    expect(res.group_id).toBe("tg:pair");
+    expect(findTransactionById(db, "tx:a")?.group_id).toBe("tg:pair");
+    expect(findTransactionById(db, "tx:b")?.group_id).toBe("tg:pair");
   });
 
   it("rolls back every leg when one leg is invalid", () => {
     expect(() =>
-      insertLinkedTransactions(db, [
-        tf({ id: "tx:a" }),
-        tf({ id: "tx:b", debit_account_id: "thb:asset:cash", credit_account_id: "thb:asset:cash" }),
-      ]),
+      insertLinkedTransactions(
+        db,
+        [
+          tf({ id: "tx:a" }),
+          tf({ id: "tx:b", debit_account_id: "thb:asset:cash", credit_account_id: "thb:asset:cash" }),
+        ],
+        { group_id: "tg:pair" },
+      ),
     ).toThrow();
     expect(countTransactions(db)).toBe(0);
   });
@@ -175,10 +180,11 @@ describe("findTransactionById", () => {
   });
 
   it("joins account + merchant names and carries the full group", () => {
-    const res = insertLinkedTransactions(db, [
-      tf({ id: "tx:a" }),
-      tf({ id: "tx:b", debit_account_id: "thb:expense:transport" }),
-    ]);
+    const res = insertLinkedTransactions(
+      db,
+      [tf({ id: "tx:a" }), tf({ id: "tx:b", debit_account_id: "thb:expense:transport" })],
+      { group_id: "tg:pair" },
+    );
     const detail = findTransactionById(db, "tx:a")!;
     expect(detail.debit_account_name).toBe("Food");
     expect(detail.credit_account_name).toBe("Cash");
@@ -195,8 +201,32 @@ describe("listTransactions", () => {
     insertTransaction(db, tf({ id: "tx:2", description: "Taxi", debit_account_id: "thb:expense:transport", credit_account_id: "thb:asset:bank", amount: 20000 }));
   });
 
-  it("orders by date DESC, id DESC", () => {
+  it("orders by date DESC, then the newest insert first", () => {
     expect(listTransactions(db).map((r) => r.id)).toEqual(["tx:2", "tx:1"]);
+    insertTransaction(db, tf({ id: "tx:0", date: "2026-04-30" }));
+    expect(listTransactions(db).map((r) => r.id)).toEqual(["tx:2", "tx:1", "tx:0"]);
+  });
+
+  it("breaks a same-day tie on insertion order, not on the random ids", () => {
+    insertTransaction(db, tf({ id: "tx:z", date: "2026-06-01" }));
+    insertTransaction(db, tf({ id: "tx:a", date: "2026-06-01" }));
+    expect(listTransactions(db).map((r) => r.id)).toEqual(["tx:a", "tx:z", "tx:2", "tx:1"]);
+    expect(listTransactions(db, { limit: 1, offset: 1 }).map((r) => r.id)).toEqual(["tx:z"]);
+  });
+
+  it("matches --query text literally: % _ and \\ are not LIKE wildcards", () => {
+    insertTransaction(db, tf({ id: "tx:pct", description: "100% cashback" }));
+    insertTransaction(db, tf({ id: "tx:num", description: "1000 baht" }));
+    insertTransaction(db, tf({ id: "tx:under", description: "fee_waiver" }));
+    insertTransaction(db, tf({ id: "tx:dash", description: "fee-waiver" }));
+    insertTransaction(db, tf({ id: "tx:slash", description: "C:\\statements" }));
+
+    const ids = (query: string): string[] => listTransactions(db, { query }).map((r) => r.id).sort();
+    expect(ids("100%")).toEqual(["tx:pct"]);
+    expect(ids("fee_")).toEqual(["tx:under"]);
+    expect(ids("\\")).toEqual(["tx:slash"]);
+    expect(ids("%")).toEqual(["tx:pct"]);
+    expect(countTransactions(db, { query: "_" })).toBe(1);
   });
 
   it("matches an account on EITHER side", () => {
@@ -215,19 +245,6 @@ describe("listTransactions", () => {
     expect(listTransactions(db, { amount: 15000 }).map((r) => r.id)).toEqual(["tx:1"]);
     expect(listTransactions(db, { amount: 20000 }).map((r) => r.id)).toEqual(["tx:2"]);
     expect(listTransactions(db, { amount: 999 })).toHaveLength(0);
-  });
-
-  it("clusters by group when requested (nulls standalone)", () => {
-    const linked = insertLinkedTransactions(db, [
-      tf({ id: "tx:g1", amount: 5000 }),
-      tf({ id: "tx:g2", debit_account_id: "thb:expense:transport", amount: 5000 }),
-    ]);
-    const clusters = listTransactions(db, { group: true });
-    const grouped = clusters.find((c) => c.group_id === linked.group_id);
-    expect(grouped?.transactions.map((t) => t.id).sort()).toEqual(["tx:g1", "tx:g2"]);
-    const standalones = clusters.filter((c) => c.group_id === null).flatMap((c) => c.transactions.map((t) => t.id));
-    expect(standalones).toContain("tx:1");
-    expect(standalones).toContain("tx:2");
   });
 });
 
@@ -583,7 +600,7 @@ describe("listTransactions / countTransactions void filtering", () => {
     expect(countTransactions(db)).toBe(1);
 
     const withVoid = listTransactions(db, { includeVoid: true });
-    expect(withVoid.map((r) => r.id).sort()).toEqual(["tx:mirror", "tx:orig"]);
+    expect(withVoid.map((r) => r.id)).toEqual(["tx:mirror", "tx:orig"]);
     expect(countTransactions(db, { includeVoid: true })).toBe(2);
     expect(countTransactions(db, { includeVoid: true })).toBe(withVoid.length);
   });

@@ -68,6 +68,16 @@ describe("autoMergeStrictDuplicateTransactions", () => {
     expect(countTransactions(db)).toBe(1);
   });
 
+  it("keeps the first-inserted twin as the survivor, whatever the ids sort to", () => {
+    const merchant = upsertMerchant(db, { canonical_name: "Starbucks" }, []);
+    insertTransaction(db, tf({ id: "tx:zzz", merchant_id: merchant.id, source_file_id: "sf-1" }));
+    insertTransaction(db, tf({ id: "tx:aaa", merchant_id: merchant.id, source_file_id: "sf-2" }));
+
+    expect(autoMergeStrictDuplicateTransactions(db)).toEqual({ merged: 1 });
+    expect(findTransactionById(db, "tx:zzz")!.void_of).toBeNull();
+    expect(findTransactionById(db, "tx:aaa")!.void_of).toBe("tx:zzz");
+  });
+
   it("never merges two rows from one statement: a same-day repeat purchase is real money", () => {
     const merchant = upsertMerchant(db, { canonical_name: "Starbucks" }, []);
     for (let i = 0; i < 2; i++) {
@@ -209,10 +219,14 @@ describe("findDuplicateTransactions", () => {
   beforeEach(() => { db = freshDb(seedDedupAccounts); });
 
   it("detects cross-group duplicates but excludes intra-group members", () => {
-    insertLinkedTransactions(db, [
-      dupTf({ id: "tx:same1", debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 5000 }),
-      dupTf({ id: "tx:same2", debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 5000 }),
-    ]);
+    insertLinkedTransactions(
+      db,
+      [
+        dupTf({ id: "tx:same1", debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 5000 }),
+        dupTf({ id: "tx:same2", debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 5000 }),
+      ],
+      { group_id: "tg:split" },
+    );
     insertTransaction(db, dupTf({ id: "tx:dup1", debit_account_id: "thb:expense:transport", credit_account_id: "thb:asset:bank", amount: 7000 }));
     insertTransaction(db, dupTf({ id: "tx:dup2", debit_account_id: "thb:expense:transport", credit_account_id: "thb:asset:bank", amount: 7000 }));
 
@@ -228,6 +242,24 @@ describe("findDuplicateTransactions", () => {
 
     voidTransactionAsMirror(db, "tx:dupB", "tx:dupA");
     expect(findDuplicateTransactions(db)).toHaveLength(0);
+  });
+
+  it("orders same-day rows by insertion, not by their random ids", () => {
+    for (const id of ["tx:zz", "tx:mm", "tx:aa"]) insertTransaction(db, dupTf({ id }));
+    expect(findDuplicateTransactions(db).map((group) => group.map((r) => r.id))).toEqual([
+      ["tx:zz", "tx:mm", "tx:aa"],
+    ]);
+  });
+
+  it("numbers groups by their first-inserted row when they share a date", () => {
+    insertTransaction(db, dupTf({ id: "tx:z1", amount: 7000 }));
+    insertTransaction(db, dupTf({ id: "tx:a1", amount: 5000 }));
+    insertTransaction(db, dupTf({ id: "tx:z2", amount: 7000 }));
+    insertTransaction(db, dupTf({ id: "tx:a2", amount: 5000 }));
+    expect(findDuplicateTransactions(db).map((group) => group.map((r) => r.id))).toEqual([
+      ["tx:z1", "tx:z2"],
+      ["tx:a1", "tx:a2"],
+    ]);
   });
 });
 
@@ -269,7 +301,7 @@ describe("proximityComponents ordering", () => {
     );
     const twinB = row({ id: "tx:last", date: "2026-05-01" });
 
-    const comps = proximityComponents([twinA, ...singles, twinB], 2);
+    const comps = proximityComponents([twinA, ...singles, twinB]);
     expect(comps).toHaveLength(5);
     expect(comps[0].map((r) => r.id)).toEqual(["tx:first", "tx:last"]);
   });
@@ -297,14 +329,14 @@ describe("proximityComponents", () => {
   it("keeps rows separate outside the tolerance window", () => {
     const a = row({ id: "tx:a", date: "2026-05-01" });
     const b = row({ id: "tx:b", date: "2026-05-05" });
-    const components = proximityComponents([a, b], 2);
+    const components = proximityComponents([a, b]);
     expect(components).toHaveLength(2);
   });
 
   it("unions rows within the tolerance window", () => {
     const a = row({ id: "tx:a", date: "2026-05-01" });
     const b = row({ id: "tx:b", date: "2026-05-02" });
-    const components = proximityComponents([a, b], 2);
+    const components = proximityComponents([a, b]);
     expect(components).toHaveLength(1);
     expect(components[0].map((r) => r.id).sort()).toEqual(["tx:a", "tx:b"]);
   });
@@ -313,10 +345,10 @@ describe("proximityComponents", () => {
     const a = row({ id: "tx:a", date: "2026-05-01" });
     const b = row({ id: "tx:b", date: "2026-05-03" });
     const c = row({ id: "tx:c", date: "2026-05-05" });
-    // dayDiff(a,c) = 4, outside toleranceDays=2, so only the a-b and b-c edges union directly.
+    // dayDiff(a,c) = 4, outside TOLERANCE_DAYS (2), so only the a-b and b-c edges union directly.
     expect(dayDiff(a.date, c.date)).toBeGreaterThan(2);
 
-    const components = proximityComponents([a, b, c], 2);
+    const components = proximityComponents([a, b, c]);
     expect(components).toHaveLength(1);
     expect(components[0].map((r) => r.id).sort()).toEqual(["tx:a", "tx:b", "tx:c"]);
   });
@@ -324,7 +356,7 @@ describe("proximityComponents", () => {
   it("never unions rows sharing a non-null group_id", () => {
     const a = row({ id: "tx:a", date: "2026-05-01", group_id: "tg:1" });
     const b = row({ id: "tx:b", date: "2026-05-01", group_id: "tg:1" });
-    const components = proximityComponents([a, b], 2);
+    const components = proximityComponents([a, b]);
     expect(components).toHaveLength(2);
   });
 });
@@ -332,7 +364,7 @@ describe("proximityComponents", () => {
 describe("clusterDuplicateCandidates", () => {
   it("drops components of size 1", () => {
     const a = row({ id: "tx:a", amount: 5000 });
-    expect(clusterDuplicateCandidates([a], 2)).toEqual([]);
+    expect(clusterDuplicateCandidates([a])).toEqual([]);
   });
 
   it("composes bucketing and proximity clustering into >=2 groups", () => {
@@ -340,7 +372,7 @@ describe("clusterDuplicateCandidates", () => {
     const b = row({ id: "tx:b", amount: 7000, date: "2026-05-02" });
     const lone = row({ id: "tx:c", amount: 9000, date: "2026-05-01" });
 
-    const groups = clusterDuplicateCandidates([a, b, lone], 2);
+    const groups = clusterDuplicateCandidates([a, b, lone]);
     expect(groups).toHaveLength(1);
     expect(groups[0].map((r) => r.id).sort()).toEqual(["tx:a", "tx:b"]);
   });
