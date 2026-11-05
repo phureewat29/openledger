@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyRedaction, createRedactor, type RedactionSource } from "./redactor.js";
+import { ContextUnreadableError } from "../db/errors.js";
 
 const CONTEXT = `## Family
 - Partner: Corgi
@@ -125,10 +126,10 @@ describe("applyRedaction (fail closed)", () => {
   // A directory at the path is the portable stand-in for EACCES: it fails even as root.
   const unreadable: RedactionSource = { userName: "Alpaca Beagle", contextPath: HERE };
 
-  it("refuses to run when context.md exists but cannot be read, naming the file and the way out", () => {
-    expect(() => applyRedaction({ text: "Corgi" }, true, ["text"], unreadable)).toThrow(
-      /cannot read .*so redaction cannot run: fix the file, or pass --no-redact/,
-    );
+  it("refuses to run when context.md exists but cannot be read, with a type the exit contract maps", () => {
+    const run = () => applyRedaction({ text: "Corgi" }, true, ["text"], unreadable);
+    expect(run).toThrow(ContextUnreadableError);
+    expect(run).toThrow(/cannot read .*so redaction cannot run$/);
   });
 
   it("never reads context.md when redaction is off", () => {

@@ -1,6 +1,7 @@
 import { escapeRegExp, uniqBy } from "es-toolkit";
 import { readContext } from "../config/context.js";
 import { homeRelative, relativizeHomeIn } from "../lib/path.js";
+import { ContextUnreadableError } from "../db/errors.js";
 
 /** Where redaction terms come from: the configured user plus their context.md. */
 export interface RedactionSource {
@@ -132,8 +133,8 @@ function requireContext(contextPath: string): string {
   const context = readContext(contextPath);
   if (context.ok) return context.value;
   const shown = homeRelative(contextPath);
-  throw new Error(
-    `cannot read ${shown} (${relativizeHomeIn(context.error, contextPath)}), so redaction cannot run: fix the file, or pass --no-redact`,
+  throw new ContextUnreadableError(
+    `cannot read ${shown} (${relativizeHomeIn(context.error, contextPath)}), so redaction cannot run`,
   );
 }
 

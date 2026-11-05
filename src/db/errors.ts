@@ -15,6 +15,14 @@ export class DBBusyError extends Error {
   }
 }
 
+/** context.md exists but can't be read; redacting without its terms would print the names it lists. */
+export class ContextUnreadableError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ContextUnreadableError";
+  }
+}
+
 /** libsql carries SQLite's error family on `code`; a plain Error (an unopenable path) has none. */
 export function sqliteErrorCode(err: unknown): string {
   const code = (err as { code?: unknown } | null | undefined)?.code;

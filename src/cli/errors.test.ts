@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ValidationError } from "../lib/validate.js";
-import { DBBusyError, DBNotReadyError } from "../db/errors.js";
+import { ContextUnreadableError, DBBusyError, DBNotReadyError } from "../db/errors.js";
 import { EXIT } from "../contract/exit.js";
 import { fail, failReason, toCLIError, tryBatchItem, type FailureCode } from "./errors.js";
 
@@ -65,6 +65,13 @@ describe("toCLIError: classification", () => {
       expect(result.message).toBe(expected);
     },
   );
+
+  it("maps a ContextUnreadableError to NOT_READY (exit 3) with the way out as its hint", () => {
+    const result = toCLIError(new ContextUnreadableError("cannot read ~/.oled/context.md (EISDIR)"));
+    expect(result.code).toBe("NOT_READY");
+    expect(EXIT[result.code]).toBe(3);
+    expect(result.hint).toBe("fix the file, or pass --no-redact");
+  });
 
   it("maps a DBNotReadyError to NOT_READY (exit 3) with the init hint", () => {
     const message = "This database is not an OpenLedger database.";

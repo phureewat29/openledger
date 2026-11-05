@@ -1,7 +1,13 @@
 import type { Command } from "commander";
 import { ValidationError } from "../lib/validate.js";
 import { errorMessage, type Result } from "../lib/result.js";
-import { DBBusyError, DBNotReadyError, isBusyError, sqliteErrorCode } from "../db/errors.js";
+import {
+  ContextUnreadableError,
+  DBBusyError,
+  DBNotReadyError,
+  isBusyError,
+  sqliteErrorCode,
+} from "../db/errors.js";
 import type { ExitCode } from "../contract/exit.js";
 
 export type FailureCode = Exclude<ExitCode, "OK">;
@@ -57,6 +63,9 @@ export function toCLIError(err: unknown, cmd?: Command): CLIError {
     return new CLIError("NOT_READY", err.message, {
       hint: "run `oled config --init` to configure the harness",
     });
+  }
+  if (err instanceof ContextUnreadableError) {
+    return new CLIError("NOT_READY", err.message, { hint: "fix the file, or pass --no-redact" });
   }
   if (err instanceof DBBusyError) return new CLIError("BUSY", err.message, { hint: BUSY_HINT });
   // A lock lost past the open (a write that waited out its busy timeout) says the same thing.
