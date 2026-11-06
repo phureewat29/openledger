@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { migrate, applyMigrations, listMissingTables } from "./schema.js";
 import { DBNotReadyError } from "./errors.js";
 import * as baseline from "./migrations/0001_baseline.js";
-import type { Migration } from "./migrations/index.js";
+import { MIGRATIONS, type Migration } from "./migrations/index.js";
 
 function freshDb() {
   const db = new Database(":memory:");
@@ -95,7 +95,7 @@ describe("migrate", () => {
     const db = freshDb();
     migrate(db);
 
-    expect(versions(db)).toEqual([1, 2]);
+    expect(versions(db)).toEqual([1, 2, 3]);
   });
 
   it("stamps schema_migrations.applied_at with the byte-identical ISO shape", () => {
@@ -105,7 +105,7 @@ describe("migrate", () => {
     const rows = db.prepare(`SELECT applied_at FROM schema_migrations ORDER BY version`).all() as {
       applied_at: string;
     }[];
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     for (const row of rows) expect(row.applied_at).toMatch(ISO_TIMESTAMP_RE);
   });
 
@@ -150,7 +150,7 @@ describe("migrate", () => {
 
     expect(rowCount(db, "transactions")).toBe(1);
     expect(rowCount(db, "accounts")).toBe(2);
-    expect(versions(db)).toEqual([1, 2]);
+    expect(versions(db)).toEqual([1, 2, 3]);
   });
 
   it("accepts hierarchical accounts via parent_id", () => {
@@ -518,14 +518,14 @@ describe("version-1 databases are rebaselined, not adopted", () => {
     });
   });
 
-  it("carries an old-shape database to version 2 and drops what only it had", () => {
+  it("carries an old-shape database to the latest version and drops what only it had", () => {
     withTempDir((dir) => {
       const dbPath = join(dir, "db.sqlite");
       const db = oldShapeDb(dbPath);
 
       migrate(db, dbPath);
 
-      expect(versions(db)).toEqual([1, 2]);
+      expect(versions(db)).toEqual([1, 2, 3]);
       expect(tableNames(db).sort()).toEqual(TABLES);
       expect(columns(db, "transactions")).not.toContain("currency");
       expect(columns(db, "transactions")).not.toContain("has_question");
@@ -601,11 +601,35 @@ describe("version-1 databases are rebaselined, not adopted", () => {
       migrate(db, dbPath);
 
       // Nothing at rest separates the two version-1 shapes, so neither is adopted.
-      expect(versions(db)).toEqual([1, 2]);
+      expect(versions(db)).toEqual([1, 2, 3]);
       expect(rowCount(db, "accounts")).toBe(0);
       expect(backups(dir).length).toBe(1);
       db.close();
     });
+  });
+});
+
+describe("migration 3: questions_row_key_idx", () => {
+  function questionIndexes(db: Database.Database): string[] {
+    return (
+      db
+        .prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'questions'`)
+        .all() as { name: string }[]
+    ).map((r) => r.name);
+  }
+
+  it("upgrades a version-2 ledger in place, keeping every question", () => {
+    const db = freshDb();
+    applyMigrations(db, MIGRATIONS.slice(0, 2));
+    db.prepare(`INSERT INTO questions (id, prompt, context_json) VALUES (?, ?, ?)`)
+      .run("cn:1", "bad row", JSON.stringify({ row_key: "refusal:sf-a:1:3" }));
+    expect(questionIndexes(db)).not.toContain("questions_row_key_idx");
+
+    migrate(db);
+
+    expect(versions(db)).toEqual([1, 2, 3]);
+    expect(questionIndexes(db)).toContain("questions_row_key_idx");
+    expect(rowCount(db, "questions")).toBe(1);
   });
 });
 
