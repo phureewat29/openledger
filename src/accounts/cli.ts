@@ -1,21 +1,20 @@
 import type { Command } from "commander";
 import type Database from "libsql";
-import { camelCase } from "es-toolkit";
+import { camelCase, countBy, isPlainObject, pick } from "es-toolkit";
 import { runAction, type Invocation, type Output } from "../cli/output.js";
 import type { Column } from "../cli/format.js";
 import { fail, failReason, tryBatchItem, type FailureCode } from "../cli/errors.js";
-import { asRecord, readStdinBatch, redactionEnabled, requireYes } from "../cli/input.js";
+import { readStdinBatch, redactionEnabled, requireYes } from "../cli/input.js";
 import { openLedger } from "../config/cli.js";
 import { inTransaction } from "../db/transaction.js";
 import {
-  createOneAccount,
   mergeAccounts as mergeAccountRows,
   deleteAccount as deleteAccountRow,
   type AccountFailure,
-  type CreatedAccount,
   type DeleteAccountFailure,
   type MergeAccountsFailure,
 } from "./accounts.js";
+import { createOneAccount } from "./resolve.js";
 import {
   getAccountBalances,
   getBalanceTree,
@@ -33,20 +32,20 @@ import {
   updateAccountMetadata,
   ACCOUNT_TYPES,
   type AccountRow,
-  type AccountType,
   type UpdateAccountMetadataFailure,
   type UpdateAccountMetadataPatch,
 } from "./queries.js";
 import { findAccountsByFuzzyName, type FuzzyAccountMatch } from "./matching.js";
-import { isLedgerScopedId } from "../lib/ids.js";
+import { currencyOf, isLedgerScopedId } from "../lib/ids.js";
 import { formatFixed, fromMinorUnits, toDecimalTotals } from "../lib/money.js";
 import { ISO_DATE_RE, todayIso } from "../lib/date.js";
 import { applyRedaction } from "../privacy/redactor.js";
 import * as z from "zod";
-import { parseInput, safeParse, str, num, int, json } from "../lib/validate.js";
+import { parseInput, safeParse, str, num, int, bool, json } from "../lib/validate.js";
 import type { ExitCode } from "../contract/exit.js";
 import type {
   Account as PresentedAccount,
+  AccountDetail,
   AccountTreeNode as PresentedTreeNode,
   AccountMatch,
   CreateAccountResult,
@@ -73,7 +72,7 @@ export const ACCOUNT_FAILURE_EXIT: Record<AccountFailure, FailureCode> = {
 // Ledgers are enumerated from the accounts table, never from config, so a bad prefix can't
 // resolve against config state; the caller's own hint applies only once the id names a real ledger.
 export function failAccountNotFound(db: Database.Database, id: string, hint?: string): never {
-  if (isLedgerScopedId(id) && ledgerExists(db, id.slice(0, 3))) {
+  if (isLedgerScopedId(id) && ledgerExists(db, currencyOf(id))) {
     fail("NOT_FOUND", `account "${id}" not found`, { hint });
   }
   const ledgers = listLedgerCurrencies(db);
@@ -139,48 +138,43 @@ function formatTotals(totals: Record<string, number>): string {
     .join(" ");
 }
 
-function renderTreeTty(nodes: PresentedTreeNode[], depth = 0): string {
-  const indent = "  ".repeat(depth);
-  return nodes
-    .map((n) => {
-      const line = `${indent}${n.name} (${n.id})  ${formatFixed(n.balance, n.currency)} [rollup ${formatTotals(n.rollup)}]\n`;
-      return line + renderTreeTty(n.children, depth + 1);
-    })
+interface TreeLine {
+  node: PresentedTreeNode;
+  depth: number;
+}
+
+/** Pre-order: every node precedes its children. */
+function walkTree(nodes: PresentedTreeNode[], depth = 0): TreeLine[] {
+  return nodes.flatMap((node) => [{ node, depth }, ...walkTree(node.children, depth + 1)]);
+}
+
+function ttyTreeLine({ node: n, depth }: TreeLine): string {
+  return `${"  ".repeat(depth)}${n.name} (${n.id})  ${formatFixed(n.balance, n.currency)} [rollup ${formatTotals(n.rollup)}]`;
+}
+
+function plainTreeLine({ node: n, depth }: TreeLine): string {
+  return [
+    String(depth),
+    n.id,
+    n.name,
+    n.type,
+    n.currency,
+    formatFixed(n.balance, n.currency),
+    formatTotals(n.rollup),
+  ].join("\t");
+}
+
+function renderTree(roots: PresentedTreeNode[], format: (line: TreeLine) => string): string {
+  return walkTree(roots)
+    .map((line) => `${format(line)}\n`)
     .join("");
 }
 
-function flattenTree(nodes: PresentedTreeNode[], depth: number, out: string[]): void {
-  for (const n of nodes) {
-    out.push(
-      [
-        String(depth),
-        n.id,
-        n.name,
-        n.type,
-        n.currency,
-        formatFixed(n.balance, n.currency),
-        formatTotals(n.rollup),
-      ].join("\t"),
-    );
-    flattenTree(n.children, depth + 1, out);
-  }
-}
+const ACCOUNT_FILTER_SPEC = z.object({
+  type: z.enum(ACCOUNT_TYPES).optional(),
+});
 
-function renderTreePlain(nodes: PresentedTreeNode[]): string {
-  const out: string[] = [];
-  flattenTree(nodes, 0, out);
-  return out.length ? out.join("\n") + "\n" : "";
-}
-
-// Fails an invalid --type with the same wording zod produces for `accounts create --type`.
-function parseAccountTypeFilter(type: string | undefined): AccountType | undefined {
-  if (type === undefined) return undefined;
-  if (!ACCOUNT_TYPES.includes(type as AccountType)) {
-    fail("USAGE", `--type must be one of ${ACCOUNT_TYPES.join(", ")}, got "${type}"`);
-  }
-  return type as AccountType;
-}
-
+/** `tree` takes the same flags. */
 interface ListAccountsOpts {
   type?: string;
   redact?: boolean;
@@ -188,9 +182,9 @@ interface ListAccountsOpts {
 
 async function listAccounts(ctx: Invocation, opts: ListAccountsOpts): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
-  const type = parseAccountTypeFilter(opts.type);
+  const filter = parseInput(ACCOUNT_FILTER_SPEC, opts);
   const rows = applyRedaction(
-    getAccountBalances(db, type ? { type } : {}).map(presentAccount),
+    getAccountBalances(db, filter).map(presentAccount),
     redactionEnabled(opts),
     ACCOUNT_REDACT_FIELDS,
     config,
@@ -200,16 +194,11 @@ async function listAccounts(ctx: Invocation, opts: ListAccountsOpts): Promise<vo
   ctx.out.emitSummary(summary);
 }
 
-interface ShowAccountTreeOpts {
-  type?: string;
-  redact?: boolean;
-}
-
-async function showAccountTree(ctx: Invocation, opts: ShowAccountTreeOpts): Promise<void> {
+async function showAccountTree(ctx: Invocation, opts: ListAccountsOpts): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
-  const type = parseAccountTypeFilter(opts.type);
+  const filter = parseInput(ACCOUNT_FILTER_SPEC, opts);
   const roots = applyRedaction(
-    getBalanceTree(db, type ? { type } : {}).map(presentTreeNode),
+    getBalanceTree(db, filter).map(presentTreeNode),
     redactionEnabled(opts),
     ACCOUNT_REDACT_FIELDS,
     config,
@@ -221,38 +210,28 @@ async function showAccountTree(ctx: Invocation, opts: ShowAccountTreeOpts): Prom
       const summary: Omit<TreeAccountsSummary, "type"> = { roots: roots.length };
       ctx.out.emitSummary(summary);
     },
-    tty: () => ctx.out.write(renderTreeTty(roots)),
-    plain: () => ctx.out.write(renderTreePlain(roots)),
+    tty: () => ctx.out.write(renderTree(roots, ttyTreeLine)),
+    plain: () => ctx.out.write(renderTree(roots, plainTreeLine)),
   });
 }
 
-async function showAccount(
-  ctx: Invocation,
-  id: string,
-  opts: { redact?: boolean },
-): Promise<void> {
+interface ShowAccountOpts {
+  redact?: boolean;
+}
+
+async function showAccount(ctx: Invocation, id: string, opts: ShowAccountOpts): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
-  const account = requireAccount(db, id);
   const balances = getAccountBalances(db, { idOrParent: id });
   const self = balances.find((b) => b.id === id);
-  const children = balances
-    .filter((b) => b.parent_id === id)
-    .map((b) => ({ id: b.id, name: b.name, type: b.type, balance: b.balance }));
-  ctx.out.emitObject(
-    applyRedaction(
-      {
-        ...account,
-        balance: self?.balance ?? 0,
-        debits_posted: self ? fromMinorUnits(self.debits_posted, self.currency) : 0,
-        credits_posted: self ? fromMinorUnits(self.credits_posted, self.currency) : 0,
-        rollup: toDecimalTotals(getRollupBalance(db, id)),
-        children,
-      },
-      redactionEnabled(opts),
-      ACCOUNT_REDACT_FIELDS,
-      config,
-    ),
-  );
+  if (!self) failAccountNotFound(db, id);
+  const detail: AccountDetail = {
+    ...presentAccount(self),
+    rollup: toDecimalTotals(getRollupBalance(db, id)),
+    children: balances
+      .filter((b) => b.parent_id === id)
+      .map((b) => ({ id: b.id, name: b.name, type: b.type, balance: b.balance })),
+  };
+  ctx.out.emitObject(applyRedaction(detail, redactionEnabled(opts), ACCOUNT_REDACT_FIELDS, config));
 }
 
 // A record, not any JSON: a scalar or array stored here would refuse every later metadata patch.
@@ -277,12 +256,6 @@ const CREATE_ACCOUNT_ALIASES = {
   account_number_masked: ["masked"],
 };
 
-function maskedResultField(result: CreatedAccount): Record<string, unknown> {
-  return result.account_number_masked !== undefined
-    ? { account_number_masked: result.account_number_masked }
-    : {};
-}
-
 async function createSingleAccount(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(CREATE_ACCOUNT_SPEC, opts, { aliases: CREATE_ACCOUNT_ALIASES });
   const { db } = await openLedger(ctx.configPath);
@@ -292,7 +265,7 @@ async function createSingleAccount(ctx: Invocation, opts: Record<string, unknown
     id: outcome.id,
     created: true,
     created_parents: outcome.created_parents,
-    ...maskedResultField(outcome),
+    ...pick(outcome, ["account_number_masked"]),
   };
   ctx.out.emitObject(result);
 }
@@ -308,6 +281,46 @@ type AccountsCreateBatchRow =
   | CreateAccountBatchDuplicate
   | CreateAccountBatchFailure;
 
+function createBatchRow(db: Database.Database, item: unknown, index: number): AccountsCreateBatchRow {
+  const failed = (message: string): CreateAccountBatchFailure => ({
+    type: "result",
+    index,
+    ok: false,
+    message,
+  });
+  if (!isPlainObject(item)) return failed("each account must be a JSON object.");
+
+  const parsed = safeParse(CREATE_ACCOUNT_SPEC, item, { aliases: CREATE_ACCOUNT_ALIASES });
+  if (!parsed.ok) return failed(parsed.error);
+
+  const attempt = tryBatchItem(() => createOneAccount(db, parsed.value));
+  if (!attempt.ok) return failed(attempt.error);
+
+  const one = attempt.value;
+  if (one.ok) {
+    return {
+      type: "result",
+      index,
+      ok: true,
+      id: one.id,
+      created: true,
+      created_parents: one.created_parents,
+      ...pick(one, ["account_number_masked"]),
+    };
+  }
+  if (one.reason === "account_exists") {
+    return { type: "result", index, ok: true, id: parsed.value.id, duplicate: true };
+  }
+  return failed(one.message);
+}
+
+type BatchTally = keyof Omit<CreateAccountBatchSummary, "type">;
+
+function tallyOf(row: AccountsCreateBatchRow): BatchTally {
+  if (!row.ok) return "failed";
+  return "duplicate" in row ? "duplicates" : "created";
+}
+
 /**
  * One result row per item plus a summary row; exits PARTIAL on any failure.
  * `account_exists` counts as success (`duplicate: true`). Rows are written as
@@ -318,101 +331,40 @@ export function createAccountsBatch(
   db: Database.Database,
   items: unknown[],
 ): ExitCode | undefined {
-  let created = 0;
-  let duplicates = 0;
-  let failed = 0;
+  const rows = items.map((item, index) => {
+    const row = createBatchRow(db, item, index);
+    out.emitObject(row);
+    return row;
+  });
 
-  const report = (row: AccountsCreateBatchRow): void => {
-    if (out.mode.json) out.emit(row);
-    else out.emitObject(row);
-  };
+  // Partial: countBy omits a tally no row hit.
+  const tally: Partial<Record<BatchTally, number>> = countBy(rows, tallyOf);
+  const summary: Omit<CreateAccountBatchSummary, "type"> = { created: 0, duplicates: 0, failed: 0, ...tally };
+  if (out.mode.json) out.emitSummary(summary);
+  else out.write(`\n${summary.created} created, ${summary.duplicates} duplicate(s), ${summary.failed} failed\n`);
 
-  function failedRow(index: number, message: string): CreateAccountBatchFailure {
-    failed++;
-    return { type: "result", index, ok: false, message };
-  }
-
-  for (let index = 0; index < items.length; index++) {
-    const record = asRecord(items[index]);
-    if (!record) {
-      report(failedRow(index, "each account must be a JSON object."));
-      continue;
-    }
-
-    const parsed = safeParse(CREATE_ACCOUNT_SPEC, record, { aliases: CREATE_ACCOUNT_ALIASES });
-    if (!parsed.ok) {
-      report(failedRow(index, parsed.error));
-      continue;
-    }
-
-    const attempt = tryBatchItem(() => createOneAccount(db, parsed.value));
-    if (!attempt.ok) {
-      report(failedRow(index, attempt.error));
-      continue;
-    }
-    const one = attempt.value;
-    if (one.ok) {
-      created++;
-      const row: CreateAccountBatchCreated = {
-        type: "result",
-        index,
-        ok: true,
-        id: one.id,
-        created: true,
-        created_parents: one.created_parents,
-        ...maskedResultField(one),
-      };
-      report(row);
-      continue;
-    }
-    if (one.reason === "account_exists") {
-      duplicates++;
-      const row: CreateAccountBatchDuplicate = {
-        type: "result",
-        index,
-        ok: true,
-        id: parsed.value.id,
-        duplicate: true,
-      };
-      report(row);
-      continue;
-    }
-    report(failedRow(index, one.message));
-  }
-
-  if (out.mode.json) {
-    const summary: Omit<CreateAccountBatchSummary, "type"> = { created, duplicates, failed };
-    out.emitSummary(summary);
-  } else {
-    out.write(`\n${created} created, ${duplicates} duplicate(s), ${failed} failed\n`);
-  }
-
-  return failed > 0 ? "PARTIAL" : undefined;
+  return summary.failed > 0 ? "PARTIAL" : undefined;
 }
 
 interface CreateAccountOpts extends Record<string, unknown> {
   input?: string;
 }
 
-async function createAccount(
-  ctx: Invocation,
-  opts: CreateAccountOpts,
-): Promise<ExitCode | undefined> {
-  if (opts.input !== undefined) {
-    if (ACCOUNT_FLAG_KEYS.some((k) => opts[k] !== undefined)) {
-      fail("USAGE", "--input and per-account flags are mutually exclusive");
-    }
-    const items = await readStdinBatch(opts.input);
-    if (items.length === 0) fail("USAGE", "no account data provided");
-    const { db } = await openLedger(ctx.configPath);
-    return createAccountsBatch(ctx.out, db, items);
+async function createAccount(ctx: Invocation, opts: CreateAccountOpts): Promise<ExitCode | void> {
+  if (!opts.input) return createSingleAccount(ctx, opts);
+  if (ACCOUNT_FLAG_KEYS.some((k) => opts[k] !== undefined)) {
+    fail("USAGE", "--input and per-account flags are mutually exclusive");
   }
-  await createSingleAccount(ctx, opts);
+  const items = await readStdinBatch(opts.input);
+  if (items.length === 0) fail("USAGE", "no account data provided");
+  const { db } = await openLedger(ctx.configPath);
+  return createAccountsBatch(ctx.out, db, items);
 }
 
 const MERGE_ACCOUNTS_SPEC = z.object({
   from: str(),
   to: str(),
+  yes: bool().optional(),
 });
 
 export const MERGE_ACCOUNTS_EXIT: Record<MergeAccountsFailure, FailureCode> = {
@@ -427,15 +379,9 @@ export const DELETE_ACCOUNT_EXIT: Record<DeleteAccountFailure, FailureCode> = {
   has_children: "INVALID",
 };
 
-interface MergeAccountsOpts {
-  from?: string;
-  to?: string;
-  yes?: boolean;
-}
-
-async function mergeAccounts(ctx: Invocation, opts: MergeAccountsOpts): Promise<void> {
-  const parsed = parseInput(MERGE_ACCOUNTS_SPEC, opts as Record<string, unknown>);
-  requireYes(opts, "merging accounts");
+async function mergeAccounts(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
+  const parsed = parseInput(MERGE_ACCOUNTS_SPEC, opts);
+  requireYes(parsed, "merging accounts");
   const { db } = await openLedger(ctx.configPath);
   const merged = mergeAccountRows(db, parsed.from, parsed.to);
   if (!merged.ok) failReason(MERGE_ACCOUNTS_EXIT, merged);
@@ -449,7 +395,11 @@ async function mergeAccounts(ctx: Invocation, opts: MergeAccountsOpts): Promise<
   ctx.out.emitObject(result);
 }
 
-async function deleteAccount(ctx: Invocation, id: string, opts: { yes?: boolean }): Promise<void> {
+interface DeleteAccountOpts {
+  yes?: boolean;
+}
+
+async function deleteAccount(ctx: Invocation, id: string, opts: DeleteAccountOpts): Promise<void> {
   const { db } = await openLedger(ctx.configPath);
   requireAccount(db, id);
   requireYes(opts, "deleting this account");
@@ -528,14 +478,13 @@ export const UPDATE_ACCOUNT_EXIT: Record<UpdateAccountMetadataFailure, FailureCo
 };
 
 // Reward points aren't a ledger unit, so they ride in the metadata blob rather than a stored column.
-function buildAccountPatch(
-  parsed: Omit<z.infer<typeof UPDATE_ACCOUNT_SPEC>, "name">,
-): UpdateAccountMetadataPatch {
-  const { points_balance, metadata, ...rest } = parsed;
-  const patch: UpdateAccountMetadataPatch = { ...rest };
-  if (metadata !== undefined) patch.metadata = metadata;
-  if (points_balance !== undefined) patch.metadata = { ...patch.metadata, points_balance };
-  return patch;
+function buildAccountPatch({
+  points_balance,
+  metadata,
+  ...rest
+}: Omit<z.infer<typeof UPDATE_ACCOUNT_SPEC>, "name">): UpdateAccountMetadataPatch {
+  const merged = points_balance === undefined ? metadata : { ...metadata, points_balance };
+  return merged === undefined ? rest : { ...rest, metadata: merged };
 }
 
 async function updateAccount(
@@ -558,17 +507,16 @@ async function updateAccount(
     const out: UpdateAccountResult = { id };
 
     if (name !== undefined) {
-      const changes = renameAccount(db, id, name);
-      if (changes === 0) failAccountNotFound(db, id);
+      if (renameAccount(db, id, name) === 0) failAccountNotFound(db, id);
       out.name = name;
       out.renamed = true;
     }
 
     if (Object.keys(patch).length > 0) {
-      const metaResult = updateAccountMetadata(db, id, patch);
-      if (!metaResult.ok) failReason(UPDATE_ACCOUNT_EXIT, metaResult);
-      out.before = metaResult.before;
-      out.after = metaResult.after;
+      const patched = updateAccountMetadata(db, id, patch);
+      if (!patched.ok) failReason(UPDATE_ACCOUNT_EXIT, patched);
+      out.before = patched.before;
+      out.after = patched.after;
     }
 
     return out;

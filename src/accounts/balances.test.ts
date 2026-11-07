@@ -287,6 +287,10 @@ describe("getRollupBalance", () => {
   it("has no keys for an account that does not exist", () => {
     expect(getRollupBalance(freshDb(seedThb), "thb:expense:nope")).toEqual({});
   });
+
+  it("keys an existing subtree nothing posted to at zero, under its own ledger", () => {
+    expect(getRollupBalance(freshDb(seedThb), "thb:expense:food")).toEqual({ THB: 0 });
+  });
 });
 
 describe("getBalanceTree", () => {

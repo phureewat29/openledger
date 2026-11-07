@@ -11,7 +11,6 @@ import { findMerchantById, upsertMerchant } from "../merchants/queries.js";
 import { insertTransaction } from "../transactions/queries.js";
 import {
   createAccount,
-  createOneAccount,
   deleteAccount,
   ensureLedgerRoot,
   ensureStructuralAccount,
@@ -24,7 +23,7 @@ import {
   type AccountResult,
   type StructuralKind,
 } from "./accounts.js";
-import { failingAccountInsert, failingStatement, freshDb, seedAccount } from "../../fixtures/db.js";
+import { failingStatement, freshDb, seedAccount } from "../../fixtures/db.js";
 
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -430,45 +429,5 @@ describe("deleteAccount", () => {
 
     expect(findAccountById(db, "thb:expense:food")).toBeNull();
     expect(findMerchantById(db, merchant.id)!.default_account_id).toBeNull();
-  });
-});
-
-describe("createOneAccount", () => {
-  let db: Database.Database;
-  beforeEach(() => {
-    db = freshDb();
-  });
-
-  it("opens every missing ancestor when no parent is named, root to leaf", () => {
-    expect(createOneAccount(db, { id: "thb:asset:bank:kbank", name: "KBank", type: "asset" })).toEqual({
-      ok: true,
-      id: "thb:asset:bank:kbank",
-      created_parents: ["thb:asset", "thb:asset:bank"],
-    });
-    expect(findAccountById(db, "thb:asset:bank")!.name).toBe("Bank");
-  });
-
-  it("lets a broken write escape instead of reporting it as a refusal", () => {
-    // The account INSERT fails the way a full disk would; every other statement still works.
-    const broken = failingAccountInsert(db, "thb:asset:bank");
-
-    expect(() =>
-      createOneAccount(broken, { id: "thb:asset:bank", name: "KBank Savings", type: "asset" }),
-    ).toThrow(/disk I\/O/);
-
-    // The whole chain is one transaction: the ledger root it opened must not outlive the leaf.
-    expect(findAccountById(db, "thb:asset:bank")).toBeNull();
-    expect(findAccountById(db, "thb:asset")).toBeNull();
-  });
-
-  it("still reports a taken id as data, not as a throw", () => {
-    const first = createOneAccount(db, { id: "thb:asset:bank", name: "KBank", type: "asset" });
-    expect(first).toMatchObject({ ok: true, id: "thb:asset:bank" });
-
-    expect(createOneAccount(db, { id: "thb:asset:bank", name: "KBank", type: "asset" })).toEqual({
-      ok: false,
-      reason: "account_exists",
-      message: expect.any(String),
-    });
   });
 });

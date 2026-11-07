@@ -8,6 +8,10 @@ export const ACCOUNT_TYPES = ["asset", "liability", "income", "expense", "equity
 
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
+export function isAccountType(value: string): value is AccountType {
+  return (ACCOUNT_TYPES as readonly string[]).includes(value);
+}
+
 /**
  * Currency is derived from the id's currency head, never stored: the same
  * rule as `currencyOf` (src/lib/ids.ts) and the cross-ledger trigger's
@@ -23,7 +27,7 @@ export const ACCOUNT_CURRENCY_SQL = accountCurrencySQL("a");
  *  never come back undefined. */
 export const ACCOUNT_COLUMNS_SQL = `a.*, ${ACCOUNT_CURRENCY_SQL} AS currency`;
 
-/** At rest: bank_name is uppercased, account_number_masked is check-digit-normalized, metadata is JSON. */
+/** At rest: bank_name is uppercased or NULL, account_number_masked is check-digit-normalized, metadata is JSON. */
 export interface AccountRow {
   id: string;
   name: string;
@@ -90,17 +94,6 @@ export function countChildAccounts(db: Database.Database, parentId: string): num
   return row.n;
 }
 
-export function getAccountSubtree(db: Database.Database, rootId: string): AccountRow[] {
-  return db.prepare(
-    `WITH RECURSIVE subtree AS (
-       SELECT * FROM accounts WHERE id = ?
-       UNION ALL
-       SELECT a.* FROM accounts a JOIN subtree s ON a.parent_id = s.id
-     )
-     SELECT ${ACCOUNT_COLUMNS_SQL} FROM subtree a ORDER BY a.id`,
-  ).all(rootId) as AccountRow[];
-}
-
 /** Currency heads that actually hold accounts, lowercase; never derived from config. */
 export function listLedgerCurrencies(db: Database.Database): string[] {
   const rows = db
@@ -117,7 +110,12 @@ export function ledgerExists(db: Database.Database, currency: string): boolean {
     .get(`${lower}:`, `${lower};`);
 }
 
-/** `inserted: false` means the id was already taken; user-facing wording and hierarchy invariants are the caller's (`createAccount`). */
+/** Empty and absent both store NULL, on insert and patch alike. */
+function bankNameAtRest(value: string | null | undefined): string | null {
+  return value ? value.toUpperCase() : null;
+}
+
+/** `inserted: false` means the id was already taken; hierarchy invariants are the caller's (`createAccount`). */
 export function insertAccount(
   db: Database.Database,
   input: CreateAccountInput,
@@ -134,7 +132,7 @@ export function insertAccount(
       input.type,
       input.parent_id ?? null,
       input.subtype ?? null,
-      input.bank_name ? String(input.bank_name).toUpperCase() : null,
+      bankNameAtRest(input.bank_name),
       normalizeMaskedAccountNumber(input.account_number_masked),
       input.due_day ?? null,
       input.statement_day ?? null,
@@ -171,9 +169,16 @@ const ACCOUNT_PATCH: Record<string, PatchField> = {
     transform: (v) => normalizeMaskedAccountNumber(v as string | null),
   },
   bank_name: {
-    transform: (v) => (v == null ? null : String(v).toUpperCase()),
+    transform: (v) => bankNameAtRest(v as string | null),
   },
 };
+
+/** Null for a blob that is not a JSON object, so a corrupt one refuses rather than becoming {}. */
+function storedMetadata(metadataJSON: string | null): Record<string, unknown> | null {
+  if (metadataJSON === null) return {};
+  const parsed = parseJsonOrNull(metadataJSON);
+  return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+}
 
 /** `metadata` is shallow-merged into the existing `metadata_json` blob, not replaced. */
 export function updateAccountMetadata(
@@ -186,20 +191,14 @@ export function updateAccountMetadata(
     if (!current) return { ok: false, reason: "not_found", message: `Account "${id}" not found.` };
 
     const { sets, params, before, after } = buildPatch(ACCOUNT_PATCH, current, patch);
-
     if (patch.metadata !== undefined) {
-      // A corrupt blob must error, not be silently overwritten with {}.
-      let existing: Record<string, unknown> = {};
-      if (current.metadata_json != null) {
-        const parsed = parseJsonOrNull(current.metadata_json);
-        if (parsed == null || typeof parsed !== "object") {
-          return {
-            ok: false,
-            reason: "unreadable_metadata",
-            message: `Account "${id}" has unreadable metadata_json; refusing to overwrite it.`,
-          };
-        }
-        existing = parsed as Record<string, unknown>;
+      const existing = storedMetadata(current.metadata_json);
+      if (!existing) {
+        return {
+          ok: false,
+          reason: "unreadable_metadata",
+          message: `Account "${id}" has unreadable metadata_json; refusing to overwrite it.`,
+        };
       }
       const merged = { ...existing, ...patch.metadata };
       sets.push("metadata_json = ?");
@@ -208,9 +207,9 @@ export function updateAccountMetadata(
       after.metadata = merged;
     }
 
-    if (sets.length === 0) return { ok: true, before, after };
-    params.push(id);
-    db.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+    if (sets.length > 0) {
+      db.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).run(...params, id);
+    }
     return { ok: true, before, after };
   });
 }

@@ -67,6 +67,14 @@ describe("accounts create (subprocess)", () => {
     expect(snapshot()).toEqual(before);
   }, 30000);
 
+  it("treats an empty --input as absent: a single create missing its flags, not a stdin read", async () => {
+    const res = await runCLI(["accounts", "create", "--input", "", "--json"]);
+    expect(res.code).toBe(2);
+
+    const { error } = JSON.parse(res.stderr.trim());
+    expect(error.message).toBe("--id, --name, --type required");
+  }, 30000);
+
   it("refuses a two-letter currency head with its own message, never the DDL's CHECK", async () => {
     const before = snapshot();
     const res = await runCLI([
@@ -140,6 +148,20 @@ describe("accounts create (subprocess)", () => {
     expect(error.code).toBe("E_NOT_FOUND");
     expect(error.message).toContain('Parent account "thb:expense:snacks" does not exist');
     expect(snapshot()).toEqual(before);
+  }, 30000);
+});
+
+describe("accounts list --type (subprocess)", () => {
+  it("refuses an unknown type as USAGE (2) in the wording create uses", async () => {
+    const res = await runCLI(["accounts", "list", "--type", "bogus", "--json"]);
+    expect(res.code).toBe(2);
+    expect(JSON.parse(res.stderr.trim())).toEqual({
+      error: {
+        code: "E_USAGE",
+        message: '--type must be one of asset, liability, income, expense, equity, got "bogus"',
+        hint: "run `oled accounts list --help` for its flags and usage",
+      },
+    });
   }, 30000);
 });
 

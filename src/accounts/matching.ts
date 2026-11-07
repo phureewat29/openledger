@@ -1,4 +1,4 @@
-import { round } from "es-toolkit";
+import { orderBy, round } from "es-toolkit";
 import type Database from "libsql";
 import { listAccounts, type AccountRow, type AccountType } from "./queries.js";
 import { accountNumberKey, tailAfterMask } from "../lib/masked.js";
@@ -38,9 +38,30 @@ function queryNumberKey(text: string): string {
  *  FUZZY_THRESHOLD (accounts/resolve.ts) instead; tune the two together. */
 const MATCH_THRESHOLD = 0.5;
 
-/** Substring hits get a 0.85 floor; a query carrying an account number matches
- *  the row's masked number. Callers confirm before acting. `scope` narrows the
- *  candidates, never the ranking of the ones that survive it. */
+const SUBSTRING_FLOOR = 0.85;
+
+// Above the substring floor, below exact-name 1.0: masked keys can collide
+// across banks, so a number hit never outranks an exact name.
+const NUMBER_FLOOR = 0.9;
+
+function rowNumberKey(row: AccountRow, name: string): string {
+  return row.account_number_masked ? accountNumberKey(row.account_number_masked) : queryNumberKey(name);
+}
+
+function scoreRow(row: AccountRow, q: string, qKey: string): number {
+  const name = row.name.toLowerCase();
+  const substringHit = name.includes(q) || q.includes(name);
+  const numberHit = !!qKey && rowNumberKey(row, name) === qKey;
+  return Math.max(
+    similarity(q, name),
+    substringHit ? SUBSTRING_FLOOR : 0,
+    numberHit ? NUMBER_FLOOR : 0,
+  );
+}
+
+/** A query carrying an account number matches the row's masked number.
+ *  Callers confirm before acting. `scope` narrows the candidates, never the
+ *  ranking of the ones that survive it. */
 export function findAccountsByFuzzyName(
   db: Database.Database,
   query: string,
@@ -50,27 +71,13 @@ export function findAccountsByFuzzyName(
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const qKey = queryNumberKey(q);
-  const rows = listAccounts(db);
-  const out: FuzzyAccountMatch[] = [];
-  for (const row of rows) {
-    if (scope && !inScope(row, scope)) continue;
-    const name = row.name.toLowerCase();
-    let score = similarity(q, name);
-    if (name.includes(q) || q.includes(name)) score = Math.max(score, 0.85);
-    if (qKey) {
-      const rowKey = row.account_number_masked
-        ? accountNumberKey(row.account_number_masked)
-        : queryNumberKey(name);
-      // Above the 0.85 substring floor, below exact-name 1.0: masked keys can
-      // collide across banks, so a number hit never outranks an exact name.
-      if (rowKey && rowKey === qKey) score = Math.max(score, 0.9);
-    }
-    if (score >= threshold) {
-      out.push({ account: row, similarity: round(score, 3) });
-    }
-  }
-  out.sort((a, b) => b.similarity - a.similarity);
-  return out;
+  const matches = listAccounts(db)
+    .filter((row) => !scope || inScope(row, scope))
+    .flatMap((account) => {
+      const score = scoreRow(account, q, qKey);
+      return score >= threshold ? [{ account, similarity: round(score, 3) }] : [];
+    });
+  return orderBy(matches, ["similarity"], ["desc"]);
 }
 
 function similarity(a: string, b: string): number {

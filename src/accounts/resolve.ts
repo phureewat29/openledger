@@ -1,3 +1,4 @@
+import { range } from "es-toolkit";
 import type Database from "libsql";
 import {
   createAccount,
@@ -8,13 +9,15 @@ import {
   type AccountRefusal,
 } from "./accounts.js";
 import {
-  ACCOUNT_TYPES,
   findAccountById,
+  isAccountType,
   ledgerExists,
   type AccountType,
+  type CreateAccountInput,
 } from "./queries.js";
-import { currencyOf, isLedgerScopedId, typeFromId } from "../lib/ids.js";
 import { findAccountsByFuzzyName } from "./matching.js";
+import { inTransaction } from "../db/transaction.js";
+import { currencyOf, isLedgerScopedId, typeFromId } from "../lib/ids.js";
 
 export type AccountHint =
   | { readonly type: "placeholder_created"; readonly accountId: string }
@@ -61,8 +64,7 @@ export function resolveOnePosting(
 /** The currency head alone decides: booking elsewhere would relabel the
  *  amount at the wrong exponent. */
 export function namesUnopenedLedger(db: Database.Database, accountId: string): boolean {
-  if (!isLedgerScopedId(accountId)) return false;
-  return !ledgerExists(db, currencyOf(accountId));
+  return isLedgerScopedId(accountId) && !ledgerExists(db, currencyOf(accountId));
 }
 
 // Stricter than MATCH_THRESHOLD (accounts/matching.ts): hints are unprompted,
@@ -74,14 +76,14 @@ const FUZZY_THRESHOLD = 0.7;
  * Excludes cross-ledger and same-lineage matches.
  */
 function bestFuzzyMatch(db: Database.Database, accountId: string): string | null {
-  const type = typeFromId(accountId) as AccountType;
-  if (!ACCOUNT_TYPES.includes(type)) return null;
-  const currency = currencyOf(accountId);
+  const type = typeFromId(accountId);
   const leaf = leafSegment(accountId).replace(/[-_]+/g, " ");
-  if (!leaf) return null;
-  const matches = findAccountsByFuzzyName(db, leaf, FUZZY_THRESHOLD, { type, ledger: currency });
-  const candidate = matches.find((m) => !sharesLineage(m.account.id, accountId));
-  return candidate?.account.id ?? null;
+  if (!isAccountType(type) || !leaf) return null;
+  const matches = findAccountsByFuzzyName(db, leaf, FUZZY_THRESHOLD, {
+    type,
+    ledger: currencyOf(accountId),
+  });
+  return matches.find((m) => !sharesLineage(m.account.id, accountId))?.account.id ?? null;
 }
 
 function sharesLineage(a: string, b: string): boolean {
@@ -89,53 +91,51 @@ function sharesLineage(a: string, b: string): boolean {
 }
 
 function leafSegment(id: string): string {
-  const segments = id.split(":");
-  return segments[segments.length - 1] ?? id;
+  return id.slice(id.lastIndexOf(":") + 1);
 }
 
-type WalkResult = { readonly ok: true; readonly created: string[] } | AccountRefusal;
+function parentIdOf(id: string): string {
+  return id.slice(0, id.lastIndexOf(":"));
+}
 
-/** `upTo` is 1-based. */
-function walkAncestorChain(
-  db: Database.Database,
-  segments: string[],
-  type: AccountType,
-  upTo: number,
-): WalkResult {
-  const currency = segments[0];
-  const rootId = `${currency}:${type}`;
-  const created: string[] = [];
-  if (!findAccountById(db, rootId)) created.push(rootId);
-  ensureLedgerRoot(db, currency, type);
-  // Segment 3 onward: the ledger root already covers the first two.
-  for (let i = 3; i <= upTo; i++) {
-    const id = segments.slice(0, i).join(":");
-    if (findAccountById(db, id)) continue;
-    const parentId = segments.slice(0, i - 1).join(":");
-    const name = humanizeSegment(segments[i - 1]);
-    const result = createAccount(db, { id, name, type, parent_id: parentId });
-    if (result.ok) {
-      created.push(id);
-      continue;
-    }
+type PathResult = { readonly ok: true; readonly created: string[] } | AccountRefusal;
+
+/** Opens the ledger root and every missing account down to `id` inclusive; `created` is root-first. */
+function openAccountPath(db: Database.Database, id: string, type: AccountType): PathResult {
+  const segments = id.split(":");
+  const rootId = `${segments[0]}:${type}`;
+  const created: string[] = findAccountById(db, rootId) ? [] : [rootId];
+  ensureLedgerRoot(db, segments[0], type);
+
+  const pathIds = range(3, segments.length + 1).map((n) => segments.slice(0, n).join(":"));
+  for (const pathId of pathIds) {
+    if (findAccountById(db, pathId)) continue;
+    const result = createAccount(db, {
+      id: pathId,
+      name: humanizeSegment(leafSegment(pathId)),
+      type,
+      parent_id: parentIdOf(pathId),
+    });
     // A concurrent writer claimed the id first: its row stands, the walk goes on.
-    if (result.reason !== "account_exists") return result;
+    if (!result.ok && result.reason !== "account_exists") return result;
+    if (result.ok) created.push(pathId);
   }
   return { ok: true, created };
 }
 
+/** The type `ensurePlaceholderAccount` would open `accountId` under, or null when it would refuse. */
+function placeableType(db: Database.Database, accountId: string): AccountType | null {
+  const type = typeFromId(accountId);
+  if (!isAccountType(type) || !validateAccountId(accountId, type).ok) return null;
+  return ledgerExists(db, currencyOf(accountId)) ? type : null;
+}
+
 /**
- * The pure half of `ensurePlaceholderAccount`, so a caller can refuse a row
- * before resolution writes anything.
+ * The read-only half of `ensurePlaceholderAccount`, so a caller can refuse a
+ * row before resolution writes anything.
  */
 export function shouldPlaceAccount(db: Database.Database, accountId: string): boolean {
-  const segments = accountId.split(":").filter(Boolean);
-  if (segments.length < 2) return false;
-
-  const type = segments[1] as AccountType;
-  if (!ACCOUNT_TYPES.includes(type)) return false;
-  if (!validateAccountId(accountId, type).ok) return false;
-  return ledgerExists(db, segments[0]);
+  return placeableType(db, accountId) !== null;
 }
 
 /**
@@ -143,41 +143,68 @@ export function shouldPlaceAccount(db: Database.Database, accountId: string): bo
  * failure propagates instead.
  */
 function ensurePlaceholderAccount(db: Database.Database, accountId: string): boolean {
-  if (!shouldPlaceAccount(db, accountId)) return false;
-  const segments = accountId.split(":").filter(Boolean);
-  // The cast holds only because `shouldPlaceAccount` just checked segment 1 against ACCOUNT_TYPES.
-  return walkAncestorChain(db, segments, segments[1] as AccountType, segments.length).ok;
+  const type = placeableType(db, accountId);
+  return type !== null && openAccountPath(db, accountId, type).ok;
 }
 
 interface AncestorsReady {
   readonly ok: true;
-  /** Parent id for the leaf, or null for a ledger type root. */
+  /** Null for a ledger type root. */
   readonly parentId: string | null;
-  /** Ancestor ids created as a side effect, root-to-leaf order. */
+  /** Root-to-leaf order. */
   readonly createdParents: string[];
 }
 
 /**
  * Unlike `ensurePlaceholderAccount`, returns the refusal instead of
- * swallowing it, and may open a new ledger.
+ * swallowing it, and may open a new ledger. `id` must already pass the grammar.
  */
-export function ensureAccountAncestors(
+function ensureAccountAncestors(
   db: Database.Database,
   id: string,
   type: AccountType,
 ): AncestorsReady | AccountRefusal {
-  const segments = id.split(":").filter(Boolean);
-  if (segments.length < 2 || isLedgerRootId(id)) {
-    return { ok: true, parentId: null, createdParents: [] };
-  }
+  if (isLedgerRootId(id)) return { ok: true, parentId: null, createdParents: [] };
+  const parentId = parentIdOf(id);
+  const opened = openAccountPath(db, parentId, type);
+  if (!opened.ok) return opened;
+  return { ok: true, parentId, createdParents: opened.created };
+}
 
-  const walked = walkAncestorChain(db, segments, type, segments.length - 1);
-  if (!walked.ok) return walked;
-  return {
-    ok: true,
-    parentId: segments.slice(0, segments.length - 1).join(":"),
-    createdParents: walked.created,
-  };
+export interface CreatedAccount {
+  readonly ok: true;
+  id: string;
+  created_parents: string[];
+  account_number_masked?: string | null;
+}
+
+/**
+ * An omitted `parent_id` opens every missing ancestor. A refusal can only come
+ * before the first write: the grammar check precedes the walk, and an id that
+ * already exists has every ancestor already.
+ */
+export function createOneAccount(
+  db: Database.Database,
+  input: CreateAccountInput,
+): CreatedAccount | AccountRefusal {
+  const grammar = validateAccountId(input.id, input.type);
+  if (!grammar.ok) return grammar;
+
+  return inTransaction(db, (): CreatedAccount | AccountRefusal => {
+    const ancestors: AncestorsReady | AccountRefusal =
+      input.parent_id === undefined
+        ? ensureAccountAncestors(db, input.id, input.type)
+        : { ok: true, parentId: input.parent_id, createdParents: [] };
+    if (!ancestors.ok) return ancestors;
+
+    const created = createAccount(db, { ...input, parent_id: ancestors.parentId });
+    if (!created.ok) return created;
+
+    const result: CreatedAccount = { ok: true, id: input.id, created_parents: ancestors.createdParents };
+    if (input.account_number_masked === undefined) return result;
+    // Echo the stored (post-normalization) value rather than re-deriving it.
+    return { ...result, account_number_masked: findAccountById(db, input.id)?.account_number_masked ?? null };
+  });
 }
 
 export function humanizeSegment(segment: string): string {

@@ -4,32 +4,10 @@ import Database from "libsql";
 import {
   countAccounts,
   findAccountById,
-  getAccountSubtree,
   insertStructuralAccount,
   updateAccountMetadata,
 } from "./queries.js";
 import { freshDb, seedAccount } from "../../fixtures/db.js";
-
-describe("getAccountSubtree", () => {
-  let db: Database.Database;
-  beforeEach(() => {
-    db = freshDb();
-    seedAccount(db, { id: "thb:expense:food" });
-    seedAccount(db, { id: "thb:expense:food:groceries" });
-    seedAccount(db, { id: "thb:expense:food:dining" });
-    seedAccount(db, { id: "thb:asset:cash" });
-  });
-
-  it("returns the subtree rooted at a given id", () => {
-    const subtree = getAccountSubtree(db, "thb:expense:food");
-    const ids = subtree.map(r => r.id).sort();
-    expect(ids).toEqual([
-      "thb:expense:food",
-      "thb:expense:food:dining",
-      "thb:expense:food:groceries",
-    ]);
-  });
-});
 
 describe("insertStructuralAccount", () => {
   it("swallows a lost race on the id: the winner's row stands, no UNIQUE escapes", () => {
@@ -80,6 +58,17 @@ describe("updateAccountMetadata", () => {
       points_program: "Forever",
       points_balance: 1200,
     });
+  });
+
+  it("stores an empty bank name as NULL, the same rule create applies", () => {
+    seedAccount(db, { id: "thb:asset:cash", bank_name: "" });
+    expect(findAccountById(db, "thb:asset:cash")!.bank_name).toBeNull();
+
+    expect(updated({ bank_name: "" })).toMatchObject({
+      before: { bank_name: "KTC" },
+      after: { bank_name: null },
+    });
+    expect(findAccountById(db, "thb:liability:ktc")!.bank_name).toBeNull();
   });
 
   it("normalizes a masked number's check digit on the way in", () => {
