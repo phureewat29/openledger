@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import Database from "libsql";
 
 import {
@@ -87,7 +87,7 @@ describe("questions table", () => {
     expect(new Set(seen).size).toBe(ids.length);
   });
 
-  it("countQuestions already supports kind and file_id scoping (pre-existing)", () => {
+  it("countQuestions scopes by kind and file_id", () => {
     insertFile(db, "sf-a");
     insertFile(db, "sf-b");
     recordQuestion(db, { file_id: "sf-a", account_id: "thb:expense:food", kind: "uncategorized", prompt: "a" });
@@ -149,6 +149,22 @@ describe("row_key lookups", () => {
     const id = record("bad row", { row_key: "refusal:sf-a:1:3" });
     expect(() => deleteQuestionsByRowKey(db, "refusal:sf-a:1:9")).not.toThrow();
     expect(listQuestions(db).map((q) => q.id)).toEqual([id]);
+  });
+
+  it("searches questions_row_key_idx instead of scanning every question's JSON", () => {
+    const prepare = vi.spyOn(db, "prepare");
+    findQuestionByRowKey(db, "refusal:sf-a:1:3");
+    deleteQuestionsByRowKey(db, "refusal:sf-a:1:3");
+    const statements = prepare.mock.calls.map(([sql]) => sql);
+    prepare.mockRestore();
+
+    expect(statements).toHaveLength(2);
+    for (const sql of statements) {
+      const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all("refusal:sf-a:1:3") as { detail: string }[];
+      expect(plan.map((step) => step.detail), sql).toEqual([
+        expect.stringContaining("USING INDEX questions_row_key_idx"),
+      ]);
+    }
   });
 });
 

@@ -34,7 +34,7 @@ afterAll(() => {
   sandbox.cleanup();
 });
 
-function readDb(): Database.Database {
+function readDB(): Database.Database {
   const db = new Database(dbPath);
   db.pragma("foreign_keys = ON");
   return db;
@@ -56,7 +56,7 @@ async function raiseQuestion(): Promise<string> {
   const result = parseNdjson(stdout).find((o) => o.type === "result");
   expect(result.raised_questions).toBe(1);
 
-  const db = readDb();
+  const db = readDB();
   try {
     const question = db
       .prepare(`SELECT id FROM questions WHERE transaction_id = ?`)
@@ -86,7 +86,7 @@ describe("questions answer --also (subprocess)", () => {
     expect(err.error.code).toBe("E_NOT_FOUND");
     expect(err.error.message).toContain(bogus);
 
-    const db = readDb();
+    const db = readDB();
     const remaining = db
       .prepare(`SELECT COUNT(*) AS n FROM questions WHERE id IN (?, ?)`)
       .get(good1, good2) as { n: number };
@@ -111,7 +111,7 @@ describe("questions answer --also (subprocess)", () => {
     expect(rows.every((r) => r.answer === "thb:expense:groceries")).toBe(true);
     expect(objs.at(-1)).toEqual({ type: "summary", answered: 2, closed_siblings: 1 });
 
-    const db = readDb();
+    const db = readDB();
     const remaining = db
       .prepare(`SELECT COUNT(*) AS n FROM questions WHERE id IN (?, ?)`)
       .get(good1, good2) as { n: number };
@@ -144,7 +144,7 @@ describe("questions answer --also (subprocess)", () => {
     // The repeat is dropped before anything closes, so it costs no sibling either.
     expect(objs.at(-1)).toEqual({ type: "summary", answered: 2, closed_siblings: 1 });
 
-    const db = readDb();
+    const db = readDB();
     const remaining = db
       .prepare(`SELECT COUNT(*) AS n FROM questions WHERE id IN (?, ?)`)
       .get(good1, good2) as { n: number };

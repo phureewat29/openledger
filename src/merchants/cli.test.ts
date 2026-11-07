@@ -5,7 +5,6 @@ import { EXIT } from "../contract/exit.js";
 
 const TABLE: Record<string, FailureCode> = MERGE_MERCHANTS_EXIT;
 
-/** Pinned as data: the exit code each reason's plain-Error message mapped to before it had a type. */
 const PINNED: Record<string, number> = { same_merchant: EXIT.INVALID, not_found: EXIT.NOT_FOUND };
 
 describe("MERGE_MERCHANTS_EXIT", () => {

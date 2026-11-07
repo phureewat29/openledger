@@ -86,16 +86,14 @@ export function closeQuestion(
   });
 }
 
-function extractRuleKey(contextJson: string | null): string | null {
-  const parsed = parseJsonOrNull(contextJson) as { rule_key?: unknown } | null;
+function extractRuleKey(contextJSON: string | null): string | null {
+  const parsed = parseJsonOrNull(contextJSON) as { rule_key?: unknown } | null;
   return typeof parsed?.rule_key === "string" ? parsed.rule_key : null;
 }
 
 /**
- * A question's `row_key` is the source row it is about, not a signature to learn
- * a rule from — that is `rule_key`'s job, and a one-off row address would teach
- * it nothing. `json_extract` yields NULL for a null context, which never equals
- * a bound key, so questions carrying neither are untouched by both queries.
+ * The source row a question is about; unlike `rule_key`, never a signature to learn from.
+ * questions_row_key_idx (migration 0003) serves only this exact expression.
  */
 const ROW_KEY_SQL = "json_extract(context_json, '$.row_key')";
 
@@ -109,8 +107,6 @@ export function findQuestionByRowKey(db: Database.Database, rowKey: string): Que
   );
 }
 
-/** Closing is deletion here as in `closeQuestion`; a row that posted has nothing
- *  left to answer, and no answer worth recording. */
 export function deleteQuestionsByRowKey(db: Database.Database, rowKey: string): void {
   db.prepare(`DELETE FROM questions WHERE ${ROW_KEY_SQL} = ?`).run(rowKey);
 }
@@ -124,28 +120,28 @@ interface QuestionScope {
   includeDeferred?: boolean;
 }
 
-// listQuestions/countQuestions hide deferred rows by default until the timestamp passes (includeDeferred: true shows all).
+const QUESTION_FILTERS = ["file_id", "transaction_id", "account_id", "kind", "batch_id"] as const;
+
 const ACTIVE_DEFERRED_CLAUSE =
   `(deferred_until IS NULL OR deferred_until <= ${ISO_NOW_SQL})`;
 
 // Shared by listQuestions/countQuestions so a filtered count matches the list.
-function buildQuestionWhere(scope: QuestionScope): { whereSql: string; params: unknown[] } {
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-  if (scope.file_id)        { conditions.push("file_id = ?");        params.push(scope.file_id); }
-  if (scope.transaction_id) { conditions.push("transaction_id = ?"); params.push(scope.transaction_id); }
-  if (scope.account_id)     { conditions.push("account_id = ?");     params.push(scope.account_id); }
-  if (scope.kind)           { conditions.push("kind = ?");           params.push(scope.kind); }
-  if (scope.batch_id)       { conditions.push("batch_id = ?");       params.push(scope.batch_id); }
-  if (!scope.includeDeferred) conditions.push(ACTIVE_DEFERRED_CLAUSE);
-  const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  return { whereSql, params };
+function buildQuestionWhere(scope: QuestionScope): { whereSQL: string; params: unknown[] } {
+  const filters = QUESTION_FILTERS.filter((column) => scope[column]);
+  const conditions = [
+    ...filters.map((column) => `${column} = ?`),
+    ...(scope.includeDeferred ? [] : [ACTIVE_DEFERRED_CLAUSE]),
+  ];
+  return {
+    whereSQL: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
+    params: filters.map((column) => scope[column]),
+  };
 }
 
 export function countQuestions(db: Database.Database, scope: QuestionScope = {}): number {
-  const { whereSql, params } = buildQuestionWhere(scope);
+  const { whereSQL, params } = buildQuestionWhere(scope);
   const row = db
-    .prepare(`SELECT COUNT(*) AS n FROM questions ${whereSql}`)
+    .prepare(`SELECT COUNT(*) AS n FROM questions ${whereSQL}`)
     .get(...params) as { n: number };
   return row.n;
 }
@@ -166,16 +162,14 @@ export function listQuestions(
   db: Database.Database,
   opts: ListQuestionsOptions = {},
 ): QuestionRow[] {
-  const capped = clampQuestionsLimit(opts.limit);
-  const { whereSql, params } = buildQuestionWhere(opts);
-  params.push(capped, clampOffset(opts.offset));
+  const { whereSQL, params } = buildQuestionWhere(opts);
   return db.prepare(
     `SELECT ${ROW_COLUMNS}
      FROM questions
-     ${whereSql}
+     ${whereSQL}
      ORDER BY created_at ASC, id ASC
      LIMIT ? OFFSET ?`,
-  ).all(...params) as QuestionRow[];
+  ).all(...params, clampQuestionsLimit(opts.limit), clampOffset(opts.offset)) as QuestionRow[];
 }
 
 /** Returns false when no row matched `id`. */

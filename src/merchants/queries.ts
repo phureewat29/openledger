@@ -16,7 +16,9 @@ export interface MerchantRow {
   created_at: string;
 }
 
-const MERCHANT_SELECT = `SELECT id, canonical_name, default_account_id, created_at FROM merchants`;
+const ROW_COLUMNS = "id, canonical_name, default_account_id, created_at";
+
+const MERCHANT_SELECT = `SELECT ${ROW_COLUMNS} FROM merchants`;
 
 const MERCHANT_SELECT_BY_ALIAS = `SELECT m.id, m.canonical_name, m.default_account_id, m.created_at
      FROM merchant_aliases ma
@@ -71,39 +73,42 @@ export function upsertMerchant(
   noiseTokens: readonly string[],
 ): MerchantUpsertResult {
   const canonical = input.canonical_name.trim();
-  if (!canonical) {
-    throw new Error("merchant canonical_name is required");
-  }
+  if (!canonical) throw new Error("merchant canonical_name is required");
 
   return inTransaction(db, (): MerchantUpsertResult => {
-    const existing = db
-      .prepare(`${MERCHANT_SELECT} WHERE canonical_name = ?`)
-      .get(canonical) as MerchantRow | undefined;
-
-    let merchant: MerchantRow;
-    if (existing) {
-      merchant = existing;
-      if (input.default_account_id && input.default_account_id !== existing.default_account_id) {
-        db.prepare(`UPDATE merchants SET default_account_id = ? WHERE id = ?`)
-          .run(input.default_account_id, existing.id);
-        merchant = { ...existing, default_account_id: input.default_account_id };
-      }
-    } else {
-      const id = `m:${randomUUID()}`;
-      // RETURNING captures the created_at DEFAULT the insert assigned.
-      merchant = db
-        .prepare(
-          `INSERT INTO merchants (id, canonical_name, default_account_id) VALUES (?, ?, ?)
-           RETURNING id, canonical_name, default_account_id, created_at`,
-        )
-        .get(id, canonical, input.default_account_id ?? null) as MerchantRow;
-    }
-
+    const existing = findMerchantByName(db, canonical);
+    const merchant = existing
+      ? adoptDefaultAccount(db, existing, input.default_account_id)
+      : insertMerchant(db, canonical, input.default_account_id);
     const aliasConflict = input.alias
       ? claimAlias(db, merchant.id, input.alias, noiseTokens)
       : undefined;
     return aliasConflict ? { ...merchant, alias_conflict: aliasConflict } : merchant;
   });
+}
+
+function adoptDefaultAccount(
+  db: Database.Database,
+  merchant: MerchantRow,
+  accountId: string | null | undefined,
+): MerchantRow {
+  if (!accountId || accountId === merchant.default_account_id) return merchant;
+  db.prepare(`UPDATE merchants SET default_account_id = ? WHERE id = ?`).run(accountId, merchant.id);
+  return { ...merchant, default_account_id: accountId };
+}
+
+function insertMerchant(
+  db: Database.Database,
+  canonicalName: string,
+  defaultAccountId: string | null | undefined,
+): MerchantRow {
+  // RETURNING captures the created_at DEFAULT the insert assigned.
+  return db
+    .prepare(
+      `INSERT INTO merchants (id, canonical_name, default_account_id) VALUES (?, ?, ?)
+       RETURNING ${ROW_COLUMNS}`,
+    )
+    .get(`m:${randomUUID()}`, canonicalName, defaultAccountId ?? null) as MerchantRow;
 }
 
 /** A pattern already held by another merchant stays with its owner and is reported as a conflict. */
@@ -163,9 +168,8 @@ export function renameMerchant(
 
     db.prepare(`UPDATE merchants SET canonical_name = ? WHERE id = ?`).run(canonical, id);
     const conflict = claimAlias(db, id, current.canonical_name, noiseTokens);
-    return conflict
-      ? { before: current.canonical_name, after: canonical, alias_conflict: conflict }
-      : { before: current.canonical_name, after: canonical };
+    const renamed = { before: current.canonical_name, after: canonical };
+    return conflict ? { ...renamed, alias_conflict: conflict } : renamed;
   });
 }
 
@@ -230,21 +234,15 @@ export function findMerchantById(
   return row ?? null;
 }
 
-/** A null `accountId` clears the default; null when the merchant does not exist. */
+/** A null `accountId` clears the default; false when no merchant has `merchantId`. */
 export function setMerchantDefaultAccount(
   db: Database.Database,
   merchantId: string,
   accountId: string | null,
-): { before: string | null; after: string | null } | null {
-  return inTransaction(db, () => {
-    const row = db
-      .prepare(`SELECT default_account_id FROM merchants WHERE id = ?`)
-      .get(merchantId) as { default_account_id: string | null } | undefined;
-    if (!row) return null;
-    db.prepare(`UPDATE merchants SET default_account_id = ? WHERE id = ?`)
-      .run(accountId, merchantId);
-    return { before: row.default_account_id, after: accountId };
-  });
+): boolean {
+  return db
+    .prepare(`UPDATE merchants SET default_account_id = ? WHERE id = ?`)
+    .run(accountId, merchantId).changes > 0;
 }
 
 /** The merchant half of `mergeAccounts`: the routing hint follows the survivor instead of being FK-nulled. */
@@ -271,7 +269,6 @@ type MergeMerchantsOutcome =
     }
   | { ok: false; reason: MergeMerchantsFailure; message: string };
 
-/** One transaction, so a partial merge never persists. */
 export function mergeMerchants(
   db: Database.Database,
   fromId: string,

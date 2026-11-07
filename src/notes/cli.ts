@@ -3,6 +3,7 @@ import {
   listNotes as queryNotes,
   addNote as addNoteRow,
   deleteNote as deleteNoteRow,
+  NOTE_CATEGORIES,
   type NoteRow,
 } from "./queries.js";
 import { applyRedaction } from "../privacy/redactor.js";
@@ -18,8 +19,6 @@ import type {
   NotesListSummary,
   NotesRemoveSummary,
 } from "../contract/notes.js";
-
-const VALID_CATEGORIES = ["rule", "preference", "fact"] as const;
 
 // `content` is the only free-text field; id/category/created_at are structured data left verbatim.
 const NOTE_REDACT_FIELDS = ["content"] as const;
@@ -50,7 +49,7 @@ async function listNotes(ctx: Invocation, opts: ListNotesOpts): Promise<void> {
 
 const ADD_NOTE_SPEC = z.object({
   content: str(),
-  category: z.enum(VALID_CATEGORIES).default("fact"),
+  category: z.enum(NOTE_CATEGORIES).default("fact"),
 });
 
 async function addNote(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
@@ -62,7 +61,6 @@ async function addNote(ctx: Invocation, opts: Record<string, unknown>): Promise<
   ctx.out.emitSummary(summary);
 }
 
-// Positional `<id>` args aren't commander opts; parsed through the same spec API with an ad hoc object.
 const NOTE_ID_SPEC = z.object({ id: num() });
 const NOTE_ID_LABELS = { id: "note id" };
 
@@ -91,7 +89,10 @@ export function registerNotes(program: Command): void {
     .command("add")
     .description("Add a note")
     .option("--content <text>", "note content")
-    .option("--category <cat>", "note category: rule, preference, or fact")
+    .option(
+      "--category <cat>",
+      `note category: ${new Intl.ListFormat("en", { type: "disjunction" }).format(NOTE_CATEGORIES)}`,
+    )
     .action(runAction(addNote));
 
   notes

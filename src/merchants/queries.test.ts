@@ -170,10 +170,9 @@ describe("setMerchantDefaultAccount + listMerchants + findMerchantById", () => {
     upsertMerchant(db, { canonical_name: "Amazon", default_account_id: "thb:expense:food" }, TH_NOISE);
   });
 
-  it("returns before/after when updating the default", () => {
+  it("sets the default account", () => {
     const m = upsertMerchant(db, { canonical_name: "Starbucks" }, TH_NOISE);
-    const result = setMerchantDefaultAccount(db, m.id, "thb:expense:food:dining");
-    expect(result).toEqual({ before: null, after: "thb:expense:food:dining" });
+    expect(setMerchantDefaultAccount(db, m.id, "thb:expense:food:dining")).toBe(true);
     expect(findMerchantById(db, m.id)!.default_account_id).toBe("thb:expense:food:dining");
   });
 
@@ -192,25 +191,23 @@ describe("setMerchantDefaultAccount with a null account (clear)", () => {
   let db: Database.Database;
   beforeEach(() => { db = freshDb(seedChartOfAccounts); });
 
-  it("clears the default and returns the prior value", () => {
+  it("clears the default", () => {
     const m = upsertMerchant(db, {
       canonical_name: "Amazon",
       default_account_id: "thb:expense:food",
     }, TH_NOISE);
-    const result = setMerchantDefaultAccount(db, m.id, null);
-    expect(result).toEqual({ before: "thb:expense:food", after: null });
+    expect(setMerchantDefaultAccount(db, m.id, null)).toBe(true);
     expect(findMerchantById(db, m.id)!.default_account_id).toBeNull();
   });
 
-  it("returns null when the merchant does not exist", () => {
-    expect(setMerchantDefaultAccount(db, "m:does-not-exist", null)).toBeNull();
-    expect(setMerchantDefaultAccount(db, "m:does-not-exist", "thb:expense:food")).toBeNull();
+  it("returns false when the merchant does not exist", () => {
+    expect(setMerchantDefaultAccount(db, "m:does-not-exist", null)).toBe(false);
+    expect(setMerchantDefaultAccount(db, "m:does-not-exist", "thb:expense:food")).toBe(false);
   });
 
   it("is idempotent on a merchant that already has no default", () => {
     const m = upsertMerchant(db, { canonical_name: "Starbucks" }, TH_NOISE);
-    const result = setMerchantDefaultAccount(db, m.id, null);
-    expect(result).toEqual({ before: null, after: null });
+    expect(setMerchantDefaultAccount(db, m.id, null)).toBe(true);
     expect(findMerchantById(db, m.id)!.default_account_id).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import type Database from "libsql";
 import { cappedSummary, runAction, type Invocation } from "../cli/output.js";
 import type { Column } from "../cli/format.js";
 import { fail, failReason, type FailureCode } from "../cli/errors.js";
@@ -18,6 +19,7 @@ import {
   setMerchantDefaultAccount,
   mergeMerchants as mergeMerchantRows,
   type MergeMerchantsFailure,
+  type MerchantRow,
   type MerchantUpsertInput,
 } from "./queries.js";
 import type {
@@ -45,6 +47,12 @@ const MERCHANT_COLUMNS: Column<Merchant>[] = [
   { header: "Aliases", value: (m) => String(m.alias_count), align: "right" },
 ];
 
+function requireMerchant(db: Database.Database, id: string): MerchantRow {
+  const merchant = findMerchantById(db, id);
+  if (!merchant) fail("NOT_FOUND", `merchant "${id}" not found`);
+  return merchant;
+}
+
 interface ListMerchantsOpts {
   redact?: boolean;
 }
@@ -55,7 +63,7 @@ const LIST_MERCHANTS_SPEC = z.object({
 });
 
 async function listMerchants(ctx: Invocation, opts: ListMerchantsOpts): Promise<void> {
-  const parsed = parseInput(LIST_MERCHANTS_SPEC, opts as Record<string, unknown>);
+  const parsed = parseInput(LIST_MERCHANTS_SPEC, opts);
   const { config, db } = await openLedger(ctx.configPath);
   const rows = applyRedaction(
     queryMerchants(db, { limit: parsed.limit, offset: parsed.offset }),
@@ -118,54 +126,61 @@ async function upsertMerchant(ctx: Invocation, opts: Record<string, unknown>): P
   ctx.out.emitObject(payload);
 }
 
+// Separate from the fields spec: a required key would always satisfy `atLeastOne`.
+const MERCHANT_TARGET_SPEC = z.object({ merchant: str() });
+
 const UPDATE_MERCHANT_SPEC = z.object({
-  merchant: str(),
   name: str().optional(),
   alias: str().optional(),
   default_account: str().optional(),
 });
 
+function renameUnlessTaken(
+  db: Database.Database,
+  id: string,
+  name: string,
+  noise: readonly string[],
+): Pick<MerchantUpdateResult, "before" | "after" | "alias_conflict"> {
+  const holder = findMerchantByName(db, name);
+  if (holder && holder.id !== id) {
+    fail("INVALID", `merchant name "${name.trim()}" already belongs to ${holder.id}`, {
+      hint: `merge them instead: oled merchants merge --from ${id} --to ${holder.id} --yes`,
+    });
+  }
+  return renameMerchant(db, id, name, noise);
+}
+
+function addAlias(
+  db: Database.Database,
+  id: string,
+  alias: string,
+  noise: readonly string[],
+): Pick<MerchantUpdateResult, "alias_conflict" | "alias_added"> {
+  const conflict = claimAlias(db, id, alias, noise);
+  return conflict ? { alias_conflict: conflict } : { alias_added: alias };
+}
+
 async function updateMerchant(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
+  const { merchant: id } = parseInput(MERCHANT_TARGET_SPEC, opts);
   const parsed = parseInput(UPDATE_MERCHANT_SPEC, opts, {
     atLeastOne: "at least one of --name, --alias, --default-account is required",
   });
   if (parsed.name !== undefined && !parsed.name.trim()) fail("USAGE", "--name required");
   const { config, db } = await openLedger(ctx.configPath);
-  const notFound = `merchant "${parsed.merchant}" not found`;
+  const noise = noiseTokens(config.country);
 
   const result = inTransaction(db, (): MerchantUpdateResult => {
-    if (!findMerchantById(db, parsed.merchant)) fail("NOT_FOUND", notFound);
+    requireMerchant(db, id);
     if (parsed.default_account) requireAccount(db, parsed.default_account);
-
-    const updated: MerchantUpdateResult = { merchant_id: parsed.merchant };
-    const noise = noiseTokens(config.country);
-
-    if (parsed.name) {
-      const holder = findMerchantByName(db, parsed.name);
-      if (holder && holder.id !== parsed.merchant) {
-        fail("INVALID", `merchant name "${parsed.name.trim()}" already belongs to ${holder.id}`, {
-          hint: `merge them instead: oled merchants merge --from ${parsed.merchant} --to ${holder.id} --yes`,
-        });
-      }
-      const renamed = renameMerchant(db, parsed.merchant, parsed.name, noise);
-      updated.before = renamed.before;
-      updated.after = renamed.after;
-      // The old name stays resolvable as an alias unless another merchant holds it.
-      if (renamed.alias_conflict) updated.alias_conflict = renamed.alias_conflict;
-    }
-
-    if (parsed.alias) {
-      const conflict = claimAlias(db, parsed.merchant, parsed.alias, noise);
-      if (conflict) updated.alias_conflict = conflict;
-      else updated.alias_added = parsed.alias;
-    }
-
-    if (parsed.default_account) {
-      const set = setMerchantDefaultAccount(db, parsed.merchant, parsed.default_account);
-      if (!set) fail("NOT_FOUND", notFound);
-      updated.default_account = parsed.default_account;
-    }
-    return updated;
+    const renamed = parsed.name ? renameUnlessTaken(db, id, parsed.name, noise) : {};
+    const aliased = parsed.alias ? addAlias(db, id, parsed.alias, noise) : {};
+    if (parsed.default_account) setMerchantDefaultAccount(db, id, parsed.default_account);
+    return {
+      merchant_id: id,
+      ...renamed,
+      ...aliased,
+      ...(parsed.default_account ? { default_account: parsed.default_account } : {}),
+    };
   });
 
   ctx.out.emitObject(result);
@@ -185,17 +200,13 @@ async function setMerchantDefault(ctx: Invocation, opts: Record<string, unknown>
   }
 
   const { db } = await openLedger(ctx.configPath);
-  const notFound = `merchant "${parsed.merchant}" not found`;
-  if (!findMerchantById(db, parsed.merchant)) fail("NOT_FOUND", notFound);
-  if (account) requireAccount(db, account);
-
-  const set = setMerchantDefaultAccount(db, parsed.merchant, account ?? null);
-  if (!set) fail("NOT_FOUND", notFound);
-  const payload: MerchantDefaultResult = {
-    merchant_id: parsed.merchant,
-    before: set.before,
-    after: set.after,
-  };
+  const payload = inTransaction(db, (): MerchantDefaultResult => {
+    const merchant = requireMerchant(db, parsed.merchant);
+    if (account) requireAccount(db, account);
+    const after = account ?? null;
+    setMerchantDefaultAccount(db, parsed.merchant, after);
+    return { merchant_id: parsed.merchant, before: merchant.default_account_id, after };
+  });
   ctx.out.emitObject(payload);
 }
 
@@ -216,7 +227,7 @@ interface MergeMerchantsOpts {
 }
 
 async function mergeMerchants(ctx: Invocation, opts: MergeMerchantsOpts): Promise<void> {
-  const parsed = parseInput(MERGE_MERCHANTS_SPEC, opts as Record<string, unknown>);
+  const parsed = parseInput(MERGE_MERCHANTS_SPEC, opts);
   requireYes(opts, "merging merchants");
   const { db } = await openLedger(ctx.configPath);
   const result = mergeMerchantRows(db, parsed.from, parsed.to);
@@ -227,9 +238,7 @@ async function mergeMerchants(ctx: Invocation, opts: MergeMerchantsOpts): Promis
     moved_transactions: result.moved_transactions,
     moved_aliases: result.moved_aliases,
   };
-  if (result.adopted_default_account !== undefined) {
-    payload.adopted_default_account = result.adopted_default_account;
-  }
+  if (result.adopted_default_account) payload.adopted_default_account = result.adopted_default_account;
   ctx.out.emitObject(payload);
 }
 
