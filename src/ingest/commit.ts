@@ -1,4 +1,5 @@
 import type Database from "libsql";
+import { sumBy } from "es-toolkit";
 import {
   shouldPlaceAccount,
   isUncategorizedId,
@@ -498,28 +499,36 @@ function raiseMerchantQuestion(
   return raiseUnknownMerchant(db, ctx, prepared.raw, transactionId, attempted);
 }
 
+function applyHint(
+  db: Database.Database,
+  ctx: TransactionCommitContext,
+  transactionId: string,
+  { side, hint }: PreparedSide,
+): SideOutcome {
+  if (!hint) return POSTED_EXACTLY;
+  return HINT_DISPATCH[hint.type](hint as never, { db, ctx, side, transactionId });
+}
+
 function applyTransactionHints(
   db: Database.Database,
   ctx: TransactionCommitContext,
   transactionId: string,
   prepared: PreparedTransaction,
 ): { sides: CommitSide[]; raisedQuestions: number } {
-  let raised = 0;
-  const sides: CommitSide[] = [];
-  for (const { side, requested, resolved, hint } of prepared.sides) {
-    const outcome = hint
-      ? HINT_DISPATCH[hint.type](hint as never, { db, ctx, side, transactionId })
-      : POSTED_EXACTLY;
-    raised += outcome.raised;
-    sides.push({
+  const applied = prepared.sides.map((side) => ({
+    ...side,
+    outcome: applyHint(db, ctx, transactionId, side),
+  }));
+  return {
+    sides: applied.map(({ side, requested, resolved, outcome }) => ({
       side,
       requested,
       resolved,
       how: outcome.how,
       ...(outcome.similar_to ? { similar_to: outcome.similar_to } : {}),
-    });
-  }
-  return { sides, raisedQuestions: raised };
+    })),
+    raisedQuestions: sumBy(applied, ({ outcome }) => outcome.raised),
+  };
 }
 
 /** What the committed row holds wins: an unknown merchant id beside an inline
@@ -718,13 +727,11 @@ function commitLinkedRow(
   // nothing and closes nothing.
   if (posted !== -1) closeRowRefusal(db, ctx, header);
 
-  let raised =
+  const merchantRaised =
     posted === -1 ? 0 : raiseMerchantQuestion(db, ctx, preps[anchor], results[anchor].id);
-  for (let i = 0; i < preps.length; i++) {
-    const r = results[i];
-    if (r.duplicate) continue;
-    raised += applyTransactionHints(db, ctx, r.id, preps[i]).raisedQuestions;
-  }
+  const legsRaised = sumBy(results, (r, i) =>
+    r.duplicate ? 0 : applyTransactionHints(db, ctx, r.id, preps[i]).raisedQuestions,
+  );
   const merchant = committedMerchant(
     preps[anchor],
     () => findTransactionById(db, results[anchor].id)?.merchant_id ?? null,
@@ -733,7 +740,7 @@ function commitLinkedRow(
     ok: true,
     group_id,
     results,
-    raisedQuestions: raised,
+    raisedQuestions: merchantRaised + legsRaised,
     currencyOverridden: preps.some((p) => p.currencyOverridden),
     merchant,
   };

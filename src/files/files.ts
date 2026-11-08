@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 import type Database from "libsql";
 import {
@@ -17,32 +17,29 @@ export interface WalkedFile {
   relPath: string;
 }
 
-function walk(dir: string, root: string, out: WalkedFile[]): void {
+/** `lineage` holds the real paths of the directories above `dir`, so a symlink back into one is a cycle, not a subtree. */
+function walk(dir: string, root: string, lineage: readonly string[]): WalkedFile[] {
+  const real = tryExecute(() => realpathSync(dir));
+  if (!real.ok || lineage.includes(real.value)) return [];
   const entries = tryExecute(() => readdirSync(dir));
-  if (!entries.ok) return;
+  if (!entries.ok) return [];
 
-  for (const entry of entries.value) {
-    if (entry.startsWith(".")) continue;
-    const full = resolve(dir, entry);
+  const below = [...lineage, real.value];
+  return entries.value
+    .filter((entry) => !entry.startsWith("."))
+    .flatMap((entry) => walkEntry(resolve(dir, entry), root, below));
+}
 
-    const stat = tryExecute(() => statSync(full));
-    if (!stat.ok) continue;
-
-    if (stat.value.isDirectory()) {
-      walk(full, root, out);
-      continue;
-    }
-    if (!stat.value.isFile()) continue;
-    if (!SOURCES[extname(entry).toLowerCase()]) continue;
-
-    out.push({ path: full, relPath: relative(root, full).split(sep).join("/") });
-  }
+function walkEntry(full: string, root: string, lineage: readonly string[]): WalkedFile[] {
+  const stat = tryExecute(() => statSync(full));
+  if (!stat.ok) return [];
+  if (stat.value.isDirectory()) return walk(full, root, lineage);
+  if (!stat.value.isFile() || !SOURCES[extname(full).toLowerCase()]) return [];
+  return [{ path: full, relPath: relative(root, full).split(sep).join("/") }];
 }
 
 export function walkFiles(root: string): WalkedFile[] {
-  const out: WalkedFile[] = [];
-  walk(root, root, out);
-  return out;
+  return walk(root, root, []);
 }
 
 /** Hashes but never parses, so this stays off mupdf's import path. A null db
@@ -58,18 +55,14 @@ export function pendingRow(source: LoadedSource, fileId: string): PendingFileInp
   return { id: fileId, path: source.path, file_hash: source.hash, mime: source.mime };
 }
 
-/** Pending row keyed by content hash, so re-registering the same bytes is a
- *  no-op that returns the existing id. */
-export function registerPendingFile(
-  db: Database.Database,
-  source: LoadedSource,
-): { fileId: string; alreadyKnown: boolean } {
+/** Keyed by content hash: re-registering the same bytes returns the existing id. */
+export function registerPendingFile(db: Database.Database, source: LoadedSource): string {
   const known = findFileByHash(db, source.hash);
-  if (known) return { fileId: known.id, alreadyKnown: true };
+  if (known) return known.id;
 
   const fileId = newFileId();
   insertPendingFile(db, pendingRow(source, fileId));
-  return { fileId, alreadyKnown: false };
+  return fileId;
 }
 
 /** Resolution order: absolute, data-dir-relative, cwd-relative, then file id; null if none match. */
@@ -86,17 +79,22 @@ export function resolveEntryPath(
   const viaCwd = resolve(entryOrId);
   if (existsSync(viaCwd)) return viaCwd;
 
-  const byId = findFileById(db, entryOrId);
-  if (byId) return byId.path;
-
-  return null;
+  return findFileById(db, entryOrId)?.path ?? null;
 }
 
 /** Retries absorb the transient EBUSY/EPERM thrown while a Windows scanner briefly holds a fresh artifact. */
 export const RM_OPTS = { recursive: true, force: true, maxRetries: 3 } as const;
 
+function isCacheEntry(rel: string): boolean {
+  return rel !== "" && rel !== ".." && !rel.includes(sep) && !isAbsolute(rel);
+}
+
+/** Throws unless `fileId` names exactly one directory inside `cacheDir`: the delete is recursive. */
 export function cleanCache(cacheDir: string, fileId: string): { removed: string[] } {
   const dir = resolve(cacheDir, fileId);
+  if (!isCacheEntry(relative(cacheDir, dir))) {
+    throw new Error(`refusing to clean "${fileId}": not a single entry inside the cache dir`);
+  }
   if (!existsSync(dir)) return { removed: [] };
   rmSync(dir, RM_OPTS);
   return { removed: [dir] };

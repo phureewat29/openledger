@@ -15,7 +15,7 @@ export interface QuestionContext {
 }
 
 /** The row fields a question quotes back to the agent, and nothing else. */
-export interface QuestionRow {
+export interface QuotedRow {
   readonly date: string;
   readonly description: string;
   readonly raw_descriptor?: string | null;
@@ -27,6 +27,8 @@ export interface RowAddress {
   readonly source_page?: number | null;
   readonly row_index?: number | null;
 }
+
+type RaisedQuestion = Omit<Parameters<typeof recordQuestion>[1], "file_id" | "batch_id">;
 
 const NON_WORD = /[^\p{L}\p{N}]+/gu;
 
@@ -49,7 +51,7 @@ function accountPairKey(a: string, b: string): string {
 function raiseQuestion(
   db: Database.Database,
   ctx: QuestionContext,
-  input: Omit<Parameters<typeof recordQuestion>[1], "file_id" | "batch_id">,
+  input: RaisedQuestion,
 ): 0 | 1 {
   if (!ctx.batchId) return 0;
   recordQuestion(db, { ...input, file_id: ctx.fileId, batch_id: ctx.batchId });
@@ -63,18 +65,13 @@ function rowRefusalKey(ctx: QuestionContext, row: RowAddress): string | null {
   return `refusal:${ctx.fileId}:${row.source_page ?? 0}:${row.row_index}`;
 }
 
-/**
- * A refused row keeps ONE question however often its batch is re-committed —
- * recognised by its address, the way a posted row is recognised by its derived
- * id. The retry reports `raised_questions: 0`, so the count stays true. The
- * first refusal's wording stands even if the retry fails for a new reason: the
- * result row carries the current reason, this only holds the row's place.
- */
+/** One question per refused row across re-commits, keyed by its address the way a posted row is by
+ *  its derived id; the retry raises 0, and the first refusal's wording stands. */
 function raiseRefusal(
   db: Database.Database,
   ctx: QuestionContext,
   row: RowAddress,
-  input: Omit<Parameters<typeof recordQuestion>[1], "file_id" | "batch_id">,
+  input: RaisedQuestion,
 ): 0 | 1 {
   const key = rowRefusalKey(ctx, row);
   if (!key) return raiseQuestion(db, ctx, input);
@@ -95,7 +92,7 @@ export function closeRowRefusal(
 export function raiseDirtyInput(
   db: Database.Database,
   ctx: QuestionContext,
-  input: QuestionRow & RowAddress,
+  input: QuotedRow & RowAddress,
   reason: string,
 ): 0 | 1 {
   // reason often already ends in a period; strip it so the template's own doesn't double up.
@@ -114,7 +111,7 @@ export function raiseDirtyInput(
 export function raiseUnknownMerchant(
   db: Database.Database,
   ctx: QuestionContext,
-  input: QuestionRow,
+  input: QuotedRow,
   transactionId: string,
   attemptedId: string,
 ): 0 | 1 {
@@ -194,7 +191,7 @@ export function raiseSimilarAccount(
 export function raiseCurrencyMismatch(
   db: Database.Database,
   ctx: QuestionContext,
-  input: QuestionRow & RowAddress,
+  input: QuotedRow & RowAddress,
   debit: { id: string; currency: string },
   credit: { id: string; currency: string },
 ): 0 | 1 {
@@ -216,11 +213,16 @@ export function raiseCurrencyMismatch(
 export function raiseUnknownLedger(
   db: Database.Database,
   ctx: QuestionContext,
-  input: QuestionRow & RowAddress,
+  input: QuotedRow & RowAddress,
   side: TransactionSide,
   accountId: string,
   ledger: string,
 ): 0 | 1 {
+  const type = typeFromId(accountId);
+  const repair = ACCOUNT_TYPES.includes(type as AccountType)
+    ? `create the account first (\`oled accounts create --id ${accountId} --name <name> --type ${type}\`), ` +
+      `or fix the currency prefix and re-ingest.`
+    : `fix the id to <currency>:<type>:<path> against an open ledger and re-ingest.`;
   return raiseRefusal(db, ctx, input, {
     transaction_id: null,
     account_id: null,
@@ -228,13 +230,7 @@ export function raiseUnknownLedger(
     prompt:
       `Transaction "${input.description}" on ${input.date} books its ${side} side to ` +
       `"${accountId}", whose ledger "${ledger}" does not exist here. Opening a ledger is a ` +
-      `deliberate act, never an ingest side effect: ` +
-      (ACCOUNT_TYPES.includes(typeFromId(accountId) as AccountType)
-        ? `create the account first ` +
-          `(\`oled accounts create --id ${accountId} --name <name> --type ${typeFromId(accountId)}\`), ` +
-          `or fix the currency prefix and re-ingest. Nothing was posted.`
-        : `fix the id to <currency>:<type>:<path> against an open ledger and re-ingest. ` +
-          `Nothing was posted.`),
+      `deliberate act, never an ingest side effect: ${repair} Nothing was posted.`,
     context: {
       side,
       account_id: accountId,

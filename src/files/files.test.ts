@@ -6,17 +6,24 @@ import {
   mkdtempSync,
   openSync,
   rmSync,
+  symlinkSync,
   truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { findFileById } from "./queries.js";
+import { findFileById, listFiles } from "./queries.js";
 import { MAX_SOURCE_BYTES, loadSource, type LoadedSource } from "../extract/source.js";
 import { pdfOf, textPdf } from "../../fixtures/pdf.js";
 import { samplePng } from "../../fixtures/images.js";
 import { freshDb } from "../../fixtures/db.js";
-import { cleanCache, countNewFiles, registerPendingFile, resolveEntryPath } from "./files.js";
+import {
+  cleanCache,
+  countNewFiles,
+  registerPendingFile,
+  resolveEntryPath,
+  walkFiles,
+} from "./files.js";
 
 let dataDir: string;
 let cacheDir: string;
@@ -80,17 +87,16 @@ describe("registerPendingFile", () => {
     const source = loaded(write("a.pdf", textPdf()));
 
     const first = registerPendingFile(db, source);
-    expect(first.alreadyKnown).toBe(false);
-    expect(first.fileId.startsWith("sf-")).toBe(true);
-    expect(findFileById(db, first.fileId)?.status).toBe("pending");
+    expect(first.startsWith("sf-")).toBe(true);
+    expect(findFileById(db, first)?.status).toBe("pending");
 
-    const second = registerPendingFile(db, source);
-    expect(second).toEqual({ fileId: first.fileId, alreadyKnown: true });
+    expect(registerPendingFile(db, source)).toBe(first);
+    expect(listFiles(db)).toHaveLength(1);
   });
 
   it("records the real mime, so an image is not filed as a PDF", () => {
     const db = freshDb();
-    const { fileId } = registerPendingFile(db, loaded(write("receipt.png", png)));
+    const fileId = registerPendingFile(db, loaded(write("receipt.png", png)));
     expect(findFileById(db, fileId)?.mime).toBe("image/png");
   });
 });
@@ -135,7 +141,7 @@ describe("resolveEntryPath", () => {
   it("still resolves a file id", () => {
     const db = freshDb();
     const path = write("a.pdf", textPdf());
-    const { fileId } = registerPendingFile(db, loaded(path));
+    const fileId = registerPendingFile(db, loaded(path));
     expect(resolveEntryPath(db, dataDir, fileId)).toBe(path);
   });
 
@@ -159,5 +165,34 @@ describe("cleanCache", () => {
 
   it("is a no-op for a file that wrote no artifacts", () => {
     expect(cleanCache(cacheDir, "sf-nothing").removed).toEqual([]);
+  });
+
+  it("refuses any id that is not exactly one entry inside the cache dir", () => {
+    // Nested, so a broken guard could only ever reach this test's own temp dirs.
+    const cache = resolve(cacheDir, "cache");
+    mkdirSync(resolve(cache, "sf-1", "nested"), { recursive: true });
+
+    for (const id of ["..", ".", "", "sf-1/nested", "sf-1/../..", outsideDir]) {
+      expect(() => cleanCache(cache, id), id).toThrow(/refusing to clean/);
+    }
+    expect(existsSync(resolve(cache, "sf-1", "nested"))).toBe(true);
+    expect(existsSync(outsideDir)).toBe(true);
+  });
+});
+
+describe("walkFiles", () => {
+  it("cuts a symlink back into an ancestor, listing each file once", () => {
+    mkdirSync(resolve(dataDir, "sub"));
+    write("sub/a.pdf", textPdf());
+    symlinkSync(dataDir, resolve(dataDir, "sub", "loop"), "dir");
+
+    expect(walkFiles(dataDir).map((f) => f.relPath)).toEqual(["sub/a.pdf"]);
+  });
+
+  it("still follows a symlinked directory that closes no cycle", () => {
+    writeFileSync(resolve(outsideDir, "b.pdf"), textPdf());
+    symlinkSync(outsideDir, resolve(dataDir, "linked"), "dir");
+
+    expect(walkFiles(dataDir).map((f) => f.relPath)).toEqual(["linked/b.pdf"]);
   });
 });

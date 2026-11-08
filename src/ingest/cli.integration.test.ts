@@ -65,7 +65,7 @@ function stage(relPath: string, bytes: Buffer): string {
   return path;
 }
 
-function readDb(): Database.Database {
+function readDB(): Database.Database {
   const db = new Database(dbPath);
   db.pragma("foreign_keys = ON");
   return db;
@@ -150,7 +150,7 @@ describe("ingest commit v2 (subprocess)", () => {
     expect(summary.failed).toBe(0);
     expect(summary.raised_questions).toBe(1);
 
-    const db = readDb();
+    const db = readDB();
     const n = (
       db.prepare("SELECT COUNT(*) AS n FROM questions WHERE batch_id = ?").get(summary.batch_id) as {
         n: number;
@@ -209,7 +209,7 @@ describe("ingest commit v2 (subprocess)", () => {
     expect(rB.raised_questions).toBe(1);
     expect(rB.merchant).toEqual({ how: "unknown" });
 
-    const db = readDb();
+    const db = readDB();
     try {
       const kinds = db
         .prepare(`SELECT kind FROM questions WHERE batch_id = ? ORDER BY kind`)
@@ -245,7 +245,7 @@ describe("ingest commit v2 (subprocess)", () => {
 
     const missing = await runCLI(["ingest", "commit", "--input", join(dir, "nope.ndjson"), "--json"]);
     expect(missing.code).toBe(5);
-  });
+  }, 30000);
 
   it("returns exit 7 (PARTIAL) with a clean dirty_input result per bad row, never a raw SQL error", async () => {
     const ndjson = [
@@ -318,7 +318,7 @@ describe("ingest commit v2 (subprocess)", () => {
     expect(objs.find((o) => o.type === "summary")).toMatchObject({ posted: 2, failed: 1 });
 
     // The refusal precedes resolution, so the row's placeholder never exists.
-    const db = readDb();
+    const db = readDB();
     const orphan = db
       .prepare(`SELECT 1 FROM accounts WHERE id = ?`)
       .get("thb:expense:absurd-xyz");
@@ -362,7 +362,7 @@ describe("ingest commit v2 (subprocess)", () => {
   }, 30000);
 
   it("is idempotent: a second commit of the same row reports duplicate:true, balance unchanged", async () => {
-    const db = readDb();
+    const db = readDB();
     db.prepare(
       `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
     ).run("sf-idem", "/tmp/idem.pdf", "idem-hash", "application/pdf");
@@ -396,7 +396,7 @@ describe("ingest commit v2 (subprocess)", () => {
     expect(secondSummary.duplicates).toBe(1);
     expect(secondSummary.failed).toBe(0);
 
-    const db2 = readDb();
+    const db2 = readDB();
     const n = (
       db2.prepare("SELECT COUNT(*) AS n FROM transactions WHERE source_file_id = 'sf-idem'").get() as {
         n: number;
@@ -407,7 +407,7 @@ describe("ingest commit v2 (subprocess)", () => {
   }, 45000);
 
   it("a duplicate re-commit reports the sides the stored row holds, not the ones this run would have resolved", async () => {
-    const db = readDb();
+    const db = readDB();
     createAccount(db, { id: "thb:expense:sides-a", name: "Sides A", type: "expense", parent_id: "thb:expense" });
     createAccount(db, { id: "thb:expense:sides-b", name: "Sides B", type: "expense", parent_id: "thb:expense" });
     db.prepare(
@@ -479,7 +479,7 @@ describe("ingest commit v2 (subprocess)", () => {
     const { code } = await runCLI(["ingest", "commit", "--json"], { stdin: item });
     expect(code).toBe(0);
 
-    const db = readDb();
+    const db = readDB();
     const row = db
       .prepare(`SELECT void_of FROM transactions WHERE description = ?`)
       .get(description) as { void_of: string | null };
@@ -489,11 +489,11 @@ describe("ingest commit v2 (subprocess)", () => {
     const after = await runCLI(["accounts", "show", "thb:expense:food", "--json"]);
     const balanceAfter = parseNdjson(after.stdout)[0].balance as number;
     expect(balanceAfter - balanceBefore).toBeCloseTo(42, 5);
-  });
+  }, 30000);
 
   it("commits a compound (linked) salary split under one shared group, one leg per file_transaction_count", async () => {
     const fileId = "sf-compound";
-    const db = readDb();
+    const db = readDB();
     createAccount(db, { id: "thb:asset:bank", name: "Bank", type: "asset", parent_id: "thb:asset" });
     createAccount(db, { id: "thb:income:salary", name: "Salary", type: "income", parent_id: "thb:income" });
     createAccount(db, { id: "thb:expense:tax", name: "Tax", type: "expense", parent_id: "thb:expense" });
@@ -527,7 +527,7 @@ describe("ingest commit v2 (subprocess)", () => {
     // A compound row reports no sides: each leg has its own pair, and the group is the unit.
     expect(r.sides).toBeUndefined();
 
-    const db2 = readDb();
+    const db2 = readDB();
     const rows = db2.prepare("SELECT id FROM transactions WHERE group_id = ?").all(r.group_id);
     db2.close();
     expect(rows).toHaveLength(2);
@@ -539,7 +539,7 @@ describe("ingest commit v2 (subprocess)", () => {
   }, 30000);
 
   it("rejects a cross-currency transaction with a currency_mismatch question", async () => {
-    const db = readDb();
+    const db = readDB();
     createAccount(db, {
       id: "usd:asset:wallet",
       name: "USD Wallet",
@@ -566,7 +566,7 @@ describe("ingest commit v2 (subprocess)", () => {
     const summary = objs.find((o) => o.type === "summary");
     expect(summary.failed).toBe(1);
 
-    const db2 = readDb();
+    const db2 = readDB();
     const q = db2.prepare("SELECT * FROM questions WHERE kind = 'currency_mismatch'").get();
     db2.close();
     expect(q).toBeTruthy();
@@ -627,7 +627,7 @@ describe("ingest commit v2 (subprocess)", () => {
     expect(summary.posted).toBe(1);
     expect(summary.failed).toBe(2);
 
-    const db = readDb();
+    const db = readDB();
     const opened = (
       db.prepare("SELECT COUNT(*) AS n FROM accounts WHERE id LIKE 'eur:%'").get() as { n: number }
     ).n;
@@ -754,7 +754,7 @@ describe("ingest prepare (subprocess)", () => {
     const source = loadSource(path);
     if (!source.ok) throw new Error(source.message);
     const fileId = "sf-force-locked";
-    const db = readDb();
+    const db = readDB();
     db.prepare(
       `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
     ).run(fileId, path, source.value.hash, source.value.mime);
@@ -888,7 +888,7 @@ describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
 
   it("the commit summary names the file it left pending and the command that closes it", async () => {
     const fileId = "sf-pending-hint";
-    const db = readDb();
+    const db = readDB();
     try {
       db.prepare(
         `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
@@ -953,7 +953,7 @@ describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
 
   it("re-piping a batch of failed rows leaves the file's open question count where it was", async () => {
     const fileId = "sf-refusal-retry";
-    const db = readDb();
+    const db = readDB();
     try {
       db.prepare(
         `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'ingested')`,
@@ -1191,7 +1191,7 @@ describe("ingest done reconciliation (subprocess)", () => {
 describe("ingest fail (subprocess)", () => {
   it("purges the file's raster cache and reports cache_removed", async () => {
     const fileId = "sf-cache-test";
-    const db = readDb();
+    const db = readDB();
     try {
       db.prepare(
         `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,

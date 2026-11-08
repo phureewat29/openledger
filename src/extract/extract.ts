@@ -18,9 +18,6 @@ import {
 import { readerFor, verdictOf, type Reader, type TextLayer } from "./route.js";
 import type { SourceKind } from "./source.js";
 
-// Kept only for src/ingest/prepare.test.ts; drop once it imports DEFAULT_RENDER from ./pdf.js.
-export const PAGE_RENDER = DEFAULT_RENDER;
-
 export interface TextPage {
   page: number;
   text: string;

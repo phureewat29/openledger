@@ -1,6 +1,8 @@
 import type Database from "libsql";
 import { ISO_NOW_SQL } from "../db/timestamps.js";
 import { inTransaction } from "../db/transaction.js";
+import { countTransactionsBySourceFile } from "../transactions/queries.js";
+import { countQuestions } from "../questions/queries.js";
 
 interface FileTotals {
   ingested: number;
@@ -24,21 +26,12 @@ export interface FileRow {
   created_at: string;
 }
 
-function isFileStatus(status: string): status is FileStatus {
-  return (FILE_STATUSES as readonly string[]).includes(status);
-}
-
-/** Missing status buckets are filled with 0, so the shape is stable. */
 export function countFiles(db: Database.Database): FileTotals {
   const rows = db
     .prepare(`SELECT status, COUNT(*) AS n FROM files GROUP BY status`)
-    .all() as { status: string; n: number }[];
-
-  const totals: FileTotals = { ingested: 0, pending: 0, failed: 0 };
-  for (const row of rows) {
-    if (isFileStatus(row.status)) totals[row.status] = row.n;
-  }
-  return totals;
+    .all() as { status: FileStatus; n: number }[];
+  const count = (status: FileStatus): number => rows.find((row) => row.status === status)?.n ?? 0;
+  return { ingested: count("ingested"), pending: count("pending"), failed: count("failed") };
 }
 
 const FILE_SELECT = `SELECT id, path, file_hash, mime, status, ingested_at, source, error, created_at
@@ -94,7 +87,7 @@ interface DeleteFileResult {
   removed: FileRow | null;
   removedTransactions: number;
   removedQuestions: number;
-  /** Mirrors from OTHER files whose `void_of` pointed here: the CASCADE un-voids them (`void_of`'s ON DELETE SET NULL), same as `deleteTransaction`. */
+  /** Mirrors from OTHER files whose `void_of` pointed here: the CASCADE un-voids them (`void_of`'s ON DELETE SET NULL). */
   unvoided: number;
 }
 
@@ -105,12 +98,8 @@ export function deleteFile(db: Database.Database, id: string): DeleteFileResult 
     if (!removed) {
       return { removed: null, removedTransactions: 0, removedQuestions: 0, unvoided: 0 };
     }
-    const removedTransactions = (db
-      .prepare(`SELECT COUNT(*) AS n FROM transactions WHERE source_file_id = ?`)
-      .get(id) as { n: number }).n;
-    const removedQuestions = (db
-      .prepare(`SELECT COUNT(*) AS n FROM questions WHERE file_id = ?`)
-      .get(id) as { n: number }).n;
+    const removedTransactions = countTransactionsBySourceFile(db, id);
+    const removedQuestions = countQuestions(db, { file_id: id, includeDeferred: true });
     // Excludes mirrors that are themselves doomed (also sourced from this
     // file): those get deleted outright, not un-voided.
     const unvoided = (db

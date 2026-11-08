@@ -19,7 +19,7 @@ import { createAccount } from "../accounts/accounts.js";
 import { upsertMerchant } from "../merchants/queries.js";
 import { insertTransaction, countTransactionsBySourceFile } from "../transactions/queries.js";
 import { findFileById } from "../files/queries.js";
-import { PAGE_RENDER } from "../extract/extract.js";
+import { DEFAULT_RENDER } from "../extract/pdf.js";
 import { MAX_SOURCE_BYTES, loadSource, type LoadedSource } from "../extract/source.js";
 import {
   corruptPdf,
@@ -84,7 +84,7 @@ describe("discoverFiles", () => {
     expect(first.map((e) => e.relPath).sort()).toEqual(["a.pdf", "sub/b.pdf"]);
 
     const target = first.find((e) => e.relPath === "a.pdf")!;
-    const { fileId } = registerPendingFile(db, loaded(target.path));
+    const fileId = registerPendingFile(db, loaded(target.path));
 
     const second = await discoverFiles(db, dataDir);
     const known = second.find((e) => e.relPath === "a.pdf")!;
@@ -179,7 +179,7 @@ describe("prepareFile: text route", () => {
   it("resolves a file id as readily as a path", async () => {
     const db = freshDb();
     const path = write("a.pdf", textPdf());
-    const { fileId } = registerPendingFile(db, loaded(path));
+    const fileId = registerPendingFile(db, loaded(path));
 
     const outcome = await prepareFile(db, cfg, fileId);
     expect(outcome.ok && outcome.fileId).toBe(fileId);
@@ -242,7 +242,7 @@ describe("prepareFile: image route", () => {
     // Named before the narrowing guard, so a silent fallback to the text route can't pass this vacuously.
     expect(outcome.ok && outcome.kind).toBe("images");
     if (!outcome.ok || outcome.kind !== "images") return;
-    expect(outcome).toMatchObject({ source: "raster", textLayer: "none", dpi: PAGE_RENDER.dpi });
+    expect(outcome).toMatchObject({ source: "raster", textLayer: "none", dpi: DEFAULT_RENDER.dpi });
     expect(outcome.pages).toEqual([{ page: 1, path: resolve(cacheDir, outcome.fileId, "p1.png") }]);
 
     const bytes = readFileSync(outcome.pages[0].path);
@@ -414,7 +414,7 @@ describe("prepareFile: --force", () => {
     const db = freshDb();
     const path = write("kbank.pdf", await encryptedPdf("secret"));
     // Registered by hash without ever unlocking it, so only the wrong password below is tried.
-    const { fileId } = registerPendingFile(db, loaded(path));
+    const fileId = registerPendingFile(db, loaded(path));
     commitRow(db, fileId);
 
     const forced = await prepareFile(db, cfg, path, { force: true, password: "nope" });

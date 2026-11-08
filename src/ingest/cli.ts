@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import type Database from "libsql";
+import { countBy } from "es-toolkit";
 import { runAction, type Invocation } from "../cli/output.js";
 import type { Column } from "../cli/format.js";
 import { fail, type FailureCode } from "../cli/errors.js";
@@ -11,13 +12,14 @@ import { getAccountBalanceMinor } from "../accounts/balances.js";
 import { DIRECTION_RULES } from "./commit.js";
 import { currencyOf } from "../lib/ids.js";
 import { formatFixed, fromMinorUnits, toMinorUnits } from "../lib/money.js";
+import { tryExecute } from "../lib/result.js";
 import { parseInput, num, str } from "../lib/validate.js";
 import * as z from "zod";
 // source.ts avoids mupdf/libsql, so this import is safe on the startup path.
 import { MAX_SOURCE_BYTES, SUPPORTED_EXTS } from "../extract/source.js";
 import { cleanCache } from "../files/files.js";
 import { requireFile } from "../files/cli.js";
-// prepare.ts keeps mupdf/libsql lazy internally (getMupdf() in extract/pdf.ts), so this import is safe on the startup path.
+// prepare.ts keeps mupdf/libsql lazy internally (loadMupdf() in extract/pdf.ts), so this import is safe on the startup path.
 import {
   discoverFiles,
   prepareFile,
@@ -59,27 +61,26 @@ function toIngestFile(entry: IngestEntry): IngestFile {
   };
 }
 
+function compileRegex(pattern: string): RegExp {
+  const compiled = tryExecute(() => new RegExp(pattern));
+  if (!compiled.ok) fail("USAGE", `invalid --regex: ${compiled.error}`);
+  return compiled.value;
+}
+
+const NO_ENTRIES: Record<IngestEntry["status"], number> = {
+  new: 0,
+  pending: 0,
+  ingested: 0,
+  failed: 0,
+  unreadable: 0,
+};
+
 async function listIngest(ctx: Invocation, opts: ListIngestOpts): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
-
-  let regex: RegExp | undefined;
-  if (opts.regex) {
-    try {
-      regex = new RegExp(opts.regex);
-    } catch (err) {
-      fail("USAGE", `invalid --regex: ${(err as Error).message}`);
-    }
-  }
+  const regex = opts.regex ? compileRegex(opts.regex) : undefined;
 
   const entries = await discoverFiles(db, config.dataDir, { regex });
-  const counts: Record<IngestEntry["status"], number> = {
-    new: 0,
-    pending: 0,
-    ingested: 0,
-    failed: 0,
-    unreadable: 0,
-  };
-  for (const e of entries) counts[e.status]++;
+  const counts = { ...NO_ENTRIES, ...countBy(entries, (e) => e.status) };
   const total = entries.length;
 
   const { out } = ctx;
@@ -243,6 +244,24 @@ function reconcileStatement(db: Database.Database, target: ReconcileTarget): Rec
   };
 }
 
+// The cache goes only once `mark` returns: a refused close leaves the file pending with its extraction.
+async function closeFile<T>(
+  ctx: Invocation,
+  id: string,
+  verb: "done" | "fail",
+  mark: (db: Database.Database) => T,
+): Promise<{ marked: T; removed: string[] }> {
+  const { config, db } = await openLedger(ctx.configPath);
+  requireFile(
+    db,
+    id,
+    `run \`oled ingest list --json\` for the file ids; ${verb} takes the sf-id prepare returned, not the path`,
+  );
+  const marked = mark(db);
+  const { removed } = cleanCache(config.cacheDir, id);
+  return { marked, removed };
+}
+
 async function completeIngest(
   ctx: Invocation,
   id: string,
@@ -250,18 +269,12 @@ async function completeIngest(
 ): Promise<void> {
   const flags = parseInput(DONE_FLAGS_SPEC, opts);
   const target = reconcileTarget(flags);
-  const { config, db } = await openLedger(ctx.configPath);
-  requireFile(
-    db,
-    id,
-    "run `oled ingest list --json` for the file ids; done takes the sf-id prepare returned, not the path",
-  );
-
-  // Before the status flips, so a file that was pending stays pending.
-  const reconciliation = target ? reconcileStatement(db, target) : null;
-
-  markFileIngested(db, id, { source: flags.agent ?? "external" });
-  const { removed } = cleanCache(config.cacheDir, id);
+  const { marked: reconciliation, removed } = await closeFile(ctx, id, "done", (db) => {
+    // Before the status flips, so a file that was pending stays pending.
+    const checked = target ? reconcileStatement(db, target) : null;
+    markFileIngested(db, id, { source: flags.agent ?? "external" });
+    return checked;
+  });
   const result: IngestDoneResult = {
     file_id: id,
     status: "ingested",
@@ -277,17 +290,12 @@ interface FailIngestOpts {
 }
 
 async function failIngest(ctx: Invocation, id: string, opts: FailIngestOpts): Promise<void> {
-  if (!opts.error) fail("USAGE", "`ingest fail` requires --error <text>");
+  const { agent, error } = opts;
+  if (!error) fail("USAGE", "`ingest fail` requires --error <text>");
 
-  const { config, db } = await openLedger(ctx.configPath);
-  requireFile(
-    db,
-    id,
-    "run `oled ingest list --json` for the file ids; fail takes the sf-id prepare returned, not the path",
+  const { removed } = await closeFile(ctx, id, "fail", (db) =>
+    markFileFailed(db, id, { source: agent ?? "external", error }),
   );
-  markFileFailed(db, id, { source: opts.agent ?? "external", error: opts.error });
-
-  const { removed } = cleanCache(config.cacheDir, id);
   const result: IngestFailResult = { file_id: id, status: "failed", cache_removed: removed };
   ctx.out.emitObject(result);
 }

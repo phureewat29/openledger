@@ -1,4 +1,5 @@
 import type Database from "libsql";
+import { countBy, isPlainObject, memoize, sumBy } from "es-toolkit";
 import {
   commitLinkedTransactions,
   commitTransaction,
@@ -17,7 +18,7 @@ import type {
 } from "../contract/ingest.js";
 import type { Invocation, Output } from "../cli/output.js";
 import { fail, tryBatchItem } from "../cli/errors.js";
-import { asRecord, readStdinBatch } from "../cli/input.js";
+import { readStdinBatch } from "../cli/input.js";
 import { openLedger } from "../config/cli.js";
 import { noiseTokens } from "../datasets/datasets.js";
 import type { ExitCode } from "../contract/exit.js";
@@ -54,6 +55,7 @@ const LINKED_HEADER_SPEC = z.object({
   description: str().default(""),
   raw_descriptor: str().nullable().default(null),
   source_page: num().nullable().default(null),
+  source_file_id: str().nullable().optional(),
   merchant: MERCHANT_INPUT,
   merchant_id: str().nullable().default(null),
   group_id: str().nullable().default(null),
@@ -73,6 +75,7 @@ const STANDALONE_SPEC = z.object({
   description: str().default(""),
   raw_descriptor: str().nullable().default(null),
   source_page: num().nullable().default(null),
+  source_file_id: str().nullable().optional(),
   row_index: num().nullable().default(null),
   merchant: MERCHANT_INPUT,
   merchant_id: str().nullable().default(null),
@@ -87,27 +90,13 @@ const LEG_ALIASES = {
   credit_account_id: ["credit_account"],
 };
 
-interface Counters {
-  posted: number;
-  duplicates: number;
-  failed: number;
-  raisedTotal: number;
-}
+type ContextFor = (sourceFileId: string | null | undefined) => TransactionCommitContext;
 
-interface RowContext {
-  record: Record<string, unknown>;
-  index: number;
-  fileId: string | null;
-  ctx: TransactionCommitContext;
-}
-
-// A pre-pipeline reject (bad JSON shape) never throws: it reuses the per-row failure shape.
-function failRow(counters: Counters, index: number, message: string): CommitFailureResult {
-  return failOutcome(counters, index, { reason: "dirty_input", message, raisedQuestions: 0 });
+function failRow(index: number, message: string): CommitFailureResult {
+  return failOutcome(index, { reason: "dirty_input", message, raisedQuestions: 0 });
 }
 
 function failOutcome(
-  counters: Counters,
   index: number,
   outcome: {
     reason: CommitFailureReason;
@@ -116,7 +105,6 @@ function failOutcome(
     unopenedLedger?: string;
   },
 ): CommitFailureResult {
-  counters.failed++;
   return {
     type: "result",
     index,
@@ -124,47 +112,41 @@ function failOutcome(
     reason: outcome.reason,
     message: outcome.message,
     raised_questions: outcome.raisedQuestions,
-    // Typed marker for the currency_mismatch repair (open the named ledger), so agents branch on it, not prose.
     ...(outcome.unopenedLedger ? { unopened_ledger: outcome.unopenedLedger } : {}),
   };
 }
 
-// Legs commit atomically under one group id.
 function commitCompoundRow(
   db: Database.Database,
-  counters: Counters,
-  row: RowContext,
+  contextFor: ContextFor,
+  record: Record<string, unknown>,
+  index: number,
   linked: unknown[],
 ): CommitCompoundResult | CommitFailureResult {
-  const parsedHeader = safeParse(LINKED_HEADER_SPEC, row.record);
-  if (!parsedHeader.ok) return failRow(counters, row.index, parsedHeader.error);
-  const header: LinkedTransactionHeader = { ...parsedHeader.value, source_file_id: row.fileId };
+  const parsedHeader = safeParse(LINKED_HEADER_SPEC, record);
+  if (!parsedHeader.ok) return failRow(index, parsedHeader.error);
 
   const legs: LinkedTransactionLeg[] = [];
   for (const rawLeg of linked) {
-    const legRecord = asRecord(rawLeg);
-    if (!legRecord) return failRow(counters, row.index, "each linked leg must be a JSON object.");
-    const parsedLeg = safeParse(LINKED_LEG_SPEC, legRecord, { aliases: LEG_ALIASES });
-    if (!parsedLeg.ok) return failRow(counters, row.index, parsedLeg.error);
+    if (!isPlainObject(rawLeg)) return failRow(index, "each linked leg must be a JSON object.");
+    const parsedLeg = safeParse(LINKED_LEG_SPEC, rawLeg, { aliases: LEG_ALIASES });
+    if (!parsedLeg.ok) return failRow(index, parsedLeg.error);
     // Cast is a lie for malformed rows: validateRawTransaction rejects those.
-    legs.push({ ...parsedLeg.value, amount: legRecord.amount as number });
+    legs.push({ ...parsedLeg.value, amount: rawLeg.amount as number });
   }
 
-  const outcome = commitLinkedTransactions(db, row.ctx, header, legs);
-  counters.raisedTotal += outcome.raisedQuestions;
-  if (!outcome.ok) return failOutcome(counters, row.index, outcome);
-
-  const allDuplicate = outcome.results.every((r) => r.duplicate);
-  if (allDuplicate) counters.duplicates++;
-  else counters.posted++;
+  const ctx = contextFor(parsedHeader.value.source_file_id);
+  const header: LinkedTransactionHeader = { ...parsedHeader.value, source_file_id: ctx.fileId };
+  const outcome = commitLinkedTransactions(db, ctx, header, legs);
+  if (!outcome.ok) return failOutcome(index, outcome);
 
   return {
     type: "result",
-    index: row.index,
+    index,
     ok: true,
     group_id: outcome.group_id,
     legs: outcome.results.map((r) => ({ transaction_id: r.id, duplicate: r.duplicate })),
-    duplicate: allDuplicate,
+    duplicate: outcome.results.every((r) => r.duplicate),
     currency_overridden: outcome.currencyOverridden,
     raised_questions: outcome.raisedQuestions,
     merchant: outcome.merchant,
@@ -173,28 +155,26 @@ function commitCompoundRow(
 
 function commitStandaloneRow(
   db: Database.Database,
-  counters: Counters,
-  row: RowContext,
+  contextFor: ContextFor,
+  record: Record<string, unknown>,
+  index: number,
 ): CommitStandaloneResult | CommitFailureResult {
-  const parsed = safeParse(STANDALONE_SPEC, row.record, { aliases: LEG_ALIASES });
-  if (!parsed.ok) return failRow(counters, row.index, parsed.error);
+  const parsed = safeParse(STANDALONE_SPEC, record, { aliases: LEG_ALIASES });
+  if (!parsed.ok) return failRow(index, parsed.error);
+
+  const ctx = contextFor(parsed.value.source_file_id);
   // Cast is a lie for malformed rows: validateRawTransaction rejects those.
   const raw: RawTransactionInput = {
     ...parsed.value,
-    source_file_id: row.fileId,
-    amount: row.record.amount as number,
+    source_file_id: ctx.fileId,
+    amount: record.amount as number,
   };
-
-  const outcome = commitTransaction(db, row.ctx, raw);
-  counters.raisedTotal += outcome.raisedQuestions;
-  if (!outcome.ok) return failOutcome(counters, row.index, outcome);
-
-  if (outcome.duplicate) counters.duplicates++;
-  else counters.posted++;
+  const outcome = commitTransaction(db, ctx, raw);
+  if (!outcome.ok) return failOutcome(index, outcome);
 
   return {
     type: "result",
-    index: row.index,
+    index,
     ok: true,
     transaction_id: outcome.transactionId,
     duplicate: outcome.duplicate,
@@ -209,45 +189,21 @@ export interface BatchContext {
   batchId: string;
   /** The `--file` id every row inherits unless it names its own. */
   file?: string;
-  fileHashes: Map<string, string | null>;
   noise: readonly string[];
-}
-
-// file_hash is what makes transaction ids deterministic, and dedup relies on that.
-// Caching is sound because a commit writes transactions, never `files`.
-function fileHashOf(db: Database.Database, batch: BatchContext, fileId: string): string | null {
-  const seen = batch.fileHashes.get(fileId);
-  // A missing file caches as null, which `get` cannot tell from an absent key.
-  if (seen !== undefined) return seen;
-  const hash = findFileById(db, fileId)?.file_hash ?? null;
-  batch.fileHashes.set(fileId, hash);
-  return hash;
 }
 
 function commitRow(
   db: Database.Database,
-  counters: Counters,
-  batch: BatchContext,
+  contextFor: ContextFor,
   item: unknown,
   index: number,
 ): CommitResult {
-  const record = asRecord(item);
-  if (!record) return failRow(counters, index, "each transaction must be a JSON object.");
-
-  const fileId = ((record.source_file_id as string | null | undefined) ?? batch.file) ?? null;
-  const fileHash = fileId ? fileHashOf(db, batch, fileId) : null;
-  const row: RowContext = {
-    record,
-    index,
-    fileId,
-    ctx: { batchId: batch.batchId, fileId, fileHash, noise: batch.noise },
-  };
-
-  const linked = record.linked;
+  if (!isPlainObject(item)) return failRow(index, "each transaction must be a JSON object.");
+  const { linked } = item;
   if (Array.isArray(linked) && linked.length > 0) {
-    return commitCompoundRow(db, counters, row, linked);
+    return commitCompoundRow(db, contextFor, item, index, linked);
   }
-  return commitStandaloneRow(db, counters, row);
+  return commitStandaloneRow(db, contextFor, item, index);
 }
 
 /**
@@ -260,22 +216,60 @@ export function commitRows(
   db: Database.Database,
   batch: BatchContext,
   items: unknown[],
-): Counters {
-  const counters: Counters = { posted: 0, duplicates: 0, failed: 0, raisedTotal: 0 };
-  for (let index = 0; index < items.length; index++) {
-    const committed = tryBatchItem(() => commitRow(db, counters, batch, items[index], index));
+): CommitResult[] {
+  // file_hash makes transaction ids deterministic; caching it is sound because a commit never writes `files`.
+  const fileHashOf = memoize((fileId: string) => findFileById(db, fileId)?.file_hash ?? null);
+  const contextFor: ContextFor = (sourceFileId) => {
+    const fileId = sourceFileId ?? batch.file ?? null;
+    const fileHash = fileId ? fileHashOf(fileId) : null;
+    return { batchId: batch.batchId, fileId, fileHash, noise: batch.noise };
+  };
+
+  return items.map((item, index) => {
+    const committed = tryBatchItem(() => commitRow(db, contextFor, item, index));
     // Reason stays `unexpected_error` (not `dirty_input`): unknown whether the row or the database was at fault.
     const result: CommitResult = committed.ok
       ? committed.value
-      : failOutcome(counters, index, {
-          reason: "unexpected_error",
-          message: committed.error,
-          raisedQuestions: 0,
-        });
-    if (out.mode.json) out.emit(result);
-    else out.emitObject(result);
+      : failOutcome(index, { reason: "unexpected_error", message: committed.error, raisedQuestions: 0 });
+    out.emitObject(result);
+    return result;
+  });
+}
+
+type RowBucket = "posted" | "duplicates" | "failed";
+
+const NO_ROWS: Record<RowBucket, number> = { posted: 0, duplicates: 0, failed: 0 };
+
+function rowBucket(result: CommitResult): RowBucket {
+  if (!result.ok) return "failed";
+  return result.duplicate ? "duplicates" : "posted";
+}
+
+type BatchTally = Pick<CommitSummary, RowBucket | "raised_questions">;
+
+/** Every row's result carries its own raised_questions, failures included. */
+function tallyRows(results: CommitResult[]): BatchTally {
+  return {
+    ...NO_ROWS,
+    ...countBy(results, rowBucket),
+    raised_questions: sumBy(results, (r) => r.raised_questions),
+  };
+}
+
+function reportBatch(out: Output, summary: Omit<CommitSummary, "type">): void {
+  if (out.mode.json) {
+    out.emitSummary(summary);
+    return;
   }
-  return counters;
+  out.write(
+    `\nbatch ${summary.batch_id}: ${summary.posted} posted, ${summary.duplicates} duplicate(s), ${summary.failed} failed, ${summary.raised_questions} question(s) raised\n`,
+  );
+  if (summary.file_id) {
+    out.write(
+      `file ${summary.file_id}: ${summary.file_transaction_count} transactions, ${summary.file_open_question_count} open questions\n`,
+    );
+  }
+  if (summary.hint) out.write(`${summary.hint}\n`);
 }
 
 export async function commitIngest(
@@ -299,15 +293,8 @@ export async function commitIngest(
 
   // Must be non-null: raise() no-ops when batchId is null, silently dropping every question.
   const batchId = newBatchId();
-  const batch: BatchContext = {
-    batchId,
-    file: opts.file,
-    fileHashes: new Map(),
-    noise: noiseTokens(config.country),
-  };
-
-  const { out } = ctx;
-  const counters = commitRows(out, db, batch, items);
+  const batch: BatchContext = { batchId, file: opts.file, noise: noiseTokens(config.country) };
+  const tally = tallyRows(commitRows(ctx.out, db, batch, items));
 
   // Callers act on the summary, so an unfinished file has to be visible there.
   const pendingHint =
@@ -325,29 +312,13 @@ export async function commitIngest(
       }
     : null;
 
-  if (out.mode.json) {
-    const summary: Omit<CommitSummary, "type"> = {
-      batch_id: batchId,
-      posted: counters.posted,
-      duplicates: counters.duplicates,
-      failed: counters.failed,
-      raised_questions: counters.raisedTotal,
-      ...(fileFacts ?? {}),
-      ...(pendingHint ? { hint: pendingHint } : {}),
-    };
-    out.emitSummary(summary);
-  } else {
-    out.write(
-      `\nbatch ${batchId}: ${counters.posted} posted, ${counters.duplicates} duplicate(s), ${counters.failed} failed, ${counters.raisedTotal} question(s) raised\n`,
-    );
-    if (fileFacts) {
-      out.write(
-        `file ${fileFacts.file_id}: ${fileFacts.file_transaction_count} transactions, ${fileFacts.file_open_question_count} open questions\n`,
-      );
-    }
-    if (pendingHint) out.write(`${pendingHint}\n`);
-  }
+  reportBatch(ctx.out, {
+    batch_id: batchId,
+    ...tally,
+    ...(fileFacts ?? {}),
+    ...(pendingHint ? { hint: pendingHint } : {}),
+  });
 
   // Exit 7 only for genuine failures: duplicates are a successful no-op.
-  return counters.failed > 0 ? "PARTIAL" : undefined;
+  return tally.failed > 0 ? "PARTIAL" : undefined;
 }

@@ -9,7 +9,7 @@ import { isEncryptedPdf, unlockPdf, type UnlockFailureReason } from "../extract/
 import type { TextLayer } from "../extract/route.js";
 import { loadSource, type LoadedSource } from "../extract/source.js";
 import { newFileId } from "../lib/ids.js";
-import { tryExecute, type Result } from "../lib/result.js";
+import { ok, tryExecute, type Result } from "../lib/result.js";
 import {
   RM_OPTS,
   cleanCache,
@@ -33,7 +33,7 @@ export interface IngestEntry extends WalkedFile {
 
 /** Only a PDF can be locked, and only a PDF can be unopenable; an image needs neither probe. */
 async function encryptionOf(source: LoadedSource): Promise<Result<boolean>> {
-  if (source.kind !== "pdf") return { ok: true, value: false };
+  if (source.kind !== "pdf") return ok(false);
   return tryExecute(() => isEncryptedPdf(source.bytes));
 }
 
@@ -42,35 +42,32 @@ function unreadableEntry(file: WalkedFile, note: string): IngestEntry {
 }
 
 /** A file this harness can't read becomes an `unreadable` row, rather than sinking the listing. */
+async function discoverEntry(db: Database.Database, file: WalkedFile): Promise<IngestEntry> {
+  const loaded = loadSource(file.path);
+  if (!loaded.ok) return unreadableEntry(file, loaded.message);
+  const encryption = await encryptionOf(loaded.value);
+  if (!encryption.ok) return unreadableEntry(file, encryption.error);
+
+  const known = findFileByHash(db, loaded.value.hash);
+  return {
+    ...file,
+    hash: loaded.value.hash,
+    fileId: known?.id ?? null,
+    status: known ? known.status : "new",
+    encrypted: encryption.value,
+  };
+}
+
 export async function discoverFiles(
   db: Database.Database,
   dataDir: string,
   opts: { regex?: RegExp } = {},
 ): Promise<IngestEntry[]> {
+  const { regex } = opts;
+  const files = walkFiles(dataDir).filter((file) => !regex || regex.test(file.relPath));
+  // One at a time: each probe holds a whole statement's bytes in memory.
   const entries: IngestEntry[] = [];
-  for (const file of walkFiles(dataDir)) {
-    if (opts.regex && !opts.regex.test(file.relPath)) continue;
-
-    const loaded = loadSource(file.path);
-    if (!loaded.ok) {
-      entries.push(unreadableEntry(file, loaded.message));
-      continue;
-    }
-    const encryption = await encryptionOf(loaded.value);
-    if (!encryption.ok) {
-      entries.push(unreadableEntry(file, encryption.error));
-      continue;
-    }
-
-    const known = findFileByHash(db, loaded.value.hash);
-    entries.push({
-      ...file,
-      hash: loaded.value.hash,
-      fileId: known?.id ?? null,
-      status: known ? known.status : "new",
-      encrypted: encryption.value,
-    });
-  }
+  for (const file of files) entries.push(await discoverEntry(db, file));
   return entries;
 }
 
@@ -85,7 +82,6 @@ interface PrepareOptions {
   noOcr?: boolean;
 }
 
-/** Everything that can stop a prepare. */
 export type PrepareFailure =
   | "not_found"
   | "unsupported_extension"
@@ -244,12 +240,11 @@ function writePages(
   }
 
   freshDir(target.dir);
-  const pages: ImagePagePath[] = [];
-  for (const page of extraction.pages) {
+  const pages = extraction.pages.map((page): ImagePagePath => {
     const path = resolve(target.dir, `p${page.page}.png`);
     writeFileSync(path, page.bytes, { mode: 0o600 });
-    pages.push({ page: page.page, path });
-  }
+    return { page: page.page, path };
+  });
   return { ...head, pages };
 }
 
@@ -263,7 +258,6 @@ const WRITE_ARTIFACTS: {
   images: writePages,
 };
 
-/** The slice of config preparing a file needs: where statements live, where extractions land, how to reach OCR. */
 export type PrepareConfig = Pick<OpenLedgerConfig, "dataDir" | "cacheDir"> & OCRConfigSource;
 
 /** A failed --force keeps the prior file row and its transactions; only success replaces it. */
@@ -284,7 +278,7 @@ export async function prepareFile(
 
   // Registers now (except --force's swap): a file that never opens still needs an id.
   const prior = opts.force ? findFileByHash(db, source.hash) : null;
-  const fileId = prior ? newFileId() : registerPendingFile(db, source).fileId;
+  const fileId = prior ? newFileId() : registerPendingFile(db, source);
 
   const readable = await readableBytes(source, opts.password);
   if (!readable.ok) return readable;

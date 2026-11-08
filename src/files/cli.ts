@@ -5,13 +5,14 @@ import type { Column } from "../cli/format.js";
 import { fail } from "../cli/errors.js";
 import { requireYes } from "../cli/input.js";
 import { openLedger } from "../config/cli.js";
+import { parseInput } from "../lib/validate.js";
+import * as z from "zod";
 import {
   FILE_STATUSES,
   deleteFile,
   findFileById,
   listFiles as queryFiles,
   type FileRow,
-  type FileStatus,
 } from "./queries.js";
 import { countTransactionsBySourceFile } from "../transactions/queries.js";
 import { countQuestions } from "../questions/queries.js";
@@ -37,17 +38,10 @@ const FILE_COLUMNS: Column<FileRecord>[] = [
   { header: "Path", value: (r) => r.path },
 ];
 
-interface ListFilesOpts {
-  status?: string;
-}
+const LIST_FILES_SPEC = z.object({ status: z.enum(FILE_STATUSES).optional() });
 
-async function listFiles(ctx: Invocation, opts: ListFilesOpts): Promise<void> {
-  // Checked up front: an unrecognized status would otherwise silently return zero rows.
-  const { status } = opts;
-  if (status !== undefined && !FILE_STATUSES.includes(status as FileStatus)) {
-    fail("USAGE", `--status must be one of ${FILE_STATUSES.join("|")}, got "${status}"`);
-  }
-
+async function listFiles(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
+  const { status } = parseInput(LIST_FILES_SPEC, opts);
   const { db } = await openLedger(ctx.configPath);
   const rows = queryFiles(db);
   const shown = status ? rows.filter((r) => r.status === status) : rows;
@@ -84,15 +78,15 @@ async function dropFile(ctx: Invocation, id: string, opts: DropFileOpts): Promis
   requireYes(opts, `dropping file ${id}`);
   const { config, db } = await openLedger(ctx.configPath);
   requireFile(db, id, "run `oled files list --json` for the ids");
-  const res = deleteFile(db, id);
+  const deleted = deleteFile(db, id);
 
-  // Same cache purge `ingest done`/`fail` do: nothing can reach the extracted text once the row is gone.
+  // Nothing can reach the extracted text once the row is gone.
   const { removed } = cleanCache(config.cacheDir, id);
   const dropped: FileDropResult = {
     file_id: id,
-    removed_transactions: res.removedTransactions,
-    removed_questions: res.removedQuestions,
-    unvoided: res.unvoided,
+    removed_transactions: deleted.removedTransactions,
+    removed_questions: deleted.removedQuestions,
+    unvoided: deleted.unvoided,
     cache_removed: removed,
   };
   ctx.out.emitObject(dropped);
