@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import type Database from "libsql";
 import { addNote, countNotes, deleteNote, listNotes } from "./queries.js";
-import { freshDb } from "../../fixtures/db.js";
+import { freshDB } from "../../fixtures/db.js";
 
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 describe("addNote", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb();
+    db = freshDB();
   });
 
   it("returns the stored row, created_at included", () => {
@@ -36,7 +36,7 @@ describe("addNote", () => {
 describe("deleteNote", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb();
+    db = freshDB();
   });
 
   it("removes the note and returns the row it removed", () => {

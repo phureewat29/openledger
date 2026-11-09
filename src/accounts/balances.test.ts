@@ -19,7 +19,7 @@ import {
   voidTransactionAsMirror,
   type TransactionInput,
 } from "../transactions/queries.js";
-import { freshDb } from "../../fixtures/db.js";
+import { freshDB } from "../../fixtures/db.js";
 
 function seedThb(db: Database.Database): void {
   createAccount(db, { id: "thb:asset:cash", name: "Cash", type: "asset", parent_id: "thb:asset" });
@@ -70,7 +70,7 @@ function ins(
 
 describe("getAccountBalances", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedBoth); });
+  beforeEach(() => { db = freshDB(seedBoth); });
 
   it("derives minor-unit + decimal balances per the normal-balance rule", () => {
     ins(db, { debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 15000 });
@@ -115,7 +115,7 @@ describe("getAccountBalances", () => {
 
 describe("getNetWorth", () => {
   it("reports assets, liabilities and their difference in minor units", () => {
-    const db = freshDb(seedThb);
+    const db = freshDB(seedThb);
     ins(db, { debit_account_id: "thb:asset:bank", credit_account_id: "thb:income:salary", amount: 100000 });
     ins(db, { debit_account_id: "thb:expense:food", credit_account_id: "thb:liability:card", amount: 50000 });
     expect(getNetWorth(db)).toEqual({
@@ -126,7 +126,7 @@ describe("getNetWorth", () => {
   });
 
   it("keeps two ledgers apart even when they share an exponent", () => {
-    const db = freshDb(seedThbUsd);
+    const db = freshDB(seedThbUsd);
     ins(db, { debit_account_id: "thb:asset:bank", credit_account_id: "thb:income:salary", amount: 11213025 });
     ins(db, { debit_account_id: "usd:asset:brokerage", credit_account_id: "usd:income:dividends", amount: 21000 });
     // 11234025 (a plausible-looking single number) is the answer a merge gives.
@@ -138,14 +138,14 @@ describe("getNetWorth", () => {
   });
 
   it("subtracts liabilities per ledger, over the union of both key sets", () => {
-    const db = freshDb(seedThbUsd);
+    const db = freshDB(seedThbUsd);
     ins(db, { debit_account_id: "thb:asset:bank", credit_account_id: "thb:income:salary", amount: 100000 });
     ins(db, { debit_account_id: "usd:expense:fees", credit_account_id: "usd:liability:card", amount: 21000 });
     expect(getNetWorth(db).net_worth).toEqual({ THB: 100000, USD: -21000 });
   });
 
   it("names a ledger that has no minor units of its own", () => {
-    const db = freshDb(seedBoth);
+    const db = freshDB(seedBoth);
     ins(db, { debit_account_id: "thb:asset:bank", credit_account_id: "thb:income:salary", amount: 100000 });
     ins(db, { debit_account_id: "jpy:asset:cash", credit_account_id: "jpy:income:salary", amount: 15000 });
     // 15000 yen and 100000 satang are the same integer scale and different money.
@@ -153,7 +153,7 @@ describe("getNetWorth", () => {
   });
 
   it("totals in minor units, where adding the decimals would drift", () => {
-    const db = freshDb(seedManySatang);
+    const db = freshDB(seedManySatang);
     for (const [leaf, amount] of [["one", 10], ["two", 20], ["three", 30]] as const) {
       ins(db, { debit_account_id: `thb:asset:${leaf}`, credit_account_id: "thb:income:salary", amount });
     }
@@ -166,7 +166,7 @@ describe("getAccountBalanceMinor", () => {
   let db: Database.Database;
 
   beforeEach(() => {
-    db = freshDb();
+    db = freshDB();
     seedThb(db);
   });
 
@@ -238,7 +238,7 @@ describe("subtractTotals", () => {
 
 describe("getPeriodTotals", () => {
   it("computes income (C-D) and expenses (D-C) inside the range only", () => {
-    const db = freshDb(seedThb);
+    const db = freshDB(seedThb);
     ins(db, { debit_account_id: "thb:asset:cash", credit_account_id: "thb:income:salary", amount: 100000, date: "2026-05-10" });
     ins(db, { debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 15000, date: "2026-05-11" });
     ins(db, { debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 99900, date: "2026-07-01" });
@@ -250,7 +250,7 @@ describe("getPeriodTotals", () => {
   });
 
   it("keeps each ledger's period total under its own key", () => {
-    const db = freshDb(seedThbUsd);
+    const db = freshDB(seedThbUsd);
     ins(db, { debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 15000, date: "2026-05-10" });
     ins(db, { debit_account_id: "usd:expense:fees", credit_account_id: "usd:asset:brokerage", amount: 15000, date: "2026-05-10" });
     expect(getPeriodTotals(db, "2026-05-01", "2026-05-31").expenses).toEqual({
@@ -260,7 +260,7 @@ describe("getPeriodTotals", () => {
   });
 
   it("has no keys at all over a range nothing was posted in", () => {
-    expect(getPeriodTotals(freshDb(seedThb), "2020-01-01", "2020-12-31")).toEqual({
+    expect(getPeriodTotals(freshDB(seedThb), "2020-01-01", "2020-12-31")).toEqual({
       income: {},
       expenses: {},
     });
@@ -269,7 +269,7 @@ describe("getPeriodTotals", () => {
 
 describe("getRollupBalance", () => {
   it("sums a subtree (root inclusive)", () => {
-    const db = freshDb(seedThb);
+    const db = freshDB(seedThb);
     ins(db, { debit_account_id: "thb:expense:food:dining", credit_account_id: "thb:asset:cash", amount: 35000 });
     ins(db, { debit_account_id: "thb:expense:food:groceries", credit_account_id: "thb:asset:cash", amount: 60000 });
     expect(getRollupBalance(db, "thb:expense:food")).toEqual({ THB: 95000 });
@@ -277,7 +277,7 @@ describe("getRollupBalance", () => {
   });
 
   it("carries the subtree's own ledger, never a neighbouring one", () => {
-    const db = freshDb(seedBoth);
+    const db = freshDB(seedBoth);
     ins(db, { debit_account_id: "jpy:expense:food", credit_account_id: "jpy:asset:cash", amount: 35000 });
     ins(db, { debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 35000 });
     expect(getRollupBalance(db, "jpy:expense")).toEqual({ JPY: 35000 });
@@ -285,11 +285,11 @@ describe("getRollupBalance", () => {
   });
 
   it("has no keys for an account that does not exist", () => {
-    expect(getRollupBalance(freshDb(seedThb), "thb:expense:nope")).toEqual({});
+    expect(getRollupBalance(freshDB(seedThb), "thb:expense:nope")).toEqual({});
   });
 
   it("keys an existing subtree nothing posted to at zero, under its own ledger", () => {
-    expect(getRollupBalance(freshDb(seedThb), "thb:expense:food")).toEqual({ THB: 0 });
+    expect(getRollupBalance(freshDB(seedThb), "thb:expense:food")).toEqual({ THB: 0 });
   });
 });
 
@@ -304,7 +304,7 @@ describe("getBalanceTree", () => {
   }
 
   it("rolls a subtree up to its root, agreeing with getRollupBalance", () => {
-    const db = freshDb(seedThb);
+    const db = freshDB(seedThb);
     ins(db, { debit_account_id: "thb:expense:food:dining", credit_account_id: "thb:asset:cash", amount: 35000 });
     ins(db, { debit_account_id: "thb:expense:food:groceries", credit_account_id: "thb:asset:cash", amount: 60000 });
 
@@ -321,7 +321,7 @@ describe("getBalanceTree", () => {
   });
 
   it("gives every ledger its own roots, each rollup keyed by that ledger alone", () => {
-    const db = freshDb(seedThbUsd);
+    const db = freshDB(seedThbUsd);
     ins(db, { debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 15000 });
     ins(db, { debit_account_id: "usd:expense:fees", credit_account_id: "usd:asset:brokerage", amount: 21000 });
 
@@ -334,7 +334,7 @@ describe("getBalanceTree", () => {
   });
 
   it("totals in minor units, where adding the decimals would drift", () => {
-    const db = freshDb(seedManySatang);
+    const db = freshDB(seedManySatang);
     for (const [leaf, amount] of [["one", 10], ["two", 20], ["three", 30]] as const) {
       ins(db, { debit_account_id: `thb:asset:${leaf}`, credit_account_id: "thb:income:salary", amount });
     }
@@ -342,7 +342,7 @@ describe("getBalanceTree", () => {
   });
 
   it("re-roots at the accounts a type filter kept", () => {
-    const db = freshDb(seedThb);
+    const db = freshDB(seedThb);
     const tree = getBalanceTree(db, { type: "expense" });
     expect(tree.map((r) => r.id)).toEqual(["thb:expense"]);
     expect(find(tree, "thb:expense:food")!.children.map((c) => c.id)).toEqual([
@@ -354,7 +354,7 @@ describe("getBalanceTree", () => {
 
 describe("adjustAccountBalance", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedBoth); });
+  beforeEach(() => { db = freshDB(seedBoth); });
 
   const DATE = "2026-05-01";
 

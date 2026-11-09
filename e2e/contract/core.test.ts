@@ -4,7 +4,7 @@ import { join } from "node:path";
 import {
   createSandbox,
   makeRunCLI,
-  parseNdjson,
+  parseNDJSON,
   parseOne,
   stubOpenerEnv,
   type CLIRunner,
@@ -54,7 +54,7 @@ function assertOneLineMatches(stdout: string, contract: CommandContract): void {
 }
 
 function assertEveryLineMatches(stdout: string, contract: CommandContract): void {
-  const lines = parseNdjson(stdout);
+  const lines = parseNDJSON(stdout);
   expect(lines.length, "expected at least one NDJSON line").toBeGreaterThan(0);
   for (const line of lines) assertMatchesContract(line, contract);
 }

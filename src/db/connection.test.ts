@@ -3,10 +3,10 @@ import Database from "libsql";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDb } from "./connection.js";
+import { openDB } from "./connection.js";
 import { DBBusyError, DBNotReadyError, isBusyError, sqliteErrorCode } from "./errors.js";
 
-// Sandboxed temp dirs only: openDb migrates and chmods whatever path it is handed.
+// Sandboxed temp dirs only: openDB migrates and chmods whatever path it is handed.
 const dirs: string[] = [];
 const opened: Database.Database[] = [];
 
@@ -17,7 +17,7 @@ function tempDir(): string {
 }
 
 async function open(dbPath: string): Promise<Database.Database> {
-  const db = await openDb(dbPath);
+  const db = await openDB(dbPath);
   opened.push(db);
   return db;
 }
@@ -38,7 +38,7 @@ function seedNonWAL(dbPath: string): void {
   seed.close();
 }
 
-describe("openDb: lock settings", () => {
+describe("openDB: lock settings", () => {
   it("sets busy_timeout so a concurrent write waits instead of failing at once", async () => {
     const db = await open(join(tempDir(), "db.sqlite"));
 
@@ -57,13 +57,13 @@ describe("openDb: lock settings", () => {
 
   it("leaves an existing WAL database in WAL on every later open", async () => {
     const dbPath = join(tempDir(), "db.sqlite");
-    (await openDb(dbPath)).close();
+    (await openDB(dbPath)).close();
 
     expect(journalMode(await open(dbPath))).toBe("wal");
   });
 });
 
-describe("openDb: unusable paths", () => {
+describe("openDB: unusable paths", () => {
   it("refuses a file that is not a database without calling it corrupt", async () => {
     const dbPath = join(tempDir(), "notes.txt");
     writeFileSync(dbPath, "dear diary, this is not a database\n");
@@ -102,7 +102,7 @@ describe("openDb: unusable paths", () => {
   });
 });
 
-describe("openDb: contention", () => {
+describe("openDB: contention", () => {
   /**
    * One attempt costs a full busy_timeout inside libsql before it reports the lock, so this
    * case takes seconds by construction: the driver's busy_timeout does the waiting, not a

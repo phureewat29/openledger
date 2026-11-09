@@ -40,7 +40,7 @@ import { formatFixed, fromMinorUnits, toMinorUnits } from "../lib/money.js";
 import { clampOffset } from "../lib/limit.js";
 import { currencyOf, newBatchId } from "../lib/ids.js";
 import { applyRedaction } from "../privacy/redactor.js";
-import { todayIso } from "../lib/date.js";
+import { todayISO } from "../lib/date.js";
 import * as z from "zod";
 import { parseInput, str, num } from "../lib/validate.js";
 import type {
@@ -298,7 +298,7 @@ function buildRawTransaction(opts: AddTransactionOpts): RawTransactionInput {
   }
 
   return {
-    date: parsed.date ?? todayIso(),
+    date: parsed.date ?? todayISO(),
     description: parsed.description ?? opts.merchantName ?? "Manual entry",
     debit_account_id: parsed.debit_account_id,
     credit_account_id: parsed.credit_account_id,

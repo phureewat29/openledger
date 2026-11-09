@@ -19,7 +19,7 @@ import {
   findDuplicateTransactions,
   proximityComponents,
 } from "./duplicates.js";
-import { freshDb, seedAccount } from "../../fixtures/db.js";
+import { freshDB, seedAccount } from "../../fixtures/db.js";
 
 function seedAccountsAndFile(db: Database.Database): void {
   createAccount(db, { id: "thb:expense", name: "Expenses (THB)", type: "expense", parent_id: null });
@@ -56,7 +56,7 @@ function tf(over: Partial<TransactionInput>): TransactionInput {
 
 describe("autoMergeStrictDuplicateTransactions", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedAccountsAndFile); });
+  beforeEach(() => { db = freshDB(seedAccountsAndFile); });
 
   it("merges one purchase mirrored across statements: same merchant/date/amount, different files", () => {
     const merchant = upsertMerchant(db, { canonical_name: "Starbucks" }, []);
@@ -216,7 +216,7 @@ function dupTf(over: Partial<TransactionInput> = {}): TransactionInput {
 
 describe("findDuplicateTransactions", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedDedupAccounts); });
+  beforeEach(() => { db = freshDB(seedDedupAccounts); });
 
   it("detects cross-group duplicates but excludes intra-group members", () => {
     insertLinkedTransactions(

@@ -19,7 +19,7 @@ import { openLedger } from "../config/cli.js";
 import { inTransaction } from "../db/transaction.js";
 import * as z from "zod";
 import { parseInput, str, int } from "../lib/validate.js";
-import { parseJsonOrNull } from "../lib/json.js";
+import { parseJSONOrNull } from "../lib/json.js";
 import type {
   AnsweredQuestion,
   DeferredQuestion,
@@ -35,7 +35,7 @@ function toListRow(row: QuestionRow): Question {
     prompt: row.prompt,
     transaction_id: row.transaction_id,
     account_id: row.account_id,
-    context: parseJsonOrNull(row.context_json),
+    context: parseJSONOrNull(row.context_json),
     file_id: row.file_id,
     created_at: row.created_at,
   };

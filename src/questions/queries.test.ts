@@ -10,7 +10,7 @@ import {
   deleteQuestionsByRowKey,
   findQuestionByRowKey,
 } from "./queries.js";
-import { freshDb, seedAccount } from "../../fixtures/db.js";
+import { freshDB, seedAccount } from "../../fixtures/db.js";
 
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -27,7 +27,7 @@ function insertFile(db: Database.Database, id: string): void {
 describe("questions table", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb(seedExpenseAccounts);
+    db = freshDB(seedExpenseAccounts);
   });
 
   it("accepts arbitrary free-text kinds", () => {
@@ -102,7 +102,7 @@ describe("questions table", () => {
 describe("row_key lookups", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb(seedExpenseAccounts);
+    db = freshDB(seedExpenseAccounts);
   });
 
   function record(prompt: string, context: Record<string, unknown> | null): string {
@@ -171,7 +171,7 @@ describe("row_key lookups", () => {
 describe("deferQuestion", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb(seedExpenseAccounts);
+    db = freshDB(seedExpenseAccounts);
   });
 
   it("hides a deferred row from listQuestions and countQuestions by default", () => {

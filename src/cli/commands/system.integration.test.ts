@@ -10,7 +10,7 @@ import {
   createSandbox,
   writeConfig,
   makeRunCLI,
-  parseNdjson,
+  parseNDJSON,
   parseOne,
   stubOpenerEnv,
   type CLIRunner,
@@ -47,7 +47,7 @@ describe("system CLI integration (subprocess)", () => {
       const isolated = createSandbox("oled-system-setup-it-");
       try {
         const setupDataDir = isolated.dataDir;
-        const setupDbPath = isolated.dbPath;
+        const setupDBPath = isolated.dbPath;
 
         const setup = await runCLI(
           [
@@ -56,7 +56,7 @@ describe("system CLI integration (subprocess)", () => {
             "--data-dir",
             setupDataDir,
             "--db",
-            setupDbPath,
+            setupDBPath,
             "--user-name",
             "Fresh User",
             "--currency",
@@ -69,13 +69,13 @@ describe("system CLI integration (subprocess)", () => {
         );
         expect(setup.code).toBe(0);
         const setupResult = parseOne(setup.stdout);
-        expect(setupResult.created).toMatchObject({ db: setupDbPath, data_dir: setupDataDir });
+        expect(setupResult.created).toMatchObject({ db: setupDBPath, data_dir: setupDataDir });
 
         const show = await runCLI(["config", "--json"], { env: isolated.env, cwd: isolated.root });
         expect(show.code).toBe(0);
         const cfg = parseOne(show.stdout);
         expect(cfg.dataDir).toBe(setupDataDir);
-        expect(cfg.dbPath).toBe(setupDbPath);
+        expect(cfg.dbPath).toBe(setupDBPath);
       } finally {
         isolated.cleanup();
       }
@@ -408,7 +408,7 @@ describe("system CLI integration (subprocess)", () => {
 
       const list = await runCLI(["questions", "list", "--json"]);
       expect(list.code).toBe(0);
-      const rows = parseNdjson(list.stdout);
+      const rows = parseNDJSON(list.stdout);
       expect(rows.find((r) => r.id === q1)).toMatchObject({
         kind: "uncategorized",
         account_id: "thb:expense:food",
@@ -423,7 +423,7 @@ describe("system CLI integration (subprocess)", () => {
       expect(summary.total).toBeGreaterThanOrEqual(2);
       expect(summary).toMatchObject({ has_more: false, limit: 200 });
 
-      const capped = parseNdjson((await runCLI(["questions", "list", "--limit", "1", "--json"])).stdout);
+      const capped = parseNDJSON((await runCLI(["questions", "list", "--limit", "1", "--json"])).stdout);
       expect(capped.filter((r) => r.type !== "summary")).toHaveLength(1);
       expect(capped.find((r) => r.type === "summary")).toMatchObject({
         returned: 1,
@@ -433,14 +433,14 @@ describe("system CLI integration (subprocess)", () => {
 
       const answer = await runCLI(["questions", "answer", q1, "--answer", "thb:expense:food:groceries", "--json"]);
       expect(answer.code).toBe(0);
-      expect(parseNdjson(answer.stdout)).toEqual([
+      expect(parseNDJSON(answer.stdout)).toEqual([
         { id: q1, kind: "uncategorized", answer: "thb:expense:food:groceries", rule_key: "merchant:acme-foodmart" },
         { type: "summary", answered: 1, closed_siblings: 0 },
       ]);
 
       const defer = await runCLI(["questions", "defer", q2, "--days", "5", "--json"]);
       expect(defer.code).toBe(0);
-      expect(parseNdjson(defer.stdout)).toEqual([
+      expect(parseNDJSON(defer.stdout)).toEqual([
         { id: q2, days: 5 },
         { type: "summary", deferred: 1 },
       ]);
@@ -473,7 +473,7 @@ describe("system CLI integration (subprocess)", () => {
         "--json",
       ]);
       expect(add.code).toBe(0);
-      const added = parseNdjson(add.stdout);
+      const added = parseNDJSON(add.stdout);
       expect(added).toHaveLength(2);
       expect(added[0]).toMatchObject({ content: "Prefers window seats on flights", category: "preference" });
       expect(added[1]).toEqual({ type: "summary", added: 1 });
@@ -481,11 +481,11 @@ describe("system CLI integration (subprocess)", () => {
 
       const list = await runCLI(["notes", "list", "--json"]);
       expect(list.code).toBe(0);
-      expect(parseNdjson(list.stdout).some((n) => n.id === noteId)).toBe(true);
+      expect(parseNDJSON(list.stdout).some((n) => n.id === noteId)).toBe(true);
 
       const rm = await runCLI(["notes", "rm", String(noteId), "--yes", "--json"]);
       expect(rm.code).toBe(0);
-      expect(parseNdjson(rm.stdout)).toEqual([
+      expect(parseNDJSON(rm.stdout)).toEqual([
         expect.objectContaining({ id: noteId, content: "Prefers window seats on flights" }),
         { type: "summary", removed: 1 },
       ]);

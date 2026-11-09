@@ -4,7 +4,7 @@ import * as z from "zod";
 import {
   createSandbox,
   makeRunCLI,
-  parseNdjson,
+  parseNDJSON,
   parseOne,
   type CLIResult,
   type CLIRunner,
@@ -173,7 +173,7 @@ describe("transactions contract (e2e, dist subprocess)", () => {
           { debit_account_id: "thb:expense:linked-b", credit_account_id: "thb:asset:bank:main", amount: 50 },
         ],
       };
-      const objs = parseNdjson((await ok(["ingest", "commit"], JSON.stringify(linkedRow))).stdout);
+      const objs = parseNDJSON((await ok(["ingest", "commit"], JSON.stringify(linkedRow))).stdout);
       const result = objs.find((o) => o.type === "result");
       expect(result?.ok, `ingest commit failed: ${JSON.stringify(result)}`).toBe(true);
       linkedLegAId = result.legs[0].transaction_id;
@@ -220,7 +220,7 @@ describe("transactions contract (e2e, dist subprocess)", () => {
   it(
     "transactions list: every flat row and the terminal capped summary match the contract",
     async () => {
-      const lines = parseNdjson((await ok(["transactions", "list"])).stdout);
+      const lines = parseNDJSON((await ok(["transactions", "list"])).stdout);
       expectContractLines("transactions list", lines);
       expect(lines.some((l) => l.id === strictAddId)).toBe(true);
       expect(lines.find((l) => l.type === "summary")).toMatchObject({ type: "summary" });
@@ -231,7 +231,7 @@ describe("transactions contract (e2e, dist subprocess)", () => {
   it(
     "transactions list --group: cluster lines (including the linked pair) and the summary match the contract",
     async () => {
-      const lines = parseNdjson((await ok(["transactions", "list", "--group"])).stdout);
+      const lines = parseNDJSON((await ok(["transactions", "list", "--group"])).stdout);
       expectContractLines("transactions list", lines);
 
       const linkedCluster = lines.find(
@@ -293,7 +293,7 @@ describe("transactions contract (e2e, dist subprocess)", () => {
   it(
     "transactions dedupe: the mirror pair's rows and the summary match the contract",
     async () => {
-      const lines = parseNdjson((await ok(["transactions", "dedupe"])).stdout);
+      const lines = parseNDJSON((await ok(["transactions", "dedupe"])).stdout);
       expectContractLines("transactions dedupe", lines);
 
       const rows = lines.filter((l) => l.type !== "summary");

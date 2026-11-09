@@ -13,7 +13,7 @@ import {
   failAccountNotFound,
 } from "./cli.js";
 import { findAccountById, insertAccount } from "./queries.js";
-import { failingAccountInsert, freshDb, ledgerLockedAtTransaction } from "../../fixtures/db.js";
+import { failingAccountInsert, freshDB, ledgerLockedAtTransaction } from "../../fixtures/db.js";
 import { createOutput, describeFailure } from "../cli/output.js";
 import { failReason, type FailureCode } from "../cli/errors.js";
 import { EXIT } from "../contract/exit.js";
@@ -30,7 +30,7 @@ function jsonOutput(): { out: ReturnType<typeof createOutput>; lines: () => Reco
 // corrupting the sandbox db out-of-band, so this pins the batch loop directly.
 describe("createAccountsBatch: a mid-batch throw stays that item's failure", () => {
   it("keeps every result row and posts the good items when one item's write throws", () => {
-    const db = freshDb();
+    const db = freshDB();
     const broken = failingAccountInsert(db, "thb:equity:bad");
     const items = [
       { id: "thb:equity:good-a", name: "Good A", type: "equity" },
@@ -117,7 +117,7 @@ function seedThbLedger(db: Database.Database): void {
 
 describe("failAccountNotFound", () => {
   it("prefix-less id, ledgers present: NOT_FOUND with a ledger-enumerating hint", () => {
-    const db = freshDb(seedThbLedger);
+    const db = freshDB(seedThbLedger);
     const err = catchFailAccountNotFound(db, "expense:food");
     expect(err.code).toBe("NOT_FOUND");
     expect(err.message).toBe('account "expense:food" not found');
@@ -125,7 +125,7 @@ describe("failAccountNotFound", () => {
   });
 
   it("ledger-shaped id whose head names no existing ledger: NOT_FOUND with a ledger-enumerating hint, caller hint dropped", () => {
-    const db = freshDb(seedThbLedger);
+    const db = freshDB(seedThbLedger);
     const err = catchFailAccountNotFound(db, "eur:expense:food", "create it with `oled accounts create`");
     expect(err.code).toBe("NOT_FOUND");
     expect(err.message).toBe('account "eur:expense:food" not found');
@@ -133,7 +133,7 @@ describe("failAccountNotFound", () => {
   });
 
   it("no ledgers at all: NOT_FOUND with the config --init hint, regardless of id shape", () => {
-    const db = freshDb();
+    const db = freshDB();
     const bare = catchFailAccountNotFound(db, "thb:expense:food");
     expect(bare.code).toBe("NOT_FOUND");
     expect(bare.hint).toBe(
@@ -145,7 +145,7 @@ describe("failAccountNotFound", () => {
   });
 
   it("ledger-scoped id whose head IS a real ledger: the caller's own hint passes through unchanged", () => {
-    const db = freshDb(seedThbLedger);
+    const db = freshDB(seedThbLedger);
     const err = catchFailAccountNotFound(db, "thb:expense:doesnotexist", "custom hint");
     expect(err.code).toBe("NOT_FOUND");
     expect(err.message).toBe('account "thb:expense:doesnotexist" not found');
@@ -153,7 +153,7 @@ describe("failAccountNotFound", () => {
   });
 
   it("ledger-scoped id whose head IS a real ledger, no hint given: hint is undefined, not the ledger list", () => {
-    const db = freshDb(seedThbLedger);
+    const db = freshDB(seedThbLedger);
     const err = catchFailAccountNotFound(db, "thb:expense:doesnotexist");
     expect(err.hint).toBeUndefined();
   });

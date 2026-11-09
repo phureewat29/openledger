@@ -8,7 +8,7 @@ import { DBNotReadyError } from "./errors.js";
 import * as baseline from "./migrations/0001_baseline.js";
 import { MIGRATIONS, type Migration } from "./migrations/index.js";
 
-function freshDb() {
+function freshDB() {
   const db = new Database(":memory:");
   db.pragma("foreign_keys = ON");
   return db;
@@ -66,7 +66,7 @@ function withTempDir(run: (dir: string) => void): void {
 
 describe("listMissingTables", () => {
   it("names exactly the asked-for tables the database lacks", () => {
-    const db = freshDb();
+    const db = freshDB();
     migrate(db);
     expect(listMissingTables(db, ["accounts", "transactions"])).toEqual([]);
     expect(listMissingTables(db, ["accounts", "nope", "also_nope"])).toEqual(["nope", "also_nope"]);
@@ -75,7 +75,7 @@ describe("listMissingTables", () => {
 
 describe("migrate", () => {
   it("creates the expected tables", () => {
-    const db = freshDb();
+    const db = freshDB();
     migrate(db);
 
     // The baseline is the whole schema and 0002 rebuilds it, so this is exhaustive.
@@ -92,14 +92,14 @@ describe("migrate", () => {
   });
 
   it("leaves a fresh database at the latest version", () => {
-    const db = freshDb();
+    const db = freshDB();
     migrate(db);
 
     expect(versions(db)).toEqual([1, 2, 3]);
   });
 
   it("stamps schema_migrations.applied_at with the byte-identical ISO shape", () => {
-    const db = freshDb();
+    const db = freshDB();
     migrate(db);
 
     const rows = db.prepare(`SELECT applied_at FROM schema_migrations ORDER BY version`).all() as {
@@ -110,7 +110,7 @@ describe("migrate", () => {
   });
 
   it("creates notes with a category CHECK and no default", () => {
-    const db = freshDb();
+    const db = freshDB();
     migrate(db);
 
     const insert = db.prepare(`INSERT INTO notes (content, category) VALUES (?, ?)`);
@@ -124,7 +124,7 @@ describe("migrate", () => {
   });
 
   it("creates files with source and without provider/model", () => {
-    const db = freshDb();
+    const db = freshDB();
     migrate(db);
 
     const cols = (db.prepare(`PRAGMA table_info(files)`).all() as { name: string }[])
@@ -135,7 +135,7 @@ describe("migrate", () => {
   });
 
   it("records each applied version once and preserves data across re-migration", () => {
-    const db = freshDb();
+    const db = freshDB();
     migrate(db);
     db.prepare(
       `INSERT INTO accounts (id, name, type) VALUES ('thb:asset:a', 'A', 'asset'), ('thb:asset:b', 'B', 'asset')`,
@@ -154,7 +154,7 @@ describe("migrate", () => {
   });
 
   it("accepts hierarchical accounts via parent_id", () => {
-    const db = freshDb();
+    const db = freshDB();
     migrate(db);
 
     db.prepare(`INSERT INTO accounts (id, name, type) VALUES (?, ?, ?)`)
@@ -171,7 +171,7 @@ describe("migrate", () => {
   });
 
   it("dedups merchant aliases on normalized_pattern", () => {
-    const db = freshDb();
+    const db = freshDB();
     migrate(db);
 
     db.prepare(`INSERT INTO merchants (id, canonical_name) VALUES (?, ?)`)
@@ -189,8 +189,8 @@ describe("migrate", () => {
 });
 
 describe("transactions table (TigerBeetle-core)", () => {
-  function seededDb() {
-    const db = freshDb();
+  function seededDB() {
+    const db = freshDB();
     migrate(db);
     db.prepare(`INSERT INTO accounts (id, name, type) VALUES ('thb:asset', 'Assets (THB)', 'asset')`).run();
     db.prepare(
@@ -225,7 +225,7 @@ describe("transactions table (TigerBeetle-core)", () => {
   }
 
   it("has the expected columns", () => {
-    const db = seededDb();
+    const db = seededDB();
     const cols = (db.prepare(`PRAGMA table_info(transactions)`).all() as { name: string }[]).map(
       (c) => c.name,
     );
@@ -237,7 +237,7 @@ describe("transactions table (TigerBeetle-core)", () => {
   });
 
   it("adds a transaction_id column to questions", () => {
-    const db = seededDb();
+    const db = seededDB();
     const cols = (db.prepare(`PRAGMA table_info(questions)`).all() as { name: string }[]).map(
       (c) => c.name,
     );
@@ -246,40 +246,40 @@ describe("transactions table (TigerBeetle-core)", () => {
   });
 
   it("accepts a well-formed transaction", () => {
-    const db = seededDb();
+    const db = seededDB();
     expect(() => insertTransaction(db)).not.toThrow();
   });
 
   it("rejects amount <= 0 (CHECK)", () => {
-    const db = seededDb();
+    const db = seededDB();
     expect(() => insertTransaction(db, { amount: 0 })).toThrow();
     expect(() => insertTransaction(db, { amount: -100 })).toThrow();
   });
 
   it("rejects debit == credit (CHECK)", () => {
-    const db = seededDb();
+    const db = seededDB();
     expect(() => insertTransaction(db, { debit: "thb:asset:a", credit: "thb:asset:a" })).toThrow();
   });
 
   it("rejects a non-integer amount (INTEGER is only an affinity)", () => {
-    const db = seededDb();
+    const db = seededDB();
     expect(() => insertTransaction(db, { amount: 100.5 })).toThrow();
   });
 
   it("rejects an amount past the exact-JS-number ceiling", () => {
-    const db = seededDb();
+    const db = seededDB();
     expect(() => insertTransaction(db, { amount: 9007199254740992 })).toThrow();
   });
 
   it("rejects a date that is not YYYY-MM-DD (every filter compares lexicographically)", () => {
-    const db = seededDb();
+    const db = seededDB();
     for (const date of ["2026-1-01", "01/01/2026", "2026-01-01T00:00:00Z", "yesterday"]) {
       expect(() => insertTransaction(db, { date }), date).toThrow();
     }
   });
 
   it("rejects void_of pointing at the row itself", () => {
-    const db = seededDb();
+    const db = seededDB();
     insertTransaction(db);
     expect(() =>
       db.prepare(`UPDATE transactions SET void_of = id WHERE id = ?`).run("tx:1"),
@@ -287,7 +287,7 @@ describe("transactions table (TigerBeetle-core)", () => {
   });
 
   it("un-voids the mirrors of a deleted survivor (void_of self-FK)", () => {
-    const db = seededDb();
+    const db = seededDB();
     insertTransaction(db, { id: "tx:orig" });
     insertTransaction(db, { id: "tx:mirror" });
     db.prepare(`UPDATE transactions SET void_of = ? WHERE id = ?`).run("tx:orig", "tx:mirror");
@@ -302,8 +302,8 @@ describe("transactions table (TigerBeetle-core)", () => {
 });
 
 describe("cross-ledger transactions are inexpressible", () => {
-  function seededDb() {
-    const db = freshDb();
+  function seededDB() {
+    const db = freshDB();
     migrate(db);
     for (const [id, name, currency] of [
       ["thb:asset", "Assets (THB)", "thb"],
@@ -329,12 +329,12 @@ describe("cross-ledger transactions are inexpressible", () => {
       .run(id, debit, credit);
 
   it("aborts an insert whose two accounts sit on different ledgers", () => {
-    const db = seededDb();
+    const db = seededDB();
     expect(() => insert(db, "tx:x", "thb:asset:a", "usd:asset:b")).toThrow(/cross-ledger/i);
   });
 
   it("aborts a recategorize that would move one side onto another ledger", () => {
-    const db = seededDb();
+    const db = seededDB();
     insert(db, "tx:x", "thb:asset:a", "thb:asset:b");
     expect(() =>
       db
@@ -346,7 +346,7 @@ describe("cross-ledger transactions are inexpressible", () => {
 
 describe("account id CHECKs", () => {
   function migrated() {
-    const db = freshDb();
+    const db = freshDB();
     migrate(db);
     return db;
   }
@@ -371,22 +371,22 @@ describe("account id CHECKs", () => {
 });
 
 describe("foreign DB guard (non-destructive)", () => {
-  function foreignDb(): Database.Database {
-    const db = freshDb();
+  function foreignDB(): Database.Database {
+    const db = freshDB();
     db.exec(`CREATE TABLE ledger_entries (id INTEGER PRIMARY KEY, memo TEXT NOT NULL)`);
     db.prepare(`INSERT INTO ledger_entries (memo) VALUES (?)`).run("not ours");
     return db;
   }
 
   it("refuses a version-0 database that already holds tables", () => {
-    const db = foreignDb();
+    const db = foreignDB();
     expect(() => migrate(db)).toThrow(/not an OpenLedger database/i);
     // The type is what the CLI exits NOT_READY(3) on; the wording is free to change.
     expect(() => migrate(db)).toThrow(DBNotReadyError);
   });
 
   it("leaves the refused database exactly as it found it", () => {
-    const db = foreignDb();
+    const db = foreignDB();
     expect(() => migrate(db)).toThrow();
 
     expect(tableNames(db)).toEqual(["ledger_entries"]);
@@ -394,7 +394,7 @@ describe("foreign DB guard (non-destructive)", () => {
   });
 
   it("names the database file in the refusal", () => {
-    const db = foreignDb();
+    const db = foreignDB();
     // The guard reads sqlite_master only, so the path never has to exist.
     expect(() => migrate(db, "/nowhere/oled.sqlite")).toThrow("/nowhere/oled.sqlite");
   });
@@ -417,7 +417,7 @@ describe("version-1 databases are rebaselined, not adopted", () => {
    * unprefixed account ids, `currency`/`has_question` columns, and the
    * `settings` table.
    */
-  function oldShapeDb(dbPath: string): Database.Database {
+  function oldShapeDB(dbPath: string): Database.Database {
     const db = new Database(dbPath);
     db.pragma("foreign_keys = ON");
     db.exec(`
@@ -505,7 +505,7 @@ describe("version-1 databases are rebaselined, not adopted", () => {
       const dbPath = join(dir, "db.sqlite");
       const stale = Array.from({ length: 7 }, (_, i) => `db.sqlite.20200101-00000${i}.bak`);
       for (const name of stale) writeFileSync(join(dir, name), "old");
-      const db = oldShapeDb(dbPath);
+      const db = oldShapeDB(dbPath);
 
       migrate(db, dbPath);
       db.close();
@@ -521,7 +521,7 @@ describe("version-1 databases are rebaselined, not adopted", () => {
   it("carries an old-shape database to the latest version and drops what only it had", () => {
     withTempDir((dir) => {
       const dbPath = join(dir, "db.sqlite");
-      const db = oldShapeDb(dbPath);
+      const db = oldShapeDB(dbPath);
 
       migrate(db, dbPath);
 
@@ -540,10 +540,10 @@ describe("version-1 databases are rebaselined, not adopted", () => {
   it("leaves the rebaselined database identical to a fresh install", () => {
     withTempDir((dir) => {
       const dbPath = join(dir, "db.sqlite");
-      const db = oldShapeDb(dbPath);
+      const db = oldShapeDB(dbPath);
       migrate(db, dbPath);
 
-      const fresh = freshDb();
+      const fresh = freshDB();
       migrate(fresh);
 
       // Rebaselined and fresh must match: baseline is the one authority for the shape.
@@ -561,7 +561,7 @@ describe("version-1 databases are rebaselined, not adopted", () => {
   it("backs the file up before dropping anything, so the old rows survive beside it", () => {
     withTempDir((dir) => {
       const dbPath = join(dir, "db.sqlite");
-      const db = oldShapeDb(dbPath);
+      const db = oldShapeDB(dbPath);
 
       migrate(db, dbPath);
       db.close();
@@ -619,7 +619,7 @@ describe("migration 3: questions_row_key_idx", () => {
   }
 
   it("upgrades a version-2 ledger in place, keeping every question", () => {
-    const db = freshDb();
+    const db = freshDB();
     applyMigrations(db, MIGRATIONS.slice(0, 2));
     db.prepare(`INSERT INTO questions (id, prompt, context_json) VALUES (?, ?, ?)`)
       .run("cn:1", "bad row", JSON.stringify({ row_key: "refusal:sf-a:1:3" }));
@@ -638,14 +638,14 @@ describe("applyMigrations runner", () => {
   const m2: Migration = { up: (db) => db.exec(`CREATE TABLE t2 (id INTEGER PRIMARY KEY)`) };
 
   it("applies every pending migration and records its version", () => {
-    const db = freshDb();
+    const db = freshDB();
     applyMigrations(db, [m1, m2]);
     expect(tableNames(db)).toEqual(expect.arrayContaining(["t1", "t2"]));
     expect(versions(db)).toEqual([1, 2]);
   });
 
   it("is a no-op once the DB is at the latest version", () => {
-    const db = freshDb();
+    const db = freshDB();
     applyMigrations(db, [m1, m2]);
     // m1/m2 use bare CREATE TABLE, so a re-apply would throw "table exists";
     // not throwing proves the fast path returned before running anything.
@@ -665,7 +665,7 @@ describe("applyMigrations runner", () => {
   };
 
   it("skips a migration another process applied while it waited for the lock", () => {
-    const db = freshDb();
+    const db = freshDB();
 
     // The version read before the lock is stale, so without the re-read under it the loser
     // re-runs m2 over the winner's table and stamps a version already recorded.
@@ -691,14 +691,14 @@ describe("applyMigrations runner", () => {
   it("throws newer-than-build, rather than silently skipping, when a race leaves the DB ahead of this build's manifest", () => {
     // The re-read under the lock sees version 3 against a 2-long manifest; the "already
     // applied" skip below it must not swallow that the same way it safely skips version 2.
-    expect(() => applyMigrations(freshDb(), [winnerRacesAheadOfBuild, m2])).toThrow(
+    expect(() => applyMigrations(freshDB(), [winnerRacesAheadOfBuild, m2])).toThrow(
       /newer than this build/i,
     );
-    expect(() => applyMigrations(freshDb(), [winnerRacesAheadOfBuild, m2])).toThrow(DBNotReadyError);
+    expect(() => applyMigrations(freshDB(), [winnerRacesAheadOfBuild, m2])).toThrow(DBNotReadyError);
   });
 
   it("throws when the DB version is newer than the build", () => {
-    const db = freshDb();
+    const db = freshDB();
     applyMigrations(db, [m1, m2]);
     expect(() => applyMigrations(db, [m1])).toThrow(/newer than this build/i);
     // Same "not usable by this build" condition as the foreign-db guard, so it shares the type and exits NOT_READY(3).

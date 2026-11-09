@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { extractFile, type ExtractInput } from "./extract.js";
 import { DEFAULT_RENDER } from "./pdf.js";
-import { corruptPdf, mixedPdf, pdfOf, scanPdf, textPdf } from "../../fixtures/pdf.js";
+import { corruptPDF, mixedPDF, pdfOf, scanPDF, textPDF } from "../../fixtures/pdf.js";
 import { samplePng } from "../../fixtures/images.js";
 import {
   LIVE_PAGE_TIMEOUT_MS,
-  deadOcrSettings,
-  liveOcr,
-  requireLiveOcr,
+  deadOCRSettings,
+  liveOCR,
+  requireLiveOCR,
 } from "../../fixtures/ocr.js";
 
 const NO_OCR = { ocr: null };
@@ -24,7 +24,7 @@ function imageInput(): ExtractInput {
 
 describe("extractFile: text-layer route", () => {
   it("returns the probe's own text for a complete text layer", async () => {
-    const outcome = await extractFile(pdfInput(textPdf()), NO_OCR);
+    const outcome = await extractFile(pdfInput(textPDF()), NO_OCR);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.value).toMatchObject({
@@ -40,7 +40,7 @@ describe("extractFile: text-layer route", () => {
   });
 
   it("prefers the text layer over a configured endpoint, without calling it", async () => {
-    const outcome = await extractFile(pdfInput(textPdf()), { ocr: deadOcrSettings() });
+    const outcome = await extractFile(pdfInput(textPDF()), { ocr: deadOCRSettings() });
     expect(outcome.ok).toBe(true);
     expect(outcome.ok && outcome.value.source).toBe("text-layer");
   });
@@ -48,7 +48,7 @@ describe("extractFile: text-layer route", () => {
 
 describe("extractFile: agent route", () => {
   it("rasterizes a scanned PDF at the render spec when no endpoint is set", async () => {
-    const outcome = await extractFile(pdfInput(scanPdf()), NO_OCR);
+    const outcome = await extractFile(pdfInput(scanPDF()), NO_OCR);
     // Named before the narrowing guard, so a silent fallback to the text route can't pass this vacuously.
     expect(outcome.ok && outcome.value.kind).toBe("images");
     if (!outcome.ok || outcome.value.kind !== "images") return;
@@ -63,7 +63,7 @@ describe("extractFile: agent route", () => {
   });
 
   it("hands back a mixed document as images rather than dropping its scanned page", async () => {
-    const outcome = await extractFile(pdfInput(mixedPdf()), NO_OCR);
+    const outcome = await extractFile(pdfInput(mixedPDF()), NO_OCR);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.value).toMatchObject({ kind: "images", source: "raster", textLayer: "partial" });
@@ -84,17 +84,17 @@ describe("extractFile: agent route", () => {
 
 describe("extractFile: ocr route", () => {
   it("fails the run when nothing is listening, rather than degrading to images", async () => {
-    const outcome = await extractFile(pdfInput(scanPdf()), { ocr: deadOcrSettings() });
+    const outcome = await extractFile(pdfInput(scanPDF()), { ocr: deadOCRSettings() });
     expect(outcome).toMatchObject({ ok: false, reason: "ocr_unreachable" });
   });
 });
 
-describe.skipIf(!liveOcr)("extractFile: ocr route (live OCR endpoint)", () => {
+describe.skipIf(!liveOCR)("extractFile: ocr route (live OCR endpoint)", () => {
   it(
     "reads a scanned PDF through the endpoint and names the model",
     async () => {
-      const settings = requireLiveOcr();
-      const outcome = await extractFile(pdfInput(scanPdf()), { ocr: settings });
+      const settings = requireLiveOCR();
+      const outcome = await extractFile(pdfInput(scanPDF()), { ocr: settings });
       expect(outcome.ok).toBe(true);
       if (!outcome.ok) return;
       expect(outcome.value).toMatchObject({
@@ -115,7 +115,7 @@ describe.skipIf(!liveOcr)("extractFile: ocr route (live OCR endpoint)", () => {
     "re-reads a partial document whole, so every page cites one source",
     async () => {
       const outcome = await extractFile(pdfInput(pdfOf(["text", "image"])), {
-        ocr: requireLiveOcr(),
+        ocr: requireLiveOCR(),
       });
       expect(outcome.ok).toBe(true);
       if (!outcome.ok) return;
@@ -128,7 +128,7 @@ describe.skipIf(!liveOcr)("extractFile: ocr route (live OCR endpoint)", () => {
   it(
     "reads an image through the endpoint when one is configured",
     async () => {
-      const outcome = await extractFile(imageInput(), { ocr: requireLiveOcr() });
+      const outcome = await extractFile(imageInput(), { ocr: requireLiveOCR() });
       expect(outcome.ok && outcome.value).toMatchObject({ kind: "text", source: "ocr" });
     },
     LIVE_PAGE_TIMEOUT_MS,
@@ -137,7 +137,7 @@ describe.skipIf(!liveOcr)("extractFile: ocr route (live OCR endpoint)", () => {
 
 describe("extractFile: overrides", () => {
   it("--rescan ignores a complete text layer and rasterizes instead", async () => {
-    const outcome = await extractFile(pdfInput(textPdf()), {
+    const outcome = await extractFile(pdfInput(textPDF()), {
       ocr: null,
       overrides: { rescan: true },
     });
@@ -148,17 +148,17 @@ describe("extractFile: overrides", () => {
   });
 
   it("--no-ocr ignores a configured endpoint and returns images", async () => {
-    const outcome = await extractFile(pdfInput(scanPdf()), {
-      ocr: deadOcrSettings(),
-      overrides: { noOcr: true },
+    const outcome = await extractFile(pdfInput(scanPDF()), {
+      ocr: deadOCRSettings(),
+      overrides: { noOCR: true },
     });
     expect(outcome.ok && outcome.value).toMatchObject({ kind: "images", source: "raster" });
   });
 
   it("both overrides together always yield images", async () => {
-    const outcome = await extractFile(pdfInput(textPdf()), {
-      ocr: deadOcrSettings(),
-      overrides: { rescan: true, noOcr: true },
+    const outcome = await extractFile(pdfInput(textPDF()), {
+      ocr: deadOCRSettings(),
+      overrides: { rescan: true, noOCR: true },
     });
     expect(outcome.ok && outcome.value).toMatchObject({
       kind: "images",
@@ -168,12 +168,12 @@ describe("extractFile: overrides", () => {
   });
 });
 
-describe.skipIf(!liveOcr)("extractFile: overrides (live OCR endpoint)", () => {
+describe.skipIf(!liveOCR)("extractFile: overrides (live OCR endpoint)", () => {
   it(
     "--rescan sends a text PDF to the endpoint when one is configured",
     async () => {
-      const outcome = await extractFile(pdfInput(textPdf()), {
-        ocr: requireLiveOcr(),
+      const outcome = await extractFile(pdfInput(textPDF()), {
+        ocr: requireLiveOCR(),
         overrides: { rescan: true },
       });
       expect(outcome.ok && outcome.value).toMatchObject({
@@ -188,7 +188,7 @@ describe.skipIf(!liveOcr)("extractFile: overrides (live OCR endpoint)", () => {
 
 describe("extractFile: unreadable input", () => {
   it("reports bytes mupdf cannot open as pdf_unreadable", async () => {
-    const outcome = await extractFile(pdfInput(corruptPdf()), NO_OCR);
+    const outcome = await extractFile(pdfInput(corruptPDF()), NO_OCR);
     expect(outcome).toMatchObject({ ok: false, reason: "pdf_unreadable" });
     if (!outcome.ok) expect(outcome.message).toBeTruthy();
   });

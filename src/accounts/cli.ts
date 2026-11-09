@@ -38,7 +38,7 @@ import {
 import { findAccountsByFuzzyName, type FuzzyAccountMatch } from "./matching.js";
 import { currencyOf, isLedgerScopedId } from "../lib/ids.js";
 import { formatFixed, fromMinorUnits, toDecimalTotals } from "../lib/money.js";
-import { ISO_DATE_RE, todayIso } from "../lib/date.js";
+import { ISO_DATE_RE, todayISO } from "../lib/date.js";
 import { applyRedaction } from "../privacy/redactor.js";
 import * as z from "zod";
 import { parseInput, safeParse, str, num, int, bool, json } from "../lib/validate.js";
@@ -436,7 +436,7 @@ async function adjustAccount(
     accountId: id,
     targetAmount: parsed.to,
     reason: parsed.reason,
-    date: parsed.date ?? todayIso(),
+    date: parsed.date ?? todayISO(),
   });
   if (!outcome.ok) failReason(ADJUST_ACCOUNT_EXIT, outcome);
   const result: AdjustAccountResult = { transaction_id: outcome.transactionId, delta: outcome.delta };

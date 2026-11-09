@@ -4,7 +4,7 @@ import { closeSync, mkdtempSync, openSync, rmSync, truncateSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_SOURCE_BYTES, SUPPORTED_EXTS, loadSource, sniffSource } from "./source.js";
-import { textPdf } from "../../fixtures/pdf.js";
+import { textPDF } from "../../fixtures/pdf.js";
 import { samplePng } from "../../fixtures/images.js";
 
 // Sniffing reads signatures only, so a header is a complete jpeg/webp here.
@@ -29,14 +29,14 @@ describe("SUPPORTED_EXTS", () => {
 
 describe("sniffSource", () => {
   it("recognizes each accepted format from the real thing", () => {
-    expect(sniffSource(textPdf())).toEqual({ kind: "pdf", mime: "application/pdf" });
+    expect(sniffSource(textPDF())).toEqual({ kind: "pdf", mime: "application/pdf" });
     expect(sniffSource(samplePng())).toEqual({ kind: "image", mime: "image/png" });
     expect(sniffSource(jpegBytes())).toEqual({ kind: "image", mime: "image/jpeg" });
     expect(sniffSource(webpBytes())).toEqual({ kind: "image", mime: "image/webp" });
   });
 
   it("finds a PDF header that sits behind a preamble", () => {
-    const padded = Buffer.concat([Buffer.alloc(300, 0x20), textPdf()]);
+    const padded = Buffer.concat([Buffer.alloc(300, 0x20), textPDF()]);
     expect(sniffSource(padded)).toEqual({ kind: "pdf", mime: "application/pdf" });
   });
 
@@ -48,7 +48,7 @@ describe("sniffSource", () => {
 
 describe("loadSource", () => {
   it("loads a PDF with its kind, mime, bytes and content hash", () => {
-    const bytes = textPdf();
+    const bytes = textPDF();
     const path = write("statement.pdf", bytes);
 
     const result = loadSource(path);

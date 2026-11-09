@@ -17,7 +17,7 @@ export type UnlockFailureReason = "unsupported_document" | "wrong_password";
 
 type UnlockResult = { ok: true; decrypted: Buffer } | { ok: false; reason: UnlockFailureReason };
 
-export async function isEncryptedPdf(bytes: Buffer): Promise<boolean> {
+export async function isEncryptedPDF(bytes: Buffer): Promise<boolean> {
   const mupdf = await loadMupdf();
   const doc = mupdf.Document.openDocument(bytes, PDF_MIME);
   try {
@@ -27,7 +27,7 @@ export async function isEncryptedPdf(bytes: Buffer): Promise<boolean> {
   }
 }
 
-export async function unlockPdf(bytes: Buffer, password: string): Promise<UnlockResult> {
+export async function unlockPDF(bytes: Buffer, password: string): Promise<UnlockResult> {
   const mupdf = await loadMupdf();
   const doc = mupdf.Document.openDocument(bytes, PDF_MIME);
   try {
@@ -97,7 +97,7 @@ async function mapPages<T>(
 }
 
 /** Measures and extracts the text layer in one pass, so no page opens twice. */
-export function probePdfPages(bytes: Buffer): Promise<Result<ProbedPage[]>> {
+export function probePDFPages(bytes: Buffer): Promise<Result<ProbedPage[]>> {
   return mapPages(bytes, (_mupdf, doc, index) => probeOne(doc, index));
 }
 
@@ -140,6 +140,6 @@ function renderOne(mupdf: Mupdf, doc: Document, index: number, spec: RenderSpec)
   }
 }
 
-export function renderPdfPages(bytes: Buffer, spec: RenderSpec): Promise<Result<PageImage[]>> {
+export function renderPDFPages(bytes: Buffer, spec: RenderSpec): Promise<Result<PageImage[]>> {
   return mapPages(bytes, (mupdf, doc, index) => renderOne(mupdf, doc, index, spec));
 }

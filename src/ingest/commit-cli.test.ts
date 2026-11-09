@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commitRows, type BatchContext } from "./commit-cli.js";
-import { seedAccount, failingStatement, freshDb, ledgerLockedAtTransaction } from "../../fixtures/db.js";
+import { seedAccount, failingStatement, freshDB, ledgerLockedAtTransaction } from "../../fixtures/db.js";
 import { createOutput, describeFailure } from "../cli/output.js";
 import { countTransactions, findTransactionById } from "../transactions/queries.js";
 import { findAccountById } from "../accounts/queries.js";
@@ -41,7 +41,7 @@ function jsonOutput(): { out: ReturnType<typeof createOutput>; lines: () => Reco
 
 describe("commitRows: a row's own throw", () => {
   it("becomes that row's unexpected_error, leaves none of its writes, and the batch goes on", () => {
-    const db = freshDb(seedLedger);
+    const db = freshDB(seedLedger);
     // Only the uncategorized row raises a question, so only its last write fails.
     const broken = failingStatement(db, "INSERT INTO questions");
     const { out, lines } = jsonOutput();
@@ -65,7 +65,7 @@ describe("commitRows: a row's own throw", () => {
 
 describe("commitRows: a row's own source_file_id", () => {
   it("overrides the batch's --file, and the row's ids derive from that file's hash", () => {
-    const db = freshDb(seedLedger);
+    const db = freshDB(seedLedger);
     const pdf = { path: "/statements/x.pdf", mime: "application/pdf" };
     insertPendingFile(db, { ...pdf, id: "sf-batch", file_hash: "hash-batch" });
     insertPendingFile(db, { ...pdf, id: "sf-own", file_hash: "hash-own" });

@@ -17,7 +17,7 @@ const ERROR_BODY_CHARS = 200;
 
 export interface OCRSettings {
   /** Includes the version segment, no trailing slash: `http://127.0.0.1:1234/v1`. */
-  baseUrl: string;
+  baseURL: string;
   /** `ocrModel` when set, otherwise the default model card's own model; `resolveServedModel` re-spells it to the served id. */
   model: string;
   /** `""` when the endpoint needs no auth (the local case). */
@@ -35,15 +35,15 @@ function cardSettings({ prompt, params, render }: ModelCard): Pick<OCRSettings, 
 }
 
 /** The endpoint URL alone decides whether OCR is configured; `null` means cleanly unset. */
-export function resolveOcr(source: OCRConfigSource): OCRSettings | null {
-  const baseUrl = source.ocrBaseUrl.trim().replace(/\/+$/, "");
-  if (!baseUrl) return null;
+export function resolveOCR(source: OCRConfigSource): OCRSettings | null {
+  const baseURL = source.ocrBaseUrl.trim().replace(/\/+$/, "");
+  if (!baseURL) return null;
 
   const configured = source.ocrModel.trim();
   const { card } = modelCardFor(configured);
 
   return {
-    baseUrl,
+    baseURL,
     model: configured || card.model,
     apiKey: source.ocrApiKey.trim(),
     timeoutMs: OCR_TIMEOUT_MS,
@@ -118,7 +118,7 @@ export async function ocrPage(image: PageImage, settings: OCRSettings): Promise<
   const controller = new AbortController();
   const abort = setTimeout(() => controller.abort(), settings.timeoutMs);
   const attempt = tryExecute(async () => {
-    const response = await fetch(`${settings.baseUrl}/chat/completions`, {
+    const response = await fetch(`${settings.baseURL}/chat/completions`, {
       method: "POST",
       headers: headersFor(settings),
       body: requestBody(image, settings),
@@ -175,9 +175,9 @@ export async function ocrPages(
 }
 
 /** The model ids the endpoint serves. */
-export async function probeOcrEndpoint(settings: OCRSettings): Promise<Result<string[]>> {
+export async function probeOCREndpoint(settings: OCRSettings): Promise<Result<string[]>> {
   const response = await tryExecute(async () => {
-    const res = await fetch(`${settings.baseUrl}/models`, {
+    const res = await fetch(`${settings.baseURL}/models`, {
       headers: headersFor(settings),
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
@@ -203,7 +203,7 @@ export function pickServedModel(configured: string, served: readonly string[]): 
 
 /** Re-spells `model` to the id the endpoint serves and re-reads the card from it; unreachable or unmatched keeps the configured settings, the server stays the authority. */
 export async function resolveServedModel(settings: OCRSettings): Promise<OCRSettings> {
-  const served = await probeOcrEndpoint(settings);
+  const served = await probeOCREndpoint(settings);
   if (!served.ok) return settings;
   const match = pickServedModel(settings.model, served.value);
   if (!match || match === settings.model) return settings;

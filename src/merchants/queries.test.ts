@@ -12,7 +12,7 @@ import {
 } from "./queries.js";
 
 import { insertTransaction, type TransactionInput } from "../transactions/queries.js";
-import { freshDb, seedAccount } from "../../fixtures/db.js";
+import { freshDB, seedAccount } from "../../fixtures/db.js";
 
 function seedChartOfAccounts(db: Database.Database): void {
   seedAccount(db, { id: "thb:expense:food" });
@@ -67,7 +67,7 @@ describe("normalizeDescriptor", () => {
 
 describe("upsertMerchant", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedChartOfAccounts); });
+  beforeEach(() => { db = freshDB(seedChartOfAccounts); });
 
   it("inserts a new merchant the first time", () => {
     const m = upsertMerchant(db, { canonical_name: "Starbucks" }, TH_NOISE);
@@ -136,7 +136,7 @@ describe("upsertMerchant", () => {
 describe("findMerchantByAlias", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb(seedChartOfAccounts);
+    db = freshDB(seedChartOfAccounts);
     upsertMerchant(db, {
       canonical_name: "Starbucks",
       alias: "STARBUCKS #1234 BANGKOK",
@@ -165,7 +165,7 @@ describe("findMerchantByAlias", () => {
 describe("setMerchantDefaultAccount + listMerchants + findMerchantById", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb(seedChartOfAccounts);
+    db = freshDB(seedChartOfAccounts);
     upsertMerchant(db, { canonical_name: "Starbucks" }, TH_NOISE);
     upsertMerchant(db, { canonical_name: "Amazon", default_account_id: "thb:expense:food" }, TH_NOISE);
   });
@@ -189,7 +189,7 @@ describe("setMerchantDefaultAccount + listMerchants + findMerchantById", () => {
 
 describe("setMerchantDefaultAccount with a null account (clear)", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedChartOfAccounts); });
+  beforeEach(() => { db = freshDB(seedChartOfAccounts); });
 
   it("clears the default", () => {
     const m = upsertMerchant(db, {
@@ -214,7 +214,7 @@ describe("setMerchantDefaultAccount with a null account (clear)", () => {
 
 describe("renameMerchant", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedChartOfAccounts); });
+  beforeEach(() => { db = freshDB(seedChartOfAccounts); });
 
   it("renames in place and keeps the old name resolving to the same merchant", () => {
     const m = upsertMerchant(db, { canonical_name: "STARBUCKS COFFEE #456", alias: "STARBUCKS #456 BKK" }, TH_NOISE);
@@ -251,7 +251,7 @@ describe("renameMerchant", () => {
 
 describe("mergeMerchants", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedChartOfAccounts); });
+  beforeEach(() => { db = freshDB(seedChartOfAccounts); });
 
   it("re-points transactions, moves aliases, and deletes the source", () => {
     const from = upsertMerchant(db, { canonical_name: "Starbux", alias: "STARBUX #1" }, TH_NOISE);

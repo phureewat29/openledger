@@ -1,6 +1,6 @@
 import type Database from "libsql";
 import { randomUUID } from "crypto";
-import { parseJsonOrNull } from "../lib/json.js";
+import { parseJSONOrNull } from "../lib/json.js";
 import { clampLimit, clampOffset } from "../lib/limit.js";
 import { ISO_NOW_SQL, ISO_SHIFTED_SQL } from "../db/timestamps.js";
 import { inTransaction } from "../db/transaction.js";
@@ -87,7 +87,7 @@ export function closeQuestion(
 }
 
 function extractRuleKey(contextJSON: string | null): string | null {
-  const parsed = parseJsonOrNull(contextJSON) as { rule_key?: unknown } | null;
+  const parsed = parseJSONOrNull(contextJSON) as { rule_key?: unknown } | null;
   return typeof parsed?.rule_key === "string" ? parsed.rule_key : null;
 }
 

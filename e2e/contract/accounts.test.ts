@@ -3,7 +3,7 @@ import * as z from "zod";
 import {
   createSandbox,
   makeRunCLI,
-  parseNdjson,
+  parseNDJSON,
   parseOne,
   type CLIResult,
   type CLIRunner,
@@ -165,7 +165,7 @@ describe("accounts contract schemas match the real CLI surface (dist subprocess)
     "accounts match finds the leaf by a fuzzy query and matches AccountMatch/MatchAccountsSummary",
     async () => {
       const res = await ok(["accounts", "match", "--query", "food"]);
-      const { rows, summary } = splitSummary(parseNdjson(res.stdout));
+      const { rows, summary } = splitSummary(parseNDJSON(res.stdout));
       expect(rows.length).toBeGreaterThan(0);
       assertLines(AccountMatch, rows);
       assertLine(MatchAccountsSummary, summary);
@@ -189,7 +189,7 @@ describe("accounts contract schemas match the real CLI surface (dist subprocess)
     "accounts tree emits every node against the recursive AccountTreeNode schema, then TreeAccountsSummary",
     async () => {
       const res = await ok(["accounts", "tree"]);
-      const { rows, summary } = splitSummary(parseNdjson(res.stdout));
+      const { rows, summary } = splitSummary(parseNDJSON(res.stdout));
       expect(rows.length).toBeGreaterThan(0);
       assertLines(AccountTreeNode, rows);
       assertLine(TreeAccountsSummary, summary);
@@ -201,7 +201,7 @@ describe("accounts contract schemas match the real CLI surface (dist subprocess)
     "accounts list emits every account against the Account schema, then ListAccountsSummary",
     async () => {
       const res = await ok(["accounts", "list"]);
-      const { rows, summary } = splitSummary(parseNdjson(res.stdout));
+      const { rows, summary } = splitSummary(parseNDJSON(res.stdout));
       expect(rows.length).toBeGreaterThan(0);
       assertLines(Account, rows);
       assertLine(ListAccountsSummary, summary);

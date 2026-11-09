@@ -125,7 +125,7 @@ export function makeRunCLI(sandbox: Sandbox, target: CLITarget = "src"): CLIRunn
     });
 }
 
-export function parseNdjson(stdout: string): any[] {
+export function parseNDJSON(stdout: string): any[] {
   return stdout
     .trim()
     .split("\n")

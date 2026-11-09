@@ -7,12 +7,12 @@ import {
   insertStructuralAccount,
   updateAccountMetadata,
 } from "./queries.js";
-import { freshDb, seedAccount } from "../../fixtures/db.js";
+import { freshDB, seedAccount } from "../../fixtures/db.js";
 
 describe("insertStructuralAccount", () => {
   it("swallows a lost race on the id: the winner's row stands, no UNIQUE escapes", () => {
     // Every caller checks findAccountById first, so a second insert here is a concurrent writer having won in between.
-    const db = freshDb();
+    const db = freshDB();
     const root = { id: "thb:asset", name: "Assets (THB)", type: "asset", parent_id: null } as const;
     insertStructuralAccount(db, { ...root });
 
@@ -27,7 +27,7 @@ describe("insertStructuralAccount", () => {
 describe("updateAccountMetadata", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb();
+    db = freshDB();
     seedAccount(db, { id: "thb:liability:ktc", name: "KTC Card", bank_name: "ktc", due_day: 15 });
   });
 

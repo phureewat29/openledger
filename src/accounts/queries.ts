@@ -1,5 +1,5 @@
 import type Database from "libsql";
-import { parseJsonOrNull } from "../lib/json.js";
+import { parseJSONOrNull } from "../lib/json.js";
 import { normalizeMaskedAccountNumber } from "../lib/masked.js";
 import { buildPatch, type PatchField } from "../lib/patch.js";
 import { inTransaction } from "../db/transaction.js";
@@ -176,7 +176,7 @@ const ACCOUNT_PATCH: Record<string, PatchField> = {
 /** Null for a blob that is not a JSON object, so a corrupt one refuses rather than becoming {}. */
 function storedMetadata(metadataJSON: string | null): Record<string, unknown> | null {
   if (metadataJSON === null) return {};
-  const parsed = parseJsonOrNull(metadataJSON);
+  const parsed = parseJSONOrNull(metadataJSON);
   return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
 }
 

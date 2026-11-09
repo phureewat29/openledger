@@ -174,7 +174,7 @@ async function prepareIngest(
     password: opts.password,
     force: !!opts.force,
     rescan: !!opts.rescan,
-    noOcr: opts.ocr === false,
+    noOCR: opts.ocr === false,
   });
   if (!result.ok) {
     const { code, hint } = PREPARE_FAILURES[result.reason];

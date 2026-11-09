@@ -7,7 +7,7 @@ import {
   createSandbox,
   writeConfig,
   makeRunCLI,
-  parseNdjson,
+  parseNDJSON,
   parseOne,
   type CLIRunner,
   type Sandbox,
@@ -86,7 +86,7 @@ describe("transactions CLI integration (subprocess)", () => {
 
       const list = await runCLI(["accounts", "list", "--json"]);
       expect(list.code).toBe(0);
-      const rows = parseNdjson(list.stdout);
+      const rows = parseNDJSON(list.stdout);
       const bankRow = rows.find((r) => r.id === "thb:asset:bank");
       const groceriesRow = rows.find((r) => r.id === "thb:expense:groceries");
       expect(bankRow?.balance).toBe(-100);
@@ -95,7 +95,7 @@ describe("transactions CLI integration (subprocess)", () => {
       const tree = await runCLI(["accounts", "tree", "--json"]);
       expect(tree.code).toBe(0);
       // One object per root, then the summary: the uniform NDJSON contract.
-      const treeLines = parseNdjson(tree.stdout);
+      const treeLines = parseNDJSON(tree.stdout);
       const roots = treeLines.filter((r) => r.type !== "summary");
       expect(treeLines.find((r) => r.type === "summary")).toMatchObject({ roots: roots.length });
       // The whole node, key for key: rollup is a currency-keyed map beside the node's own `currency`.
@@ -457,7 +457,7 @@ describe("transactions CLI integration (subprocess)", () => {
 
       const dedupe = await runCLI(["transactions", "dedupe", "--json"]);
       expect(dedupe.code).toBe(0);
-      const objs = parseNdjson(dedupe.stdout);
+      const objs = parseNDJSON(dedupe.stdout);
       const summary = objs.find((o) => o.type === "summary");
       expect(summary.groups).toBeGreaterThanOrEqual(1);
       const dupIds = objs.filter((o) => o.type !== "summary").map((r) => r.id);
@@ -513,7 +513,7 @@ describe("transactions CLI integration (subprocess)", () => {
       });
 
       // merchants list announces its cap like every other list surface.
-      const listed = parseNdjson((await runCLI(["merchants", "list", "--json"])).stdout);
+      const listed = parseNDJSON((await runCLI(["merchants", "list", "--json"])).stdout);
       const summary = listed.find((r) => r.type === "summary");
       const rows = listed.filter((r) => r.type !== "summary");
       expect(summary).toMatchObject({ returned: rows.length, has_more: false, limit: 200 });
@@ -646,7 +646,7 @@ describe("transactions CLI integration (subprocess)", () => {
       ]);
       expect(missing.code).toBe(2);
 
-      const still = parseNdjson((await runCLI(["merchants", "list", "--json"])).stdout);
+      const still = parseNDJSON((await runCLI(["merchants", "list", "--json"])).stdout);
       expect(still.some((m) => m.canonical_name === "Whitespace Guard")).toBe(true);
     },
     45000,
@@ -670,7 +670,7 @@ describe("transactions CLI integration (subprocess)", () => {
       expect(result.code).toBe(5); // EXIT.NOT_FOUND
       expect(result.stdout.trim()).toBe("");
 
-      const still = parseNdjson((await runCLI(["merchants", "list", "--json"])).stdout);
+      const still = parseNDJSON((await runCLI(["merchants", "list", "--json"])).stdout);
       const row = still.find((m) => m.id === merchantId);
       expect(row?.canonical_name).toBe("Validate First");
 
@@ -802,7 +802,7 @@ describe("transactions CLI integration (subprocess)", () => {
       });
 
       const list = await runCLI(["accounts", "list", "--json"]);
-      const rows = parseNdjson(list.stdout);
+      const rows = parseNDJSON(list.stdout);
       expect(rows.find((r) => r.id === "thb:liability")).toMatchObject({ type: "liability" });
       expect(rows.find((r) => r.id === "thb:liability:credit_card")).toMatchObject({
         type: "liability",
@@ -888,7 +888,7 @@ describe("transactions CLI integration (subprocess)", () => {
 
       const first = await runCLI(["accounts", "create", "--input", inputPath, "--json"]);
       expect(first.code).toBe(0);
-      const firstObjs = parseNdjson(first.stdout);
+      const firstObjs = parseNDJSON(first.stdout);
       const firstResults = firstObjs.filter((o) => o.type === "result");
       expect(firstResults).toHaveLength(2);
       expect(firstResults[0]).toMatchObject({
@@ -904,7 +904,7 @@ describe("transactions CLI integration (subprocess)", () => {
 
       const second = await runCLI(["accounts", "create", "--input", inputPath, "--json"]);
       expect(second.code).toBe(0);
-      const secondObjs = parseNdjson(second.stdout);
+      const secondObjs = parseNDJSON(second.stdout);
       expect(secondObjs.filter((o) => o.type === "result")).toEqual([
         { type: "result", index: 0, ok: true, id: "thb:equity:batch-a", duplicate: true },
         { type: "result", index: 1, ok: true, id: "thb:equity:batch-b", duplicate: true },
@@ -923,7 +923,7 @@ describe("transactions CLI integration (subprocess)", () => {
       );
       const mixed = await runCLI(["accounts", "create", "--input", mixedPath, "--json"]);
       expect(mixed.code).toBe(7); // EXIT.PARTIAL
-      const mixedObjs = parseNdjson(mixed.stdout);
+      const mixedObjs = parseNDJSON(mixed.stdout);
       const mixedResults = mixedObjs.filter((o) => o.type === "result");
       expect(mixedResults[0]).toMatchObject({ index: 0, ok: false });
       expect(typeof mixedResults[0].message).toBe("string");
@@ -982,7 +982,7 @@ describe("transactions CLI integration (subprocess)", () => {
 
       const redacted = await runCLI(["transactions", "list", "--account", "thb:expense:travel", "--json"]);
       expect(redacted.code).toBe(0);
-      const redactedRow = parseNdjson(redacted.stdout).find(
+      const redactedRow = parseNDJSON(redacted.stdout).find(
         (r) => r.debit_account_id === "thb:expense:travel",
       );
       expect(redactedRow.description).toContain("[CARD]");
@@ -994,7 +994,7 @@ describe("transactions CLI integration (subprocess)", () => {
         "transactions", "list", "--account", "thb:expense:travel", "--no-redact", "--json",
       ]);
       expect(verbatim.code).toBe(0);
-      const verbatimRow = parseNdjson(verbatim.stdout).find(
+      const verbatimRow = parseNDJSON(verbatim.stdout).find(
         (r) => r.debit_account_id === "thb:expense:travel",
       );
       expect(verbatimRow.description).toBe(description);
@@ -1030,7 +1030,7 @@ describe("transactions CLI integration (subprocess)", () => {
         "transactions", "list", "--account", "thb:expense:mirror", "--amount", "88", "--json",
       ]);
       expect(found.code).toBe(0);
-      const foundSummary = parseNdjson(found.stdout).find((o) => o.type === "summary");
+      const foundSummary = parseNDJSON(found.stdout).find((o) => o.type === "summary");
       expect(foundSummary.total).toBe(2);
 
       const merge = await runCLI([
@@ -1050,7 +1050,7 @@ describe("transactions CLI integration (subprocess)", () => {
         "transactions", "list", "--account", "thb:expense:mirror", "--amount", "88", "--json",
       ]);
       expect(relisted.code).toBe(0);
-      const relistedObjs = parseNdjson(relisted.stdout);
+      const relistedObjs = parseNDJSON(relisted.stdout);
       expect(relistedObjs.filter((o) => o.type !== "summary").map((r) => r.id)).toEqual([a]);
       expect(relistedObjs.find((o) => o.type === "summary")).toMatchObject({ total: 1, returned: 1 });
 
@@ -1058,7 +1058,7 @@ describe("transactions CLI integration (subprocess)", () => {
         "transactions", "list", "--account", "thb:expense:mirror", "--amount", "88", "--include-void", "--json",
       ]);
       expect(relistedWithVoid.code).toBe(0);
-      const relistedWithVoidObjs = parseNdjson(relistedWithVoid.stdout);
+      const relistedWithVoidObjs = parseNDJSON(relistedWithVoid.stdout);
       expect(relistedWithVoidObjs.filter((o) => o.type !== "summary").map((r) => r.id).sort()).toEqual(
         [a, b].sort(),
       );
@@ -1141,7 +1141,7 @@ describe("transactions CLI integration (subprocess)", () => {
         "transactions", "list", "--amount", "1500", "--currency", "jpy", "--json",
       ]);
       expect(scoped.code).toBe(0);
-      const scopedObjs = parseNdjson(scoped.stdout);
+      const scopedObjs = parseNDJSON(scoped.stdout);
       const scopedRows = scopedObjs.filter((o) => o.type !== "summary");
       expect(scopedRows.map((r) => r.id)).toEqual([parseOne(yen.stdout).transaction_id]);
       expect(scopedObjs.find((o) => o.type === "summary")).toMatchObject({ total: 1, returned: 1 });
@@ -1150,7 +1150,7 @@ describe("transactions CLI integration (subprocess)", () => {
       // summary's total uses the same filter.
       const thbOnly = await runCLI(["transactions", "list", "--currency", "thb", "--json"]);
       expect(thbOnly.code).toBe(0);
-      const thbObjs = parseNdjson(thbOnly.stdout);
+      const thbObjs = parseNDJSON(thbOnly.stdout);
       const thbRows = thbObjs.filter((o) => o.type !== "summary");
       expect(thbRows.length).toBeGreaterThan(0);
       expect(new Set(thbRows.map((r) => r.currency))).toEqual(new Set(["THB"]));
@@ -1162,7 +1162,7 @@ describe("transactions CLI integration (subprocess)", () => {
         "transactions", "list", "--account", "jpy:expense:food", "--currency", "thb", "--json",
       ]);
       expect(both.code).toBe(0);
-      const bothRows = parseNdjson(both.stdout).filter((o) => o.type !== "summary");
+      const bothRows = parseNDJSON(both.stdout).filter((o) => o.type !== "summary");
       expect(bothRows.map((r) => r.currency)).toEqual(["JPY"]);
     },
     90000,
@@ -1190,7 +1190,7 @@ describe("transactions CLI integration (subprocess)", () => {
 
       const all = await runCLI(["transactions", "list", "--account", "thb:expense:pagination", "--json"]);
       expect(all.code).toBe(0);
-      const allObjs = parseNdjson(all.stdout);
+      const allObjs = parseNDJSON(all.stdout);
       const rows = allObjs.filter((o) => o.type !== "summary");
       const summary = allObjs.find((o) => o.type === "summary");
       expect(rows).toHaveLength(3);
@@ -1200,7 +1200,7 @@ describe("transactions CLI integration (subprocess)", () => {
         "transactions", "list", "--account", "thb:expense:pagination", "--limit", "1", "--json",
       ]);
       expect(capped.code).toBe(0);
-      const cappedSummary = parseNdjson(capped.stdout).find((o) => o.type === "summary");
+      const cappedSummary = parseNDJSON(capped.stdout).find((o) => o.type === "summary");
       expect(cappedSummary).toMatchObject({ total: 3, returned: 1, has_more: true, limit: 1, offset: 0 });
 
       // offset walks the stable (date DESC, id DESC) order to the tail; pages never overlap.
@@ -1210,8 +1210,8 @@ describe("transactions CLI integration (subprocess)", () => {
       const pageTwo = await runCLI([
         "transactions", "list", "--account", "thb:expense:pagination", "--limit", "2", "--offset", "2", "--json",
       ]);
-      const oneObjs = parseNdjson(pageOne.stdout);
-      const twoObjs = parseNdjson(pageTwo.stdout);
+      const oneObjs = parseNDJSON(pageOne.stdout);
+      const twoObjs = parseNDJSON(pageTwo.stdout);
       const oneIds = oneObjs.filter((o) => o.type !== "summary").map((o) => o.id);
       const twoIds = twoObjs.filter((o) => o.type !== "summary").map((o) => o.id);
       expect(oneIds).toHaveLength(2);

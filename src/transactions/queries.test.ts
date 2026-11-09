@@ -27,7 +27,7 @@ import {
   updateTransactionMeta,
   type TransactionInput,
 } from "./queries.js";
-import { freshDb, seedAccount } from "../../fixtures/db.js";
+import { freshDB, seedAccount } from "../../fixtures/db.js";
 
 function seedChartOfAccounts(db: Database.Database): void {
   seedAccount(db, { id: "thb:asset:cash" });
@@ -122,7 +122,7 @@ describe("validateTransaction", () => {
 
 describe("insertTransaction", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedChartOfAccounts); });
+  beforeEach(() => { db = freshDB(seedChartOfAccounts); });
 
   it("inserts once and reports duplicate on the same id", () => {
     expect(insertTransaction(db, tf({ id: "tx:fixed" }))).toEqual({ id: "tx:fixed", duplicate: false });
@@ -142,7 +142,7 @@ describe("insertTransaction", () => {
 
 describe("insertLinkedTransactions", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedChartOfAccounts); });
+  beforeEach(() => { db = freshDB(seedChartOfAccounts); });
 
   it("stamps the given group id on every leg, over any a leg carries", () => {
     const res = insertLinkedTransactions(
@@ -173,7 +173,7 @@ describe("insertLinkedTransactions", () => {
 
 describe("findTransactionById", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedChartOfAccounts); });
+  beforeEach(() => { db = freshDB(seedChartOfAccounts); });
 
   it("returns null for a missing id", () => {
     expect(findTransactionById(db, "tx:nope")).toBeNull();
@@ -196,7 +196,7 @@ describe("findTransactionById", () => {
 describe("listTransactions", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb(seedChartOfAccounts);
+    db = freshDB(seedChartOfAccounts);
     insertTransaction(db, tf({ id: "tx:1", description: "Coffee", debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 15000 }));
     insertTransaction(db, tf({ id: "tx:2", description: "Taxi", debit_account_id: "thb:expense:transport", credit_account_id: "thb:asset:bank", amount: 20000 }));
   });
@@ -251,7 +251,7 @@ describe("listTransactions", () => {
 describe("listTransactions by ledger", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb((seeded) => {
+    db = freshDB((seeded) => {
       seedChartOfAccounts(seeded);
       seedAccount(seeded, { id: "jpy:asset:cash" });
       seedAccount(seeded, { id: "jpy:expense:food" });
@@ -299,7 +299,7 @@ describe("listTransactions by ledger", () => {
 
 describe("deleteTransaction", () => {
   it("removes a row and reports success", () => {
-    const db = freshDb(seedChartOfAccounts);
+    const db = freshDB(seedChartOfAccounts);
     insertTransaction(db, tf({ id: "tx:1" }));
     expect(deleteTransaction(db, "tx:1")).toEqual({ deleted: true, unvoided: 0 });
     expect(deleteTransaction(db, "tx:1")).toEqual({ deleted: false, unvoided: 0 });
@@ -307,7 +307,7 @@ describe("deleteTransaction", () => {
   });
 
   it("un-voids the mirrors of a deleted survivor and reports how many", () => {
-    const db = freshDb(seedChartOfAccounts);
+    const db = freshDB(seedChartOfAccounts);
     insertTransaction(db, tf({ id: "tx:orig" }));
     insertTransaction(db, tf({ id: "tx:mirror" }));
     voidTransactionAsMirror(db, "tx:mirror", "tx:orig");
@@ -317,7 +317,7 @@ describe("deleteTransaction", () => {
   });
 
   it("un-voids every mirror of a deleted survivor, and the balance doubles back to reflect both returning live", () => {
-    const db = freshDb(seedChartOfAccounts);
+    const db = freshDB(seedChartOfAccounts);
     insertTransaction(db, tf({ id: "tx:orig", amount: 15000 }));
     insertTransaction(db, tf({ id: "tx:mirror1", amount: 15000 }));
     insertTransaction(db, tf({ id: "tx:mirror2", amount: 15000 }));
@@ -339,7 +339,7 @@ describe("deleteTransaction", () => {
 describe("bulkRecategorize", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb(seedChartOfAccounts);
+    db = freshDB(seedChartOfAccounts);
     insertTransaction(db, tf({ id: "tx:d", debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash" }));
     insertTransaction(db, tf({ id: "tx:c", debit_account_id: "thb:asset:cash", credit_account_id: "thb:expense:food" }));
     insertTransaction(db, tf({ id: "tx:self", debit_account_id: "thb:expense:food", credit_account_id: "thb:expense:transport" }));
@@ -416,7 +416,7 @@ describe("bulkRecategorize", () => {
 describe("counts + updateTransactionMeta", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb(seedChartOfAccounts);
+    db = freshDB(seedChartOfAccounts);
     db.prepare(
       `INSERT INTO files (id, path, file_hash, mime, status) VALUES ('sf-1','/f.pdf','h1','application/pdf','ingested')`,
     ).run();
@@ -441,7 +441,7 @@ describe("counts + updateTransactionMeta", () => {
 describe("voidTransactionAsMirror", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb(seedChartOfAccounts);
+    db = freshDB(seedChartOfAccounts);
     insertTransaction(db, tf({ id: "tx:a", amount: 15000 }));
     insertTransaction(db, tf({ id: "tx:b", amount: 15000 }));
   });
@@ -557,7 +557,7 @@ describe("voidTransactionAsMirror: crossed merges from two processes", () => {
 describe("void excludes rows from balance derivation", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb(seedChartOfAccounts);
+    db = freshDB(seedChartOfAccounts);
     insertTransaction(db, tf({ id: "tx:orig", amount: 15000 }));
     insertTransaction(db, tf({ id: "tx:mirror", amount: 15000 }));
   });
@@ -585,7 +585,7 @@ describe("void excludes rows from balance derivation", () => {
 
 describe("listTransactions / countTransactions void filtering", () => {
   it("excludes the voided mirror by default, includes it with includeVoid, and counts agree with both", () => {
-    const db = freshDb(seedChartOfAccounts);
+    const db = freshDB(seedChartOfAccounts);
     insertTransaction(db, tf({ id: "tx:orig", amount: 15000 }));
     insertTransaction(db, tf({ id: "tx:mirror", amount: 15000 }));
 
@@ -608,7 +608,7 @@ describe("listTransactions / countTransactions void filtering", () => {
 
 describe("void survives re-insert (ON CONFLICT)", () => {
   it("keeps void_of when the deterministic id is re-inserted", () => {
-    const db = freshDb(seedChartOfAccounts);
+    const db = freshDB(seedChartOfAccounts);
     insertTransaction(db, tf({ id: "tx:orig", amount: 15000 }));
     insertTransaction(db, tf({ id: "tx:dup", amount: 15000 }));
     voidTransactionAsMirror(db, "tx:dup", "tx:orig");
@@ -623,7 +623,7 @@ describe("void survives re-insert (ON CONFLICT)", () => {
 describe("countTransactions with filters", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb(seedChartOfAccounts);
+    db = freshDB(seedChartOfAccounts);
     insertTransaction(db, tf({ id: "tx:1", debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 15000 }));
     insertTransaction(db, tf({ id: "tx:2", debit_account_id: "thb:expense:transport", credit_account_id: "thb:asset:bank", amount: 20000 }));
     insertTransaction(db, tf({ id: "tx:3", debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:bank", amount: 15000 }));
@@ -648,7 +648,7 @@ describe("countTransactions with filters", () => {
 describe("repointTransactions", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb(seedChartOfAccounts);
+    db = freshDB(seedChartOfAccounts);
     seedAccount(db, { id: "thb:expense:food:dining" });
   });
 

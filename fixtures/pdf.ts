@@ -1,12 +1,12 @@
 /**
  * Hand-assembled, latin1-encoded so xref offsets are byte counts, not
  * character counts. Nothing here imports src/, except mupdf (only as the
- * writer `encryptedPdf` needs).
+ * writer `encryptedPDF` needs).
  */
 
 export type PageKind = "text" | "blank" | "image";
 
-function buildPdf(objects: string[]): Buffer {
+function buildPDF(objects: string[]): Buffer {
   const header = "%PDF-1.4\n";
   const bodies = objects.map((body, index) => `${index + 1} 0 obj${body}endobj\n`);
 
@@ -79,27 +79,27 @@ export function pdfOf(kinds: PageKind[]): Buffer {
   }
   objects.push("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>");
 
-  return buildPdf(objects);
+  return buildPDF(objects);
 }
 
-export function textPdf(): Buffer {
+export function textPDF(): Buffer {
   return pdfOf(["text"]);
 }
 
-export function scanPdf(): Buffer {
+export function scanPDF(): Buffer {
   return pdfOf(["image"]);
 }
 
-export function mixedPdf(): Buffer {
+export function mixedPDF(): Buffer {
   return pdfOf(["text", "blank", "image"]);
 }
 
 /** Bytes mupdf refuses outright, for the pdf_unreadable arm. */
-export function corruptPdf(): Buffer {
+export function corruptPDF(): Buffer {
   return Buffer.from("%PDF-1.4\nnot really a pdf\n", "latin1");
 }
 
-export async function encryptedPdf(
+export async function encryptedPDF(
   password: string,
   kinds: PageKind[] = ["text"],
 ): Promise<Buffer> {

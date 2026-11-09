@@ -15,7 +15,7 @@ const NOT_WRITABLE_CODES = new Set(["SQLITE_READONLY", "SQLITE_PERM", "SQLITE_CA
 const NOT_A_DATABASE_CODES = new Set(["SQLITE_NOTADB", "SQLITE_CORRUPT"]);
 
 // libsql loads lazily here so its native binding stays off the startup path of commands that never open the ledger.
-export async function openDb(dbPath: string): Promise<Database.Database> {
+export async function openDB(dbPath: string): Promise<Database.Database> {
   mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
 
   // A path that cannot be opened at all (a directory, a bad mount) throws from the

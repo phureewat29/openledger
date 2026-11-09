@@ -22,21 +22,21 @@ import { findFileById } from "../files/queries.js";
 import { DEFAULT_RENDER } from "../extract/pdf.js";
 import { MAX_SOURCE_BYTES, loadSource, type LoadedSource } from "../extract/source.js";
 import {
-  corruptPdf,
-  encryptedPdf,
-  mixedPdf,
+  corruptPDF,
+  encryptedPDF,
+  mixedPDF,
   pdfOf,
-  scanPdf,
-  textPdf,
+  scanPDF,
+  textPDF,
 } from "../../fixtures/pdf.js";
 import { samplePng } from "../../fixtures/images.js";
-import { freshDb } from "../../fixtures/db.js";
+import { freshDB } from "../../fixtures/db.js";
 import {
   DEAD_OCR_BASE_URL,
   LIVE_PAGE_TIMEOUT_MS,
-  liveOcr,
-  requireLiveOcr,
-  requireLiveOcrSource,
+  liveOCR,
+  requireLiveOCR,
+  requireLiveOCRSource,
 } from "../../fixtures/ocr.js";
 import { registerPendingFile } from "../files/files.js";
 import { discoverFiles, prepareFile, type PrepareConfig } from "./prepare.js";
@@ -72,10 +72,10 @@ function loaded(path: string): LoadedSource {
 
 describe("discoverFiles", () => {
   it("walks recursively, dedups by hash, and flags known files", async () => {
-    const db = freshDb();
-    write("a.pdf", textPdf());
+    const db = freshDB();
+    write("a.pdf", textPDF());
     mkdirSync(resolve(dataDir, "sub"), { recursive: true });
-    write("sub/b.pdf", textPdf());
+    write("sub/b.pdf", textPDF());
 
     const first = await discoverFiles(db, dataDir);
     expect(first).toHaveLength(2);
@@ -93,18 +93,18 @@ describe("discoverFiles", () => {
   });
 
   it("filters by regex against the relative path", async () => {
-    const db = freshDb();
-    write("a.pdf", textPdf());
+    const db = freshDB();
+    write("a.pdf", textPDF());
     mkdirSync(resolve(dataDir, "sub"), { recursive: true });
-    write("sub/b.pdf", textPdf());
+    write("sub/b.pdf", textPDF());
 
     const entries = await discoverFiles(db, dataDir, { regex: /^sub\// });
     expect(entries.map((e) => e.relPath)).toEqual(["sub/b.pdf"]);
   });
 
   it("lists images alongside PDFs and ignores extensions it cannot read", async () => {
-    const db = freshDb();
-    write("statement.pdf", textPdf());
+    const db = freshDB();
+    write("statement.pdf", textPDF());
     write("receipt.png", png);
     write("notes.docx", Buffer.from("PK"));
 
@@ -113,8 +113,8 @@ describe("discoverFiles", () => {
   });
 
   it("reports an oversized file as unreadable instead of sinking the walk", async () => {
-    const db = freshDb();
-    write("small.pdf", textPdf());
+    const db = freshDB();
+    write("small.pdf", textPDF());
     const huge = resolve(dataDir, "huge.pdf");
     closeSync(openSync(huge, "w"));
     truncateSync(huge, MAX_SOURCE_BYTES + 1024);
@@ -127,8 +127,8 @@ describe("discoverFiles", () => {
   });
 
   it("reports a PDF it cannot open as unreadable, naming the reason", async () => {
-    const db = freshDb();
-    write("broken.pdf", corruptPdf());
+    const db = freshDB();
+    write("broken.pdf", corruptPDF());
 
     const [entry] = await discoverFiles(db, dataDir);
     expect(entry.status).toBe("unreadable");
@@ -136,8 +136,8 @@ describe("discoverFiles", () => {
   });
 
   it("reports encryption and never probes an image", async () => {
-    const db = freshDb();
-    write("kbank.pdf", await encryptedPdf("secret"));
+    const db = freshDB();
+    write("kbank.pdf", await encryptedPDF("secret"));
     write("kbank.png", png);
 
     const entries = await discoverFiles(db, dataDir);
@@ -148,7 +148,7 @@ describe("discoverFiles", () => {
 
 describe("prepareFile: text route", () => {
   it("writes one document.txt (0600, in a 0700 dir) with a marker per page", async () => {
-    const db = freshDb();
+    const db = freshDB();
     // A blank middle page does not spoil "complete", so this stays on the text route
     // with no endpoint configured; a scanned page instead would route to raster.
     const path = write("a.pdf", pdfOf(["text", "blank", "text"]));
@@ -177,8 +177,8 @@ describe("prepareFile: text route", () => {
   });
 
   it("resolves a file id as readily as a path", async () => {
-    const db = freshDb();
-    const path = write("a.pdf", textPdf());
+    const db = freshDB();
+    const path = write("a.pdf", textPDF());
     const fileId = registerPendingFile(db, loaded(path));
 
     const outcome = await prepareFile(db, cfg, fileId);
@@ -186,8 +186,8 @@ describe("prepareFile: text route", () => {
   });
 
   it("extracts a locked PDF's text without ever writing the statement itself to disk", async () => {
-    const db = freshDb();
-    const path = write("kbank.pdf", await encryptedPdf("secret"));
+    const db = freshDB();
+    const path = write("kbank.pdf", await encryptedPDF("secret"));
 
     const outcome = await prepareFile(db, cfg, path, { password: "secret" });
     // Named before the narrowing guard, so a fallback to the raster route can't pass this vacuously.
@@ -199,8 +199,8 @@ describe("prepareFile: text route", () => {
   });
 
   it("purges a prior run's artifacts before writing its own", async () => {
-    const db = freshDb();
-    const path = write("a.pdf", textPdf());
+    const db = freshDB();
+    const path = write("a.pdf", textPDF());
 
     const first = await prepareFile(db, cfg, path);
     expect(first.ok).toBe(true);
@@ -217,7 +217,7 @@ describe("prepareFile: text route", () => {
 
 describe("prepareFile: image route", () => {
   it("hands back an image by its own path, writing nothing", async () => {
-    const db = freshDb();
+    const db = freshDB();
     const path = write("receipt.png", png);
 
     const outcome = await prepareFile(db, cfg, path);
@@ -235,8 +235,8 @@ describe("prepareFile: image route", () => {
   });
 
   it("rasterizes a scan to 1-based p{N}.png files (0600) when no endpoint is configured", async () => {
-    const db = freshDb();
-    const path = write("scan.pdf", scanPdf());
+    const db = freshDB();
+    const path = write("scan.pdf", scanPDF());
 
     const outcome = await prepareFile(db, cfg, path);
     // Named before the narrowing guard, so a silent fallback to the text route can't pass this vacuously.
@@ -251,8 +251,8 @@ describe("prepareFile: image route", () => {
   });
 
   it("routes a partial text layer to the agent as page images, cache modes intact", async () => {
-    const db = freshDb();
-    const path = write("mixed.pdf", mixedPdf());
+    const db = freshDB();
+    const path = write("mixed.pdf", mixedPDF());
 
     const outcome = await prepareFile(db, cfg, path);
     // Named before the narrowing guard, so a silent fallback to the text route can't pass this vacuously.
@@ -267,8 +267,8 @@ describe("prepareFile: image route", () => {
   });
 
   it("--rescan ignores a good text layer and rasterizes instead", async () => {
-    const db = freshDb();
-    const path = write("a.pdf", textPdf());
+    const db = freshDB();
+    const path = write("a.pdf", textPDF());
 
     const outcome = await prepareFile(db, cfg, path, { rescan: true });
     expect(outcome.ok && outcome.kind).toBe("images");
@@ -279,8 +279,8 @@ describe("prepareFile: image route", () => {
 
 describe("prepareFile: ocr route", () => {
   it("stays on the agent route when a model is set but no url is", async () => {
-    const db = freshDb();
-    const path = write("scan.pdf", scanPdf());
+    const db = freshDB();
+    const path = write("scan.pdf", scanPDF());
     cfg.ocrModel = "test-ocr-model";
 
     const outcome = await prepareFile(db, cfg, path);
@@ -288,13 +288,13 @@ describe("prepareFile: ocr route", () => {
   });
 });
 
-describe.skipIf(!liveOcr)("prepareFile: ocr route (live OCR endpoint)", () => {
+describe.skipIf(!liveOCR)("prepareFile: ocr route (live OCR endpoint)", () => {
   it(
     "reads a scan through the endpoint, naming the model that read it",
     async () => {
-      const db = freshDb();
-      const path = write("scan.pdf", scanPdf());
-      Object.assign(cfg, requireLiveOcrSource());
+      const db = freshDB();
+      const path = write("scan.pdf", scanPDF());
+      Object.assign(cfg, requireLiveOCRSource());
 
       const outcome = await prepareFile(db, cfg, path);
       // Named before the narrowing guard, so a silent fallback to the raster route can't pass this vacuously.
@@ -302,7 +302,7 @@ describe.skipIf(!liveOcr)("prepareFile: ocr route (live OCR endpoint)", () => {
       if (!outcome.ok || outcome.kind !== "text") return;
       expect(outcome).toMatchObject({
         source: "ocr",
-        model: requireLiveOcr().model,
+        model: requireLiveOCR().model,
         failedPages: [],
       });
       expect(readFileSync(outcome.document, "utf8").startsWith("--- page 1 ---\n")).toBe(true);
@@ -313,16 +313,16 @@ describe.skipIf(!liveOcr)("prepareFile: ocr route (live OCR endpoint)", () => {
   it(
     "drops a prior run's document.txt when this run returns the image untouched",
     async () => {
-      const db = freshDb();
+      const db = freshDB();
       const path = write("receipt.png", png);
-      Object.assign(cfg, requireLiveOcrSource());
+      Object.assign(cfg, requireLiveOCRSource());
 
       const first = await prepareFile(db, cfg, path);
       expect(first.ok && first.kind).toBe("text");
       if (!first.ok) return;
       expect(existsSync(resolve(cacheDir, first.fileId, "document.txt"))).toBe(true);
 
-      const second = await prepareFile(db, cfg, path, { noOcr: true });
+      const second = await prepareFile(db, cfg, path, { noOCR: true });
       expect(second.ok && second.source).toBe("original");
       expect(existsSync(resolve(cacheDir, first.fileId))).toBe(false);
     },
@@ -332,38 +332,38 @@ describe.skipIf(!liveOcr)("prepareFile: ocr route (live OCR endpoint)", () => {
 
 describe("prepareFile: refusals", () => {
   it("reports a missing path or id as not_found", async () => {
-    const db = freshDb();
+    const db = freshDB();
     const outcome = await prepareFile(db, cfg, "no/such/statement.pdf");
     expect(outcome).toMatchObject({ ok: false, reason: "not_found" });
   });
 
   it("reports an extension it cannot read", async () => {
-    const db = freshDb();
+    const db = freshDB();
     const outcome = await prepareFile(db, cfg, write("notes.docx", Buffer.from("PK")));
     expect(outcome).toMatchObject({ ok: false, reason: "unsupported_extension" });
   });
 
   it("reports bytes that disagree with the extension", async () => {
-    const db = freshDb();
+    const db = freshDB();
     const outcome = await prepareFile(db, cfg, write("mislabeled.pdf", png));
     expect(outcome).toMatchObject({ ok: false, reason: "kind_mismatch" });
   });
 
   it("reports a PDF mupdf cannot open", async () => {
-    const db = freshDb();
-    const outcome = await prepareFile(db, cfg, write("broken.pdf", corruptPdf()));
+    const db = freshDB();
+    const outcome = await prepareFile(db, cfg, write("broken.pdf", corruptPDF()));
     expect(outcome).toMatchObject({ ok: false, reason: "pdf_unreadable" });
   });
 
   it("reports password_required for a locked PDF with no password to try", async () => {
-    const db = freshDb();
-    const outcome = await prepareFile(db, cfg, write("kbank.pdf", await encryptedPdf("secret")));
+    const db = freshDB();
+    const outcome = await prepareFile(db, cfg, write("kbank.pdf", await encryptedPDF("secret")));
     expect(outcome).toMatchObject({ ok: false, reason: "password_required" });
   });
 
   it("reports wrong_password for a password that does not open it", async () => {
-    const db = freshDb();
-    const path = write("kbank.pdf", await encryptedPdf("secret"));
+    const db = freshDB();
+    const path = write("kbank.pdf", await encryptedPDF("secret"));
     const outcome = await prepareFile(db, cfg, path, { password: "nope" });
     expect(outcome).toMatchObject({ ok: false, reason: "wrong_password" });
   });
@@ -388,8 +388,8 @@ describe("prepareFile: --force", () => {
   }
 
   it("re-registers the bytes, cascading away the prior ingest's transactions and artifacts", async () => {
-    const db = freshDb();
-    const path = write("scan.pdf", scanPdf());
+    const db = freshDB();
+    const path = write("scan.pdf", scanPDF());
 
     const first = await prepareFile(db, cfg, path);
     expect(first.ok).toBe(true);
@@ -411,8 +411,8 @@ describe("prepareFile: --force", () => {
   });
 
   it("keeps the prior row and its transactions when the password does not open it", async () => {
-    const db = freshDb();
-    const path = write("kbank.pdf", await encryptedPdf("secret"));
+    const db = freshDB();
+    const path = write("kbank.pdf", await encryptedPDF("secret"));
     // Registered by hash without ever unlocking it, so only the wrong password below is tried.
     const fileId = registerPendingFile(db, loaded(path));
     commitRow(db, fileId);
@@ -424,8 +424,8 @@ describe("prepareFile: --force", () => {
   });
 
   it("keeps the prior row and its transactions when the OCR endpoint is dead", async () => {
-    const db = freshDb();
-    const path = write("scan.pdf", scanPdf());
+    const db = freshDB();
+    const path = write("scan.pdf", scanPDF());
 
     const first = await prepareFile(db, cfg, path);
     expect(first.ok).toBe(true);

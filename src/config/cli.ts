@@ -4,7 +4,7 @@ import { existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { resolve } from "path";
 import { mapValues, pick } from "es-toolkit";
-import { openDb } from "../db/connection.js";
+import { openDB } from "../db/connection.js";
 import { STRUCTURAL_ACCOUNTS, ensureStructuralAccount } from "../accounts/accounts.js";
 import {
   CONFIG_SECRETS,
@@ -55,7 +55,7 @@ export async function openLedger(
   path: string | undefined,
 ): Promise<{ config: ResolvedConfig; db: Database.Database }> {
   const config = requireConfig(path);
-  return { config, db: await openDb(config.dbPath) };
+  return { config, db: await openDB(config.dbPath) };
 }
 
 /**
@@ -76,10 +76,10 @@ export type LedgerProbe =
   | { state: "unreachable"; error: string }
   | { state: "open"; db: Database.Database };
 
-/** Opens the ledger only if it exists (`openDb` would create it); the error names the path home-relative. */
+/** Opens the ledger only if it exists (`openDB` would create it); the error names the path home-relative. */
 export async function probeLedger(dbPath: string): Promise<LedgerProbe> {
   if (!existsSync(dbPath)) return { state: "missing" };
-  const opened = await tryExecute(() => openDb(dbPath));
+  const opened = await tryExecute(() => openDB(dbPath));
   if (!opened.ok) {
     return { state: "unreachable", error: relativizeHomeIn(opened.error, dbPath) };
   }
@@ -215,7 +215,7 @@ async function convergeConfig(
   const merged = saveConfig(configPath, converged, roots.home);
 
   // After saveConfig, and from the returned values, so the migration lands on the new db path.
-  const db = await openDb(merged.dbPath);
+  const db = await openDB(merged.dbPath);
 
   // Seeds the display-currency ledger's structural accounts so first ingest resolves them.
   for (const kind of Object.keys(STRUCTURAL_ACCOUNTS) as (keyof typeof STRUCTURAL_ACCOUNTS)[]) {

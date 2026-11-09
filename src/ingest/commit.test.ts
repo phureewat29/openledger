@@ -14,7 +14,7 @@ import {
   type RawTransactionInput,
 } from "./commit.js";
 import { noiseTokens } from "../datasets/datasets.js";
-import { failingAccountInsert, failingStatement, freshDb } from "../../fixtures/db.js";
+import { failingAccountInsert, failingStatement, freshDB } from "../../fixtures/db.js";
 
 function seedAccountsAndFile(db: Database.Database): void {
   db.prepare(
@@ -65,7 +65,7 @@ function raw(over: Partial<RawTransactionInput> = {}): RawTransactionInput {
 
 describe("commitTransaction", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedAccountsAndFile); });
+  beforeEach(() => { db = freshDB(seedAccountsAndFile); });
 
   it("happy path: converts decimal to minor units, derives id, raises no questions", () => {
     const out = commitTransaction(db, CTX, raw());
@@ -654,7 +654,7 @@ describe("commitTransaction", () => {
 
 describe("commitLinkedTransactions", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedAccountsAndFile); });
+  beforeEach(() => { db = freshDB(seedAccountsAndFile); });
 
   it("commits the salary example atomically with a shared group and gross income", () => {
     const out = commitLinkedTransactions(
@@ -926,7 +926,7 @@ describe("commitLinkedTransactions", () => {
 
 describe("a refused row keeps one question across retries", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedAccountsAndFile); });
+  beforeEach(() => { db = freshDB(seedAccountsAndFile); });
 
   /** Commits a row that must be refused, and reports what the refusal raised. */
   function refusalRaised(

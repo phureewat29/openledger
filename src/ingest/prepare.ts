@@ -4,8 +4,8 @@ import type Database from "libsql";
 import type { OpenLedgerConfig } from "../config/config.js";
 import { findFileByHash, replaceFile, type FileStatus } from "../files/queries.js";
 import { extractFile, type Extraction, type TextPage } from "../extract/extract.js";
-import { resolveOcr, type OCRConfigSource } from "../extract/ocr.js";
-import { isEncryptedPdf, unlockPdf, type UnlockFailureReason } from "../extract/pdf.js";
+import { resolveOCR, type OCRConfigSource } from "../extract/ocr.js";
+import { isEncryptedPDF, unlockPDF, type UnlockFailureReason } from "../extract/pdf.js";
 import type { TextLayer } from "../extract/route.js";
 import { loadSource, type LoadedSource } from "../extract/source.js";
 import { newFileId } from "../lib/ids.js";
@@ -34,7 +34,7 @@ export interface IngestEntry extends WalkedFile {
 /** Only a PDF can be locked, and only a PDF can be unopenable; an image needs neither probe. */
 async function encryptionOf(source: LoadedSource): Promise<Result<boolean>> {
   if (source.kind !== "pdf") return ok(false);
-  return tryExecute(() => isEncryptedPdf(source.bytes));
+  return tryExecute(() => isEncryptedPDF(source.bytes));
 }
 
 function unreadableEntry(file: WalkedFile, note: string): IngestEntry {
@@ -79,7 +79,7 @@ interface PrepareOptions {
   /** Ignore the text layer, for garbled or junk layers. */
   rescan?: boolean;
   /** Ignore the OCR endpoint, and read the page images yourself. */
-  noOcr?: boolean;
+  noOCR?: boolean;
 }
 
 export type PrepareFailure =
@@ -171,7 +171,7 @@ async function readableBytes(source: LoadedSource, password?: string): Promise<U
     };
   }
 
-  const attempt = await tryExecute(() => unlockPdf(source.bytes, password));
+  const attempt = await tryExecute(() => unlockPDF(source.bytes, password));
   if (!attempt.ok) return { ok: false, reason: "pdf_unreadable", message: attempt.error };
   if (!attempt.value.ok) return UNLOCK_FAILURES[attempt.value.reason];
   return { ok: true, bytes: attempt.value.decrypted };
@@ -285,7 +285,7 @@ export async function prepareFile(
 
   const extracted = await extractFile(
     { kind: source.kind, mime: source.mime, bytes: readable.bytes, path: source.path },
-    { ocr: resolveOcr(cfg), overrides: { rescan: opts.rescan, noOcr: opts.noOcr } },
+    { ocr: resolveOCR(cfg), overrides: { rescan: opts.rescan, noOCR: opts.noOCR } },
   );
   if (!extracted.ok) return { ok: false, reason: extracted.reason, message: extracted.message };
 

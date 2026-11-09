@@ -4,13 +4,13 @@ import { dirname, join } from "node:path";
 import {
   createSandbox,
   makeRunCLI,
-  parseNdjson,
+  parseNDJSON,
   parseOne,
   type CLIResult,
   type CLIRunner,
   type Sandbox,
 } from "../fixtures/sandbox.js";
-import { encryptedPdf, textPdf, type PageKind } from "../fixtures/pdf.js";
+import { encryptedPDF, textPDF, type PageKind } from "../fixtures/pdf.js";
 
 let sandbox: Sandbox;
 let runCLI: CLIRunner;
@@ -60,7 +60,7 @@ async function transactionCount(): Promise<number> {
 
 /** Void-inclusive row total; `transactionCount` counts live rows only. */
 async function allTransactionCount(): Promise<number> {
-  const rows = parseNdjson((await ok(["transactions", "list", "--include-void"])).stdout);
+  const rows = parseNDJSON((await ok(["transactions", "list", "--include-void"])).stdout);
   const summary = rows.find((row) => row.type === "summary");
   if (!summary) throw new Error("transactions list emitted no summary row");
   return summary.total as number;
@@ -166,10 +166,10 @@ describe("lifecycle against a local ledger (dist subprocess)", () => {
       mkdirSync(dirname(statementPath), { recursive: true });
       writeFileSync(
         statementPath,
-        await encryptedPdf(FIXTURE_PASSWORD, Array<PageKind>(FIXTURE_PAGES).fill("text")),
+        await encryptedPDF(FIXTURE_PASSWORD, Array<PageKind>(FIXTURE_PAGES).fill("text")),
       );
 
-      const rows = parseNdjson((await ok(["ingest", "list"])).stdout).filter((r) => r.type === "file");
+      const rows = parseNDJSON((await ok(["ingest", "list"])).stdout).filter((r) => r.type === "file");
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ encrypted: true, path: statementPath });
     },
@@ -194,7 +194,7 @@ describe("lifecycle against a local ledger (dist subprocess)", () => {
   it(
     "ingest commit posts three rows, links the dog-food merchant, and falls back on the bare-leaf hint",
     async () => {
-      const objs = parseNdjson(
+      const objs = parseNDJSON(
         (await ok(["ingest", "commit", "--file", fileId], ndjson(lifecycleItems()))).stdout,
       );
       const results = objs.filter((o) => o.type === "result");
@@ -235,7 +235,7 @@ describe("lifecycle against a local ledger (dist subprocess)", () => {
   it(
     "re-piping the same three rows is a no-op that reports the sides the stored rows hold",
     async () => {
-      const objs = parseNdjson(
+      const objs = parseNDJSON(
         (await ok(["ingest", "commit", "--file", fileId], ndjson(lifecycleItems()))).stdout,
       );
       const results = objs.filter((o) => o.type === "result");
@@ -259,12 +259,12 @@ describe("lifecycle against a local ledger (dist subprocess)", () => {
     "questions list surfaces the fallback question and answer closes it",
     async () => {
       // The trailing summary row is not a question; only real rows count.
-      const rows = parseNdjson((await ok(["questions", "list"])).stdout).filter(
+      const rows = parseNDJSON((await ok(["questions", "list"])).stdout).filter(
         (r) => r.type !== "summary",
       );
       expect(rows.length).toBeGreaterThanOrEqual(1);
 
-      const answered = parseNdjson(
+      const answered = parseNDJSON(
         (await ok(["questions", "answer", rows[0].id, "--answer", "confirmed"])).stdout,
       );
       expect(answered).toEqual([
@@ -283,7 +283,7 @@ describe("lifecycle against a local ledger (dist subprocess)", () => {
       expect(result).toMatchObject({ status: "ingested", cache_removed: [cacheSubdir] });
       expect(existsSync(cacheSubdir)).toBe(false);
 
-      const ingested = parseNdjson(
+      const ingested = parseNDJSON(
         (await ok(["files", "list", "--status", "ingested"])).stdout,
       ).filter((r) => r.type !== "summary");
       expect(ingested).toHaveLength(1);
@@ -335,7 +335,7 @@ describe("lifecycle against a local ledger (dist subprocess)", () => {
       manualDupId = manual.transaction_id;
 
       const dupStatementPath = join(sandbox.dataDir, "corgi-bank", "card-statement-2026-06.pdf");
-      writeFileSync(dupStatementPath, textPdf());
+      writeFileSync(dupStatementPath, textPDF());
       const dupFileId = parseOne(
         (await ok(["ingest", "prepare", dupStatementPath])).stdout,
       ).file_id as string;
@@ -351,14 +351,14 @@ describe("lifecycle against a local ledger (dist subprocess)", () => {
         raw_descriptor: "PET PARADISE DOG FOOD",
         merchant: { canonical_name: "Pet Paradise", alias: "PET PARADISE DOG FOOD" },
       };
-      const dupCommit = parseNdjson(
+      const dupCommit = parseNDJSON(
         (await ok(["ingest", "commit", "--file", dupFileId], JSON.stringify(dup))).stdout,
       );
       expect(dupCommit.find((o) => o.type === "result")).toMatchObject({ ok: true, duplicate: false });
 
       const before = await transactionCount();
 
-      const merge = parseNdjson((await ok(["transactions", "dedupe", "--auto-merge"])).stdout);
+      const merge = parseNDJSON((await ok(["transactions", "dedupe", "--auto-merge"])).stdout);
       expect(merge.find((o) => o.type === "summary")).toMatchObject({ auto_merged: 1 });
 
       expect(await transactionCount()).toBe(before - 1);

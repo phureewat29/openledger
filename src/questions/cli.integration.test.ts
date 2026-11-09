@@ -5,7 +5,7 @@ import { createAccount } from "../accounts/accounts.js";
 import {
   createSandbox,
   makeRunCLI,
-  parseNdjson,
+  parseNDJSON,
   writeConfig,
   type CLIRunner,
   type Sandbox,
@@ -53,7 +53,7 @@ async function raiseQuestion(): Promise<string> {
   });
   const { stdout, code } = await runCLI(["ingest", "commit", "--json"], { stdin: row });
   expect(code).toBe(0);
-  const result = parseNdjson(stdout).find((o) => o.type === "result");
+  const result = parseNDJSON(stdout).find((o) => o.type === "result");
   expect(result.raised_questions).toBe(1);
 
   const db = readDB();
@@ -105,7 +105,7 @@ describe("questions answer --also (subprocess)", () => {
       "--json",
     ]);
     expect(result.code).toBe(0);
-    const objs = parseNdjson(result.stdout);
+    const objs = parseNDJSON(result.stdout);
     const rows = objs.filter((o) => o.type !== "summary");
     expect(rows.map((r) => r.id)).toEqual([good1, good2]);
     expect(rows.every((r) => r.answer === "thb:expense:groceries")).toBe(true);
@@ -139,7 +139,7 @@ describe("questions answer --also (subprocess)", () => {
       "--json",
     ]);
     expect(result.code).toBe(0);
-    const objs = parseNdjson(result.stdout);
+    const objs = parseNDJSON(result.stdout);
     expect(objs.filter((o) => o.type !== "summary").map((r) => r.id)).toEqual([good1, good2]);
     // The repeat is dropped before anything closes, so it costs no sibling either.
     expect(objs.at(-1)).toEqual({ type: "summary", answered: 2, closed_siblings: 1 });

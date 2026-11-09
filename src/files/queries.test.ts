@@ -11,7 +11,7 @@ import {
 
 import { insertTransaction, findTransactionById, voidTransactionAsMirror } from "../transactions/queries.js";
 import { recordQuestion } from "../questions/queries.js";
-import { freshDb, seedAccount } from "../../fixtures/db.js";
+import { freshDB, seedAccount } from "../../fixtures/db.js";
 
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -28,11 +28,11 @@ function seedChartOfAccounts(db: Database.Database): void {
 
 describe("countFiles", () => {
   it("returns all zeros for an empty table", () => {
-    expect(countFiles(freshDb())).toEqual({ ingested: 0, pending: 0, failed: 0 });
+    expect(countFiles(freshDB())).toEqual({ ingested: 0, pending: 0, failed: 0 });
   });
 
   it("buckets rows by status", () => {
-    const db = freshDb();
+    const db = freshDB();
     insertFile(db, "a", "ingested");
     insertFile(db, "b", "ingested");
     insertFile(db, "c", "ingested");
@@ -46,7 +46,7 @@ describe("countFiles", () => {
 
 describe("listFiles / findFileById", () => {
   it("returns rows including the source column", () => {
-    const db = freshDb();
+    const db = freshDB();
     insertFile(db, "a", "ingested");
     db.prepare(
       `UPDATE files SET source = 'anthropic', ingested_at = '2026-05-24 10:00:00' WHERE id = ?`,
@@ -64,13 +64,13 @@ describe("listFiles / findFileById", () => {
   });
 
   it("findFileById returns null for an unknown id", () => {
-    expect(findFileById(freshDb(), "nope")).toBeNull();
+    expect(findFileById(freshDB(), "nope")).toBeNull();
   });
 });
 
 describe("deleteFile", () => {
   it("returns the removed row plus cascade counts and wipes the dependents", () => {
-    const db = freshDb();
+    const db = freshDB();
     seedChartOfAccounts(db);
     insertFile(db, "a", "ingested");
     const { id: transactionId } = insertTransaction(db, {
@@ -101,12 +101,12 @@ describe("deleteFile", () => {
   });
 
   it("returns null counts and no error when the id is unknown", () => {
-    const result = deleteFile(freshDb(), "nope");
+    const result = deleteFile(freshDB(), "nope");
     expect(result).toEqual({ removed: null, removedTransactions: 0, removedQuestions: 0, unvoided: 0 });
   });
 
   it("counts mirrors from OTHER files that the source-file CASCADE silently un-voids", () => {
-    const db = freshDb();
+    const db = freshDB();
     seedChartOfAccounts(db);
     insertFile(db, "a", "ingested");
     insertFile(db, "b", "ingested");
@@ -140,7 +140,7 @@ describe("deleteFile", () => {
 
 describe("markFileIngested", () => {
   it("stamps status/source/ingested_at", () => {
-    const db = freshDb();
+    const db = freshDB();
     insertFile(db, "a", "pending");
 
     const changes = markFileIngested(db, "a", { source: "anthropic" });
@@ -153,13 +153,13 @@ describe("markFileIngested", () => {
   });
 
   it("returns 0 changes for an unknown id", () => {
-    expect(markFileIngested(freshDb(), "nope", { source: "anthropic" })).toBe(0);
+    expect(markFileIngested(freshDB(), "nope", { source: "anthropic" })).toBe(0);
   });
 });
 
 describe("markFileFailed", () => {
   it("stamps status/source/error, leaving ingested_at untouched", () => {
-    const db = freshDb();
+    const db = freshDB();
     insertFile(db, "a", "pending");
 
     const changes = markFileFailed(db, "a", { source: "external", error: "boom" });
@@ -173,6 +173,6 @@ describe("markFileFailed", () => {
   });
 
   it("returns 0 changes for an unknown id", () => {
-    expect(markFileFailed(freshDb(), "nope", { source: "external", error: "x" })).toBe(0);
+    expect(markFileFailed(freshDB(), "nope", { source: "external", error: "x" })).toBe(0);
   });
 });

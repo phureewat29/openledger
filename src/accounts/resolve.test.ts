@@ -11,7 +11,7 @@ import {
   namesUnopenedLedger,
   resolveOnePosting,
 } from "./resolve.js";
-import { failingAccountInsert, freshDb, seedAccount } from "../../fixtures/db.js";
+import { failingAccountInsert, freshDB, seedAccount } from "../../fixtures/db.js";
 
 function seedThbLedger(db: Database.Database): void {
   seedAccount(db, { id: "thb:asset:cash" });
@@ -20,7 +20,7 @@ function seedThbLedger(db: Database.Database): void {
 
 describe("resolveOnePosting", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedThbLedger); });
+  beforeEach(() => { db = freshDB(seedThbLedger); });
 
   it("exact match: existing account, no hint", () => {
     expect(resolveOnePosting(db, "thb:expense:food")).toEqual({
@@ -92,7 +92,7 @@ describe("resolveOnePosting", () => {
 
 describe("namesUnopenedLedger", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedThbLedger); });
+  beforeEach(() => { db = freshDB(seedThbLedger); });
 
   it("is true for any currency head naming a ledger this database never opened", () => {
     expect(namesUnopenedLedger(db, "usd:income:salary")).toBe(true);
@@ -118,7 +118,7 @@ describe("namesUnopenedLedger", () => {
 
 describe("shouldPlaceAccount", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(seedThbLedger); });
+  beforeEach(() => { db = freshDB(seedThbLedger); });
 
   it("is true for exactly what resolveOnePosting can build, and false for the rest", () => {
     expect(shouldPlaceAccount(db, "thb:expense:food")).toBe(true);
@@ -157,7 +157,7 @@ describe("shouldPlaceAccount", () => {
 describe("resolveOnePosting lookalikes", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb((d) => {
+    db = freshDB((d) => {
       seedThbLedger(d);
       seedAccount(d, { id: "thb:asset:bank" });
       seedAccount(d, { id: "thb:asset:bank:ttb", name: "TTB Saving" });
@@ -242,7 +242,7 @@ function racingOnInsert(db: Database.Database, racedId: string): Database.Databa
 describe("createOneAccount", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb();
+    db = freshDB();
   });
 
   it("opens every missing ancestor when no parent is named, root to leaf", () => {

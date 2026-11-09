@@ -2,12 +2,12 @@ import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { createAccount } from "./accounts.js";
 import { findAccountsByFuzzyName } from "./matching.js";
-import { freshDb } from "../../fixtures/db.js";
+import { freshDB } from "../../fixtures/db.js";
 
 describe("findAccountsByFuzzyName", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb();
+    db = freshDB();
     createAccount(db, { id: "thb:asset:ttb1", name: "TTB Savings ••1234", type: "asset", parent_id: "thb:asset" });
     createAccount(db, { id: "thb:asset:scb1", name: "SCB Savings ••5678", type: "asset", parent_id: "thb:asset" });
     createAccount(db, { id: "thb:asset:kbank1", name: "KBank Savings ••9012", type: "asset", parent_id: "thb:asset" });
@@ -59,7 +59,7 @@ describe("findAccountsByFuzzyName", () => {
 
 describe("findAccountsByFuzzyName matching key derivation for a masked-middle query", () => {
   it("matches on the literal trailing digits, not the longer unmasked prefix run", () => {
-    const db = freshDb();
+    const db = freshDB();
     createAccount(db, {
       id: "thb:asset:kbank9483",
       name: "KBank Savings",

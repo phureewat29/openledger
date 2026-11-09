@@ -1,5 +1,5 @@
 /** The local calendar date: a user at 01:00 local gets today, not the UTC day. */
-export function todayIso(): string {
+export function todayISO(): string {
   const now = new Date();
   const p = (n: number): string => String(n).padStart(2, "0");
   return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;

@@ -23,7 +23,7 @@ import {
   type AccountResult,
   type StructuralKind,
 } from "./accounts.js";
-import { failingStatement, freshDb, seedAccount } from "../../fixtures/db.js";
+import { failingStatement, freshDB, seedAccount } from "../../fixtures/db.js";
 
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -45,7 +45,7 @@ const THB_ROOT_NAMES: Record<AccountType, string> = {
 
 describe("createAccount id grammar", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(); });
+  beforeEach(() => { db = freshDB(); });
 
   it("inserts a ledger type root with parent_id=null", () => {
     createAccount(db, { id: "thb:asset", name: "Assets (THB)", type: "asset", parent_id: null });
@@ -193,7 +193,7 @@ describe("validateAccountId", () => {
 
 describe("a ledger id refuses a currency that is not a 3-letter code", () => {
   it("throws its own error before writing, rather than letting the DDL's CHECK abort", () => {
-    const db = freshDb();
+    const db = freshDB();
     expect(() => structuralAccountId("us", "uncategorized")).toThrow(/must be a 3-letter code/);
     expect(() => ensureLedgerRoot(db, "us", "asset")).toThrow(/must be a 3-letter code/);
     expect(() => ensureStructuralAccount(db, "us", "uncategorized")).toThrow(
@@ -205,7 +205,7 @@ describe("a ledger id refuses a currency that is not a 3-letter code", () => {
 
 describe("ensureLedgerRoot", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(); });
+  beforeEach(() => { db = freshDB(); });
 
   it("idempotently creates every type root of a ledger, named for its currency", () => {
     for (const type of ACCOUNT_TYPES) {
@@ -230,7 +230,7 @@ describe("ensureLedgerRoot", () => {
 
 describe("ensureStructuralAccount", () => {
   let db: Database.Database;
-  beforeEach(() => { db = freshDb(); });
+  beforeEach(() => { db = freshDB(); });
 
   it("returns the id and builds each kind under its own ledger root", () => {
     for (const kind of STRUCTURAL_KINDS) {
@@ -281,7 +281,7 @@ describe("isLedgerRootId", () => {
 describe("mergeAccounts", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb((d) => {
+    db = freshDB((d) => {
       seedAccount(d, { id: "thb:asset:cash" });
       seedAccount(d, { id: "thb:expense:fod" });
       seedAccount(d, { id: "thb:expense:food" });
@@ -384,7 +384,7 @@ describe("mergeAccounts", () => {
 describe("deleteAccount", () => {
   let db: Database.Database;
   beforeEach(() => {
-    db = freshDb((d) => {
+    db = freshDB((d) => {
       seedAccount(d, { id: "thb:asset:cash" });
       seedAccount(d, { id: "thb:expense:food" });
     });

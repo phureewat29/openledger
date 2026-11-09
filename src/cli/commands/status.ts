@@ -108,7 +108,7 @@ export async function showStatus(ctx: Invocation, opts: ShowStatusOpts): Promise
   const { out } = ctx;
   out.render({
     json: () => out.emit(report),
-    tty: () => out.write(renderTty(report, out.mode.color, ledger.state === "missing")),
+    tty: () => out.write(renderTTY(report, out.mode.color, ledger.state === "missing")),
     plain: () => out.write(renderPlain(report)),
   });
 }
@@ -156,7 +156,7 @@ function renderPlain(r: StatusReport): string {
 const LABEL_WIDTH = 18;
 
 // Exported for tests: this renderer only runs on a real TTY, so no subprocess suite executes it.
-export function renderTty(r: StatusReport, color: boolean, ledgerMissing = false): string {
+export function renderTTY(r: StatusReport, color: boolean, ledgerMissing = false): string {
   const dim = (s: string) => (color ? chalk.dim(s) : s);
   const bold = (s: string) => (color ? chalk.bold.yellow(s) : s);
 

@@ -9,8 +9,8 @@ import {
 } from "./ocr.js";
 import {
   DEFAULT_RENDER,
-  probePdfPages,
-  renderPdfPages,
+  probePDFPages,
+  renderPDFPages,
   type PageImage,
   type ProbedPage,
   type RenderSpec,
@@ -56,7 +56,7 @@ interface ExtractOverrides {
   /** Ignore the text layer. */
   rescan?: boolean;
   /** Ignore the endpoint, and read the images yourself. */
-  noOcr?: boolean;
+  noOCR?: boolean;
 }
 
 interface ExtractOptions {
@@ -72,7 +72,7 @@ const SERVER_FAILURE: Record<ServerFailure, "ocr_unreachable" | "ocr_rejected"> 
 // Images have no text layer; mupdf would resample a bare image as a fake 96-dpi PDF.
 async function probe(input: ExtractInput): Promise<Result<ProbedPage[]>> {
   if (input.kind === "image") return ok([]);
-  return probePdfPages(input.bytes);
+  return probePDFPages(input.bytes);
 }
 
 interface PageImages {
@@ -86,7 +86,7 @@ async function pageImages(input: ExtractInput, spec: RenderSpec): Promise<Result
     return ok({ source: "original", pages: [{ page: 1, mime: input.mime, bytes: input.bytes }] });
   }
   return map(
-    await renderPdfPages(input.bytes, spec),
+    await renderPDFPages(input.bytes, spec),
     (pages): PageImages => ({ source: "raster", dpi: spec.dpi, pages }),
   );
 }
@@ -171,7 +171,7 @@ export async function extractFile(
   if (!probed.ok) return { ok: false, reason: "pdf_unreadable", message: probed.error };
 
   const overrides = options.overrides ?? {};
-  const ocr = overrides.noOcr ? null : options.ocr;
+  const ocr = overrides.noOCR ? null : options.ocr;
   const textLayer = overrides.rescan ? "none" : verdictOf(probed.value);
   const reader = readerFor(textLayer, ocr ? "ready" : "unset");
   return READERS[reader]({ input, textLayer, pages: probed.value, ocr });

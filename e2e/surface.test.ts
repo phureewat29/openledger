@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   createSandbox,
   makeRunCLI,
-  parseNdjson,
+  parseNDJSON,
   type CLIResult,
   type CLIRunner,
   type Sandbox,
@@ -211,7 +211,7 @@ describe("row-streaming writes end with a summary too (dist subprocess)", () => 
     if (committed.code !== 0) throw new Error(`seeding commit failed: ${committed.stderr}`);
 
     const listed = await runWrite(["questions", "list", "--json"]);
-    questionIds = parseNdjson(listed.stdout)
+    questionIds = parseNDJSON(listed.stdout)
       .filter((row) => row.type !== "summary")
       .map((row) => row.id as string);
     if (questionIds.length < 2) {
@@ -246,7 +246,7 @@ describe("row-streaming writes end with a summary too (dist subprocess)", () => 
 
   it("oled notes rm exits 0 with NDJSON-only, ANSI-free output on both streams", async () => {
     const listed = await runWrite(["notes", "list", "--json"]);
-    const noteId = parseNdjson(listed.stdout).find((row) => row.type !== "summary")?.id;
+    const noteId = parseNDJSON(listed.stdout).find((row) => row.type !== "summary")?.id;
     expectListShape("notes rm", await runWrite(["notes", "rm", String(noteId), "--yes", "--json"]));
   }, 20000);
 });

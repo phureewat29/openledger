@@ -6,11 +6,11 @@ import type { ZodType } from "zod";
 import {
   createSandbox,
   makeRunCLI,
-  parseNdjson,
+  parseNDJSON,
   type CLIRunner,
   type Sandbox,
 } from "../../fixtures/sandbox.js";
-import { pdfOf, textPdf } from "../../fixtures/pdf.js";
+import { pdfOf, textPDF } from "../../fixtures/pdf.js";
 import { COMMAND_CONTRACTS, ErrorEnvelope } from "../../src/contract/index.js";
 
 type CommandPath = keyof typeof COMMAND_CONTRACTS;
@@ -89,7 +89,7 @@ async function contractRun(
 ): Promise<Record<string, any>[]> {
   const result = await runCLI([...args, "--json"], { stdin: opts.stdin });
   expect(result.code, `oled ${args.join(" ")} failed: ${result.stderr}`).toBe(opts.exit ?? 0);
-  const rows = parseNdjson(result.stdout);
+  const rows = parseNDJSON(result.stdout);
   const problems = rows.map((raw) => lineProblem(path, raw)).filter((p) => p !== null);
   expect(problems, `oled ${args.join(" ")}`).toEqual([]);
   return rows;
@@ -199,7 +199,7 @@ describe("every ingest-lane line matches its COMMAND_CONTRACTS schema (dist subp
 
     const statement = join(sandbox.dataDir, "bank", "statement.pdf");
     mkdirSync(dirname(statement), { recursive: true });
-    writeFileSync(statement, textPdf());
+    writeFileSync(statement, textPDF());
     // Different bytes, so it registers as its own file: `ingest fail` needs one to fail.
     writeFileSync(join(sandbox.dataDir, "bank", "statement-2.pdf"), pdfOf(["text", "text"]));
   });

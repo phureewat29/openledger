@@ -5,8 +5,8 @@ import {
   ocrPage,
   ocrPages,
   pickServedModel,
-  probeOcrEndpoint,
-  resolveOcr,
+  probeOCREndpoint,
+  resolveOCR,
   resolveServedModel,
   type OCRConfigSource,
 } from "./ocr.js";
@@ -17,9 +17,9 @@ import type { PageImage } from "./pdf.js";
 import { samplePng } from "../../fixtures/images.js";
 import {
   LIVE_PAGE_TIMEOUT_MS,
-  deadOcrSettings,
-  liveOcr,
-  requireLiveOcr,
+  deadOCRSettings,
+  liveOCR,
+  requireLiveOCR,
 } from "../../fixtures/ocr.js";
 
 const png = samplePng();
@@ -34,25 +34,25 @@ function cfg(over: Partial<OCRConfigSource> = {}): OCRConfigSource {
 const TYPHOON = typhoonModelCard;
 const FALLBACK = fallbackModelCard;
 
-describe("resolveOcr", () => {
+describe("resolveOCR", () => {
   it("reads null when no endpoint url is set", () => {
-    expect(resolveOcr(cfg())).toBeNull();
+    expect(resolveOCR(cfg())).toBeNull();
   });
 
   it("treats a whitespace-only url as unset", () => {
-    expect(resolveOcr(cfg({ ocrBaseUrl: "  " }))).toBeNull();
+    expect(resolveOCR(cfg({ ocrBaseUrl: "  " }))).toBeNull();
   });
 
   it("stays unset when a model is set ahead of the url", () => {
-    expect(resolveOcr(cfg({ ocrModel: "some-ocr-model" }))).toBeNull();
+    expect(resolveOCR(cfg({ ocrModel: "some-ocr-model" }))).toBeNull();
   });
 
   it("builds settings from the url alone, taking the rest from the default model card", () => {
-    const settings = resolveOcr(
+    const settings = resolveOCR(
       cfg({ ocrBaseUrl: "http://127.0.0.1:1234/v1//", ocrApiKey: "sk-test" }),
     );
     expect(settings).toEqual({
-      baseUrl: "http://127.0.0.1:1234/v1",
+      baseURL: "http://127.0.0.1:1234/v1",
       model: TYPHOON.model,
       apiKey: "sk-test",
       timeoutMs: OCR_TIMEOUT_MS,
@@ -63,7 +63,7 @@ describe("resolveOcr", () => {
   });
 
   it("keeps a model id from no known family, reading it with the fallback card", () => {
-    expect(resolveOcr(cfg({ ocrBaseUrl: "http://x/v1", ocrModel: "test-ocr-model" }))).toMatchObject({
+    expect(resolveOCR(cfg({ ocrBaseUrl: "http://x/v1", ocrModel: "test-ocr-model" }))).toMatchObject({
       model: "test-ocr-model",
       prompt: FALLBACK.prompt,
       params: FALLBACK.params,
@@ -74,7 +74,7 @@ describe("resolveOcr", () => {
   // Model ids come from the registry: spelling one out here would name a vendor.
   it("matches a family whatever the version suffix", () => {
     const model = `${TYPHOON.model}-preview-v9`;
-    expect(resolveOcr(cfg({ ocrBaseUrl: "http://x/v1", ocrModel: model }))).toMatchObject({
+    expect(resolveOCR(cfg({ ocrBaseUrl: "http://x/v1", ocrModel: model }))).toMatchObject({
       model,
       prompt: TYPHOON.prompt,
       params: TYPHOON.params,
@@ -83,7 +83,7 @@ describe("resolveOcr", () => {
 
   it("matches a family case-insensitively, carrying that card's own render", () => {
     const model = TYPHOON.model.toUpperCase();
-    expect(resolveOcr(cfg({ ocrBaseUrl: "http://x/v1", ocrModel: model }))).toMatchObject({
+    expect(resolveOCR(cfg({ ocrBaseUrl: "http://x/v1", ocrModel: model }))).toMatchObject({
       model,
       prompt: TYPHOON.prompt,
       params: TYPHOON.params,
@@ -107,22 +107,22 @@ describe("isServerFailure", () => {
 
 describe("ocrPage", () => {
   it("reports a closed port as unreachable", async () => {
-    const result = await ocrPage(page1, deadOcrSettings());
+    const result = await ocrPage(page1, deadOCRSettings());
     expect(result).toMatchObject({ ok: false, page: 1, reason: "unreachable" });
   });
 });
 
 describe("ocrPages", () => {
   it("stops at the first server-level failure instead of hammering a dead endpoint", async () => {
-    const outcomes = await ocrPages([page1, page2], deadOcrSettings());
+    const outcomes = await ocrPages([page1, page2], deadOCRSettings());
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]).toMatchObject({ ok: false, page: 1, reason: "unreachable" });
   });
 });
 
-describe("probeOcrEndpoint", () => {
+describe("probeOCREndpoint", () => {
   it("fails when nothing is listening", async () => {
-    const result = await probeOcrEndpoint(deadOcrSettings());
+    const result = await probeOCREndpoint(deadOCRSettings());
     expect(result.ok).toBe(false);
   });
 });
@@ -161,16 +161,16 @@ describe("pickServedModel", () => {
 
 describe("resolveServedModel", () => {
   it("keeps the configured id when the endpoint is unreachable", async () => {
-    const settings = deadOcrSettings();
+    const settings = deadOCRSettings();
     expect(await resolveServedModel(settings)).toEqual(settings);
   });
 });
 
-describe.skipIf(!liveOcr)("ocrPages and probeOcrEndpoint (live OCR endpoint)", () => {
+describe.skipIf(!liveOCR)("ocrPages and probeOCREndpoint (live OCR endpoint)", () => {
   it(
     "reads every page in order and returns one outcome per page",
     async () => {
-      const outcomes = await ocrPages([page1, page2], requireLiveOcr());
+      const outcomes = await ocrPages([page1, page2], requireLiveOCR());
       expect(outcomes).toMatchObject([
         { ok: true, page: 1, text: expect.any(String) },
         { ok: true, page: 2, text: expect.any(String) },
@@ -182,7 +182,7 @@ describe.skipIf(!liveOcr)("ocrPages and probeOcrEndpoint (live OCR endpoint)", (
   it(
     "lists the model ids the endpoint serves",
     async () => {
-      const result = await probeOcrEndpoint(requireLiveOcr());
+      const result = await probeOCREndpoint(requireLiveOCR());
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.value.length).toBeGreaterThan(0);
@@ -194,8 +194,8 @@ describe.skipIf(!liveOcr)("ocrPages and probeOcrEndpoint (live OCR endpoint)", (
   it(
     "re-spells a family-level id to the served spelling and re-reads the card from it",
     async () => {
-      const live = requireLiveOcr();
-      const served = await probeOcrEndpoint(live);
+      const live = requireLiveOCR();
+      const served = await probeOCREndpoint(live);
       expect(served.ok).toBe(true);
       if (!served.ok) return;
       const servedId = served.value[0];

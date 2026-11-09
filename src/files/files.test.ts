@@ -14,9 +14,9 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { findFileById, listFiles } from "./queries.js";
 import { MAX_SOURCE_BYTES, loadSource, type LoadedSource } from "../extract/source.js";
-import { pdfOf, textPdf } from "../../fixtures/pdf.js";
+import { pdfOf, textPDF } from "../../fixtures/pdf.js";
 import { samplePng } from "../../fixtures/images.js";
-import { freshDb } from "../../fixtures/db.js";
+import { freshDB } from "../../fixtures/db.js";
 import {
   cleanCache,
   countNewFiles,
@@ -56,8 +56,8 @@ function loaded(path: string): LoadedSource {
 
 describe("countNewFiles", () => {
   it("counts what ingest has not registered, and stops counting once it has", () => {
-    const db = freshDb();
-    const path = write("a.pdf", textPdf());
+    const db = freshDB();
+    const path = write("a.pdf", textPDF());
     write("b.pdf", pdfOf(["text", "text"]));
     expect(countNewFiles(db, dataDir)).toBe(2);
 
@@ -66,8 +66,8 @@ describe("countNewFiles", () => {
   });
 
   it("skips what it could never read, so status never advertises phantom work", () => {
-    const db = freshDb();
-    write("real.pdf", textPdf());
+    const db = freshDB();
+    write("real.pdf", textPDF());
     write("notes.docx", Buffer.from("PK"));
     const huge = resolve(dataDir, "huge.pdf");
     closeSync(openSync(huge, "w"));
@@ -77,14 +77,14 @@ describe("countNewFiles", () => {
   });
 
   it("is zero on an empty data dir", () => {
-    expect(countNewFiles(freshDb(), dataDir)).toBe(0);
+    expect(countNewFiles(freshDB(), dataDir)).toBe(0);
   });
 });
 
 describe("registerPendingFile", () => {
   it("inserts a pending row and dedups on re-register", () => {
-    const db = freshDb();
-    const source = loaded(write("a.pdf", textPdf()));
+    const db = freshDB();
+    const source = loaded(write("a.pdf", textPDF()));
 
     const first = registerPendingFile(db, source);
     expect(first.startsWith("sf-")).toBe(true);
@@ -95,7 +95,7 @@ describe("registerPendingFile", () => {
   });
 
   it("records the real mime, so an image is not filed as a PDF", () => {
-    const db = freshDb();
+    const db = freshDB();
     const fileId = registerPendingFile(db, loaded(write("receipt.png", png)));
     expect(findFileById(db, fileId)?.mime).toBe("image/png");
   });
@@ -103,9 +103,9 @@ describe("registerPendingFile", () => {
 
 describe("resolveEntryPath", () => {
   it("resolves a rel_path (as emitted by `ingest list`) relative to the data dir, regardless of cwd", () => {
-    const db = freshDb();
+    const db = freshDB();
     mkdirSync(resolve(dataDir, "sub"), { recursive: true });
-    const path = write("sub/b.pdf", textPdf());
+    const path = write("sub/b.pdf", textPDF());
 
     const elsewhere = mkdtempSync(resolve(tmpdir(), "oled-files-elsewhere-"));
     const prevCwd = process.cwd();
@@ -119,14 +119,14 @@ describe("resolveEntryPath", () => {
   });
 
   it("still resolves an absolute path", () => {
-    const db = freshDb();
-    const path = write("a.pdf", textPdf());
+    const db = freshDB();
+    const path = write("a.pdf", textPDF());
     expect(resolveEntryPath(db, dataDir, path)).toBe(path);
   });
 
   it("still resolves a cwd-relative path when it isn't rooted under the data dir", () => {
-    const db = freshDb();
-    writeFileSync(resolve(outsideDir, "c.pdf"), textPdf());
+    const db = freshDB();
+    writeFileSync(resolve(outsideDir, "c.pdf"), textPDF());
     const prevCwd = process.cwd();
     process.chdir(outsideDir);
     try {
@@ -139,14 +139,14 @@ describe("resolveEntryPath", () => {
   });
 
   it("still resolves a file id", () => {
-    const db = freshDb();
-    const path = write("a.pdf", textPdf());
+    const db = freshDB();
+    const path = write("a.pdf", textPDF());
     const fileId = registerPendingFile(db, loaded(path));
     expect(resolveEntryPath(db, dataDir, fileId)).toBe(path);
   });
 
   it("returns null for a path or id that matches nothing", () => {
-    const db = freshDb();
+    const db = freshDB();
     expect(resolveEntryPath(db, dataDir, "sf-does-not-exist")).toBeNull();
     expect(resolveEntryPath(db, dataDir, "no/such/file.pdf")).toBeNull();
   });
@@ -183,14 +183,14 @@ describe("cleanCache", () => {
 describe("walkFiles", () => {
   it("cuts a symlink back into an ancestor, listing each file once", () => {
     mkdirSync(resolve(dataDir, "sub"));
-    write("sub/a.pdf", textPdf());
+    write("sub/a.pdf", textPDF());
     symlinkSync(dataDir, resolve(dataDir, "sub", "loop"), "dir");
 
     expect(walkFiles(dataDir).map((f) => f.relPath)).toEqual(["sub/a.pdf"]);
   });
 
   it("still follows a symlinked directory that closes no cycle", () => {
-    writeFileSync(resolve(outsideDir, "b.pdf"), textPdf());
+    writeFileSync(resolve(outsideDir, "b.pdf"), textPDF());
     symlinkSync(outsideDir, resolve(dataDir, "linked"), "dir");
 
     expect(walkFiles(dataDir).map((f) => f.relPath)).toEqual(["linked/b.pdf"]);

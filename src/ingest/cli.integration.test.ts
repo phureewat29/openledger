@@ -18,20 +18,20 @@ import { createAccount, ensureLedgerRoot } from "../accounts/accounts.js";
 import {
   createSandbox,
   makeRunCLI,
-  parseNdjson,
+  parseNDJSON,
   parseOne,
   writeConfig,
   type CLIRunner,
   type Sandbox,
 } from "../../fixtures/sandbox.js";
 import { MAX_SOURCE_BYTES, loadSource } from "../extract/source.js";
-import { encryptedPdf, pdfOf, textPdf } from "../../fixtures/pdf.js";
+import { encryptedPDF, pdfOf, textPDF } from "../../fixtures/pdf.js";
 import { samplePng } from "../../fixtures/images.js";
 import {
   DEAD_OCR_BASE_URL,
-  liveOcr,
-  requireLiveOcr,
-  requireLiveOcrSource,
+  liveOCR,
+  requireLiveOCR,
+  requireLiveOCRSource,
 } from "../../fixtures/ocr.js";
 
 let sandbox: Sandbox;
@@ -100,7 +100,7 @@ describe("ingest commit v2 (subprocess)", () => {
     const { stdout, code } = await runCLI(["ingest", "commit", "--json"], { stdin: ndjson });
     expect(code).toBe(0);
 
-    const objs = parseNdjson(stdout);
+    const objs = parseNDJSON(stdout);
     const results = objs.filter((o) => o.type === "result");
     const summary = objs.find((o) => o.type === "summary");
     expect(results).toHaveLength(3);
@@ -187,7 +187,7 @@ describe("ingest commit v2 (subprocess)", () => {
     const { stdout, code } = await runCLI(["ingest", "commit", "--json"], { stdin: ndjson });
     expect(code).toBe(0);
 
-    const objs = parseNdjson(stdout);
+    const objs = parseNDJSON(stdout);
     const [rA, rB] = objs.filter((o) => o.type === "result");
 
     // The side report names where the money actually posted; the lookalike rides along as similar_to.
@@ -240,7 +240,7 @@ describe("ingest commit v2 (subprocess)", () => {
 
     const { stdout, code } = await runCLI(["ingest", "commit", "--input", inputPath, "--json"]);
     expect(code).toBe(0);
-    const objs = parseNdjson(stdout);
+    const objs = parseNDJSON(stdout);
     expect(objs.find((o) => o.type === "summary")?.posted).toBe(1);
 
     const missing = await runCLI(["ingest", "commit", "--input", join(dir, "nope.ndjson"), "--json"]);
@@ -274,7 +274,7 @@ describe("ingest commit v2 (subprocess)", () => {
     const { stdout, stderr, code } = await runCLI(["ingest", "commit", "--json"], { stdin: ndjson });
     expect(code).toBe(7);
 
-    const objs = parseNdjson(stdout);
+    const objs = parseNDJSON(stdout);
     const results = objs.filter((o) => o.type === "result");
     const summary = objs.find((o) => o.type === "summary");
 
@@ -310,7 +310,7 @@ describe("ingest commit v2 (subprocess)", () => {
     const { stdout, stderr, code } = await runCLI(["ingest", "commit", "--json"], { stdin: ndjson });
     expect(code).toBe(7); // EXIT.PARTIAL
 
-    const objs = parseNdjson(stdout);
+    const objs = parseNDJSON(stdout);
     const results = objs.filter((o) => o.type === "result");
     expect(results.map((r) => r.ok)).toEqual([true, false, true]);
     expect(results[1]).toMatchObject({ index: 1, reason: "dirty_input" });
@@ -352,7 +352,7 @@ describe("ingest commit v2 (subprocess)", () => {
     const { stdout, code } = await runCLI(["ingest", "commit", "--json"], { stdin: ndjson });
     expect(code).toBe(7); // EXIT.PARTIAL
 
-    const objs = parseNdjson(stdout);
+    const objs = parseNDJSON(stdout);
     const results = objs.filter((o) => o.type === "result");
     expect(results.map((r) => r.ok)).toEqual([true, false, true]);
     // Not dirty_input: nothing here knows whether the row or the database broke.
@@ -379,7 +379,7 @@ describe("ingest commit v2 (subprocess)", () => {
 
     const first = await runCLI(["ingest", "commit", "--file", "sf-idem", "--json"], { stdin: item });
     expect(first.code).toBe(0);
-    const firstObjs = parseNdjson(first.stdout);
+    const firstObjs = parseNDJSON(first.stdout);
     expect(firstObjs.find((o) => o.type === "result").duplicate).toBe(false);
     const firstSummary = firstObjs.find((o) => o.type === "summary");
     expect(firstSummary.posted).toBe(1);
@@ -387,7 +387,7 @@ describe("ingest commit v2 (subprocess)", () => {
 
     const second = await runCLI(["ingest", "commit", "--file", "sf-idem", "--json"], { stdin: item });
     expect(second.code).toBe(0); // duplicates are a successful no-op
-    const secondObjs = parseNdjson(second.stdout);
+    const secondObjs = parseNDJSON(second.stdout);
     const secondResult = secondObjs.find((o) => o.type === "result");
     expect(secondResult.ok).toBe(true);
     expect(secondResult.duplicate).toBe(true);
@@ -426,7 +426,7 @@ describe("ingest commit v2 (subprocess)", () => {
 
     const first = await runCLI(["ingest", "commit", "--file", "sf-dup-sides", "--json"], { stdin: item });
     expect(first.code).toBe(0);
-    expect(parseNdjson(first.stdout).find((o) => o.type === "result").sides[0]).toEqual({
+    expect(parseNDJSON(first.stdout).find((o) => o.type === "result").sides[0]).toEqual({
       side: "debit",
       requested: "thb:expense:sides-a",
       resolved: "thb:expense:sides-a",
@@ -444,11 +444,11 @@ describe("ingest commit v2 (subprocess)", () => {
       "--json",
     ]);
     expect(moved.code).toBe(0);
-    expect(parseNdjson(moved.stdout)[0].affected).toBe(1);
+    expect(parseNDJSON(moved.stdout)[0].affected).toBe(1);
 
     const second = await runCLI(["ingest", "commit", "--file", "sf-dup-sides", "--json"], { stdin: item });
     expect(second.code).toBe(0);
-    const result = parseNdjson(second.stdout).find((o) => o.type === "result");
+    const result = parseNDJSON(second.stdout).find((o) => o.type === "result");
     expect(result.duplicate).toBe(true);
     expect(result.merchant).toEqual({ how: "none" });
     expect(result.sides).toEqual([
@@ -464,7 +464,7 @@ describe("ingest commit v2 (subprocess)", () => {
 
   it("an ingested row carrying an unknown \"code\" key is ignored: no error, still counts in balances", async () => {
     const before = await runCLI(["accounts", "show", "thb:expense:food", "--json"]);
-    const balanceBefore = parseNdjson(before.stdout)[0].balance as number;
+    const balanceBefore = parseNDJSON(before.stdout)[0].balance as number;
 
     const description = "Statement extractor guessed code:void";
     const item = JSON.stringify({
@@ -487,7 +487,7 @@ describe("ingest commit v2 (subprocess)", () => {
     expect(row.void_of).toBeNull();
 
     const after = await runCLI(["accounts", "show", "thb:expense:food", "--json"]);
-    const balanceAfter = parseNdjson(after.stdout)[0].balance as number;
+    const balanceAfter = parseNDJSON(after.stdout)[0].balance as number;
     expect(balanceAfter - balanceBefore).toBeCloseTo(42, 5);
   }, 30000);
 
@@ -516,7 +516,7 @@ describe("ingest commit v2 (subprocess)", () => {
     });
     expect(code).toBe(0);
 
-    const objs = parseNdjson(stdout);
+    const objs = parseNDJSON(stdout);
     const r = objs.find((o) => o.type === "result");
     expect(r.ok).toBe(true);
     expect(r.group_id).toMatch(/^tg:/);
@@ -559,7 +559,7 @@ describe("ingest commit v2 (subprocess)", () => {
     const { stdout, code } = await runCLI(["ingest", "commit", "--json"], { stdin: item });
     expect(code).toBe(7);
 
-    const objs = parseNdjson(stdout);
+    const objs = parseNDJSON(stdout);
     const r = objs.find((o) => o.type === "result");
     expect(r.ok).toBe(false);
     expect(r.reason).toBe("currency_mismatch");
@@ -602,7 +602,7 @@ describe("ingest commit v2 (subprocess)", () => {
     const { stdout, code } = await runCLI(["ingest", "commit", "--json"], { stdin: ndjson });
     expect(code).toBe(7); // EXIT.PARTIAL
 
-    const objs = parseNdjson(stdout);
+    const objs = parseNDJSON(stdout);
     const [rOk, rLedger, rId] = objs.filter((o) => o.type === "result");
 
     // The stated currency is discarded; currency_overridden is how the result says so.
@@ -646,11 +646,11 @@ describe("ingest commit v2 (subprocess)", () => {
 
 describe("ingest prepare (subprocess)", () => {
   it("extracts a PDF's own text layer into one document, resolving the rel_path `ingest list` emits", async () => {
-    stage("statements/kbank-jan.pdf", textPdf());
+    stage("statements/kbank-jan.pdf", textPDF());
 
     const list = await runCLI(["ingest", "list", "--regex", "kbank-jan", "--json"], { cwd: sandbox.root });
     expect(list.code).toBe(0);
-    const entry = parseNdjson(list.stdout).find((r) => r.type === "file");
+    const entry = parseNDJSON(list.stdout).find((r) => r.type === "file");
     expect(entry).toBeTruthy();
     expect(entry.rel_path).toBe("statements/kbank-jan.pdf");
 
@@ -731,7 +731,7 @@ describe("ingest prepare (subprocess)", () => {
   }, 30000);
 
   it("exits INPUT_REQUIRED for a locked PDF, then extracts it with --password", async () => {
-    const path = stage("statements/locked.pdf", await encryptedPdf("secret"));
+    const path = stage("statements/locked.pdf", await encryptedPDF("secret"));
 
     const locked = await runCLI(["ingest", "prepare", path, "--json"]);
     expect(locked.code).toBe(4);
@@ -747,7 +747,7 @@ describe("ingest prepare (subprocess)", () => {
   }, 30000);
 
   it("--force keeps the prior ingest's transactions when the re-read fails", async () => {
-    const path = stage("statements/force-locked.pdf", await encryptedPdf("secret"));
+    const path = stage("statements/force-locked.pdf", await encryptedPDF("secret"));
 
     // Registered by hash without unlocking it; the forced re-read below uses a wrong
     // password and must fail, leaving the prior row intact.
@@ -770,7 +770,7 @@ describe("ingest prepare (subprocess)", () => {
       }),
     });
     expect(commit.code).toBe(0);
-    const txId = parseNdjson(commit.stdout).find((o) => o.type === "result").transaction_id;
+    const txId = parseNDJSON(commit.stdout).find((o) => o.type === "result").transaction_id;
 
     const forced = await runCLI(["ingest", "prepare", path, "--force", "--password", "nope", "--json"]);
     expect(forced.code).toBe(4); // EXIT.INPUT_REQUIRED
@@ -778,7 +778,7 @@ describe("ingest prepare (subprocess)", () => {
     // The files row survived too, or its deletion would have cascaded this transaction away.
     const list = await runCLI(["transactions", "list", "--query", "Force survivor", "--json"]);
     expect(list.code).toBe(0);
-    expect(parseNdjson(list.stdout).map((r) => r.id)).toContain(txId);
+    expect(parseNDJSON(list.stdout).map((r) => r.id)).toContain(txId);
   }, 45000);
 });
 
@@ -802,14 +802,14 @@ describe("ingest prepare against an OCR server (subprocess)", () => {
   }, 30000);
 });
 
-describe.skipIf(!liveOcr)("ingest prepare against an OCR server (live OCR endpoint)", () => {
+describe.skipIf(!liveOCR)("ingest prepare against an OCR server (live OCR endpoint)", () => {
   it(
     "reads a scan through the configured endpoint and names the model",
     async () => {
       const path = stage("statements/scan-ocr.pdf", pdfOf(["image"]));
 
       const liveConfig = join(sandbox.root, "live-ocr.json");
-      writeFileSync(liveConfig, JSON.stringify(requireLiveOcrSource()) + "\n");
+      writeFileSync(liveConfig, JSON.stringify(requireLiveOCRSource()) + "\n");
       const { stdout, code } = await runCLI([
         "ingest", "prepare", path, "--config", liveConfig, "--json",
       ]);
@@ -818,7 +818,7 @@ describe.skipIf(!liveOcr)("ingest prepare against an OCR server (live OCR endpoi
       expect(obj).toMatchObject({
         kind: "text",
         source: "ocr",
-        ocr_model: requireLiveOcr().model,
+        ocr_model: requireLiveOCR().model,
         page_count: 1,
         failed_pages: [],
       });
@@ -838,7 +838,7 @@ describe("ingest list (subprocess)", () => {
 
     const { stdout, code } = await runCLI(["ingest", "list", "--regex", "^bucket/", "--json"]);
     expect(code).toBe(0);
-    const objs = parseNdjson(stdout);
+    const objs = parseNDJSON(stdout);
     const files = objs.filter((o) => o.type === "file");
     expect(files.map((f) => f.rel_path).sort()).toEqual(["bucket/huge.pdf", "bucket/receipt.png"]);
 
@@ -856,7 +856,7 @@ describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
       writeConfig(isolated, {});
       const run = makeRunCLI(isolated);
       mkdirSync(join(isolated.dataDir, "bank"), { recursive: true });
-      writeFileSync(join(isolated.dataDir, "bank", "waiting.pdf"), textPdf());
+      writeFileSync(join(isolated.dataDir, "bank", "waiting.pdf"), textPDF());
 
       const before = await run(["status", "--json"]);
       expect(before.code).toBe(0);
@@ -909,7 +909,7 @@ describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
       stdin: ndjson,
     });
     expect(code).toBe(0);
-    const summary = parseNdjson(stdout).find((o) => o.type === "summary");
+    const summary = parseNDJSON(stdout).find((o) => o.type === "summary");
     expect(summary).toMatchObject({
       file_id: fileId,
       file_status: "pending",
@@ -921,7 +921,7 @@ describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
     // A duplicate re-commit posts nothing new: the cumulative transaction count stays flat.
     const dup = await runCLI(["ingest", "commit", "--file", fileId, "--json"], { stdin: ndjson });
     expect(dup.code).toBe(0);
-    const dupSummary = parseNdjson(dup.stdout).find((o) => o.type === "summary");
+    const dupSummary = parseNDJSON(dup.stdout).find((o) => o.type === "summary");
     expect(dupSummary).toMatchObject({
       posted: 0,
       duplicates: 1,
@@ -942,7 +942,7 @@ describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
       stdin: questionRow,
     });
     expect(questioned.code).toBe(0);
-    const questionedSummary = parseNdjson(questioned.stdout).find((o) => o.type === "summary");
+    const questionedSummary = parseNDJSON(questioned.stdout).find((o) => o.type === "summary");
     expect(questionedSummary).toMatchObject({
       posted: 1,
       raised_questions: 1,
@@ -981,7 +981,7 @@ describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
       const { stdout } = await runCLI(["ingest", "commit", "--file", fileId, "--json"], {
         stdin: batch(debitAccount),
       });
-      return parseNdjson(stdout).find((o) => o.type === "summary");
+      return parseNDJSON(stdout).find((o) => o.type === "summary");
     }
 
     const first = await commit("eur:expense:food");
@@ -1135,7 +1135,7 @@ describe("ingest done reconciliation (subprocess)", () => {
       expect(error.hint).toContain("opening balance");
 
       const listed = await run(["files", "list", "--json"]);
-      expect(parseNdjson(listed.stdout).find((o) => o.id === "sf-bad").status).toBe("pending");
+      expect(parseNDJSON(listed.stdout).find((o) => o.id === "sf-bad").status).toBe("pending");
     } finally {
       box.cleanup();
     }

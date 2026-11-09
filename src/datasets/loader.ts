@@ -26,7 +26,7 @@ export interface DatasetDefinition<F extends { country: string } = { country: st
   kinds?: readonly string[];
 }
 
-const readJson = memoize((file: string): unknown => {
+const readJSON = memoize((file: string): unknown => {
   const path = resolve(DATASETS_DIR, file);
   const raw = tryExecute(() => readFileSync(path, "utf8"));
   if (!raw.ok) throw new Error(`dataset file ${file} could not be read: ${raw.error}`);
@@ -40,7 +40,7 @@ function readCountryFile<F extends { country: string }>(
   def: DatasetDefinition<F>,
   file: string,
 ): DatasetRow[] {
-  const parsed = def.schema.safeParse(readJson(file));
+  const parsed = def.schema.safeParse(readJSON(file));
   if (!parsed.success) {
     const detail = parsed.error.issues
       .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)

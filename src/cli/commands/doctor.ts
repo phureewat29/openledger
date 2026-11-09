@@ -17,8 +17,8 @@ import type { ExitCode } from "../../contract/exit.js";
 import { err, flatMap, ok, tryExecute, type Result } from "../../lib/result.js";
 import {
   pickServedModel,
-  probeOcrEndpoint,
-  resolveOcr,
+  probeOCREndpoint,
+  resolveOCR,
   type OCRConfigSource,
 } from "../../extract/ocr.js";
 import type { DoctorCheck as Check, DoctorReport } from "../../contract/doctor.js";
@@ -78,22 +78,22 @@ function schemaTablesCheck(ledger: LedgerProbe): Check {
 
 export async function ocrEndpointCheck(source: OCRConfigSource): Promise<Check> {
   const name = "ocr_endpoint";
-  const settings = resolveOcr(source);
+  const settings = resolveOCR(source);
   if (!settings) return { name, ok: true, detail: "off (set --ocr-base-url to enable)" };
 
-  const { baseUrl, model } = settings;
-  const served = await probeOcrEndpoint(settings);
-  if (!served.ok) return { name, ok: false, detail: `${baseUrl}: ${served.error}` };
+  const { baseURL, model } = settings;
+  const served = await probeOCREndpoint(settings);
+  if (!served.ok) return { name, ok: false, detail: `${baseURL}: ${served.error}` };
   const match = pickServedModel(model, served.value);
   if (!match) {
     return {
       name,
       ok: false,
-      detail: `${baseUrl} does not serve ${model} (serving: ${served.value.join(", ") || "nothing"})`,
+      detail: `${baseURL} does not serve ${model} (serving: ${served.value.join(", ") || "nothing"})`,
     };
   }
   const shown = match === model ? model : `${model} → ${match}`;
-  return { name, ok: true, detail: `${shown} at ${baseUrl}` };
+  return { name, ok: true, detail: `${shown} at ${baseURL}` };
 }
 
 /** Informational only; never a HARD_CHECK. */
