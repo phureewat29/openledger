@@ -2,7 +2,7 @@ import Database from "libsql";
 import { migrate } from "../src/db/schema.js";
 import { createAccount, ensureLedgerRoot, isLedgerRootId } from "../src/accounts/accounts.js";
 import { humanizeSegment } from "../src/accounts/resolve.js";
-import type { AccountType, CreateAccountInput } from "../src/accounts/queries.js";
+import { isAccountType, type CreateAccountInput } from "../src/accounts/queries.js";
 import { currencyOf, typeFromId } from "../src/lib/ids.js";
 
 /** Foreign keys are ON: sqlite defaults them off, and the schema's cascades are what many of these tests assert. */
@@ -22,7 +22,9 @@ type SeedAccountInput = Partial<CreateAccountInput> & { id: string };
  */
 export function seedAccount(db: Database.Database, account: SeedAccountInput): string {
   const segments = account.id.split(":");
-  const type = account.type ?? (typeFromId(account.id) as AccountType);
+  const derived = typeFromId(account.id);
+  const type = account.type ?? (isAccountType(derived) ? derived : null);
+  if (!type) throw new Error(`seedAccount("${account.id}"): no account type in the id`);
 
   // A root's derived parent would be the bare currency, which is not an account.
   if (account.parent_id === undefined && isLedgerRootId(account.id)) {
@@ -87,7 +89,7 @@ export function failingStatement(db: Database.Database, sqlPrefix: string): Data
   return failingRun(db, sqlPrefix, () => true);
 }
 
-export interface ContendedLedger {
+interface ContendedLedger {
   /** Waits only CONTENDED_BUSY_TIMEOUT_MS for a lock before SQLITE_BUSY. */
   db: Database.Database;
   release(): void;

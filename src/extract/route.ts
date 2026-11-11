@@ -1,6 +1,7 @@
-export type TextLayer = "complete" | "partial" | "none";
+import type { PrepareTextResult, TextLayer } from "../contract/ingest.js";
+
 export type OCRAvailability = "ready" | "unset";
-export type Reader = "text-layer" | "ocr" | "agent";
+export type Reader = PrepareTextResult["source"] | "agent";
 
 const READER: Record<`${TextLayer}/${OCRAvailability}`, Reader> = {
   "complete/ready": "text-layer",

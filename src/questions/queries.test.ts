@@ -69,7 +69,7 @@ describe("questions table", () => {
       ).run(id, "thb:expense:food", id, tiedCreatedAt);
     }
     expect(listQuestions(db, { limit: 5 }).map((r) => r.id)).toEqual(
-      [...insertOrder].sort(),
+      insertOrder.toSorted(),
     );
   });
 
@@ -83,7 +83,7 @@ describe("questions table", () => {
     for (let offset = 0; offset < ids.length; offset++) {
       seen.push(...listQuestions(db, { limit: 1, offset }).map((r) => r.id));
     }
-    expect(seen.sort()).toEqual([...ids].sort());
+    expect(seen.sort()).toEqual(ids.toSorted());
     expect(new Set(seen).size).toBe(ids.length);
   });
 

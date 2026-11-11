@@ -148,10 +148,9 @@ describe("insertLinkedTransactions", () => {
     const res = insertLinkedTransactions(
       db,
       [tf({ id: "tx:a", group_id: "tg:stale" }), tf({ id: "tx:b", debit_account_id: "thb:expense:transport" })],
-      { group_id: "tg:pair" },
+      "tg:pair",
     );
-    expect(res.results.map((r) => r.id)).toEqual(["tx:a", "tx:b"]);
-    expect(res.group_id).toBe("tg:pair");
+    expect(res.map((r) => r.id)).toEqual(["tx:a", "tx:b"]);
     expect(findTransactionById(db, "tx:a")?.group_id).toBe("tg:pair");
     expect(findTransactionById(db, "tx:b")?.group_id).toBe("tg:pair");
   });
@@ -164,7 +163,7 @@ describe("insertLinkedTransactions", () => {
           tf({ id: "tx:a" }),
           tf({ id: "tx:b", debit_account_id: "thb:asset:cash", credit_account_id: "thb:asset:cash" }),
         ],
-        { group_id: "tg:pair" },
+        "tg:pair",
       ),
     ).toThrow();
     expect(countTransactions(db)).toBe(0);
@@ -180,16 +179,29 @@ describe("findTransactionById", () => {
   });
 
   it("joins account + merchant names and carries the full group", () => {
-    const res = insertLinkedTransactions(
+    insertLinkedTransactions(
       db,
       [tf({ id: "tx:a" }), tf({ id: "tx:b", debit_account_id: "thb:expense:transport" })],
-      { group_id: "tg:pair" },
+      "tg:pair",
     );
     const detail = findTransactionById(db, "tx:a")!;
     expect(detail.debit_account_name).toBe("Food");
     expect(detail.credit_account_name).toBe("Cash");
-    expect(detail.group_id).toBe(res.group_id);
+    expect(detail.group_id).toBe("tg:pair");
     expect(detail.group?.map((g) => g.id).sort()).toEqual(["tx:a", "tx:b"]);
+  });
+
+  it("lists the group's legs in insertion order, not id order", () => {
+    insertLinkedTransactions(
+      db,
+      [
+        tf({ id: "tx:z" }),
+        tf({ id: "tx:a", debit_account_id: "thb:expense:transport" }),
+        tf({ id: "tx:m", debit_account_id: "thb:expense:transport" }),
+      ],
+      "tg:legs",
+    );
+    expect(findTransactionById(db, "tx:a")?.group?.map((g) => g.id)).toEqual(["tx:z", "tx:a", "tx:m"]);
   });
 });
 
@@ -346,7 +358,7 @@ describe("bulkRecategorize", () => {
   });
 
   it("moves both sides and skips would-be self-transactions", () => {
-    const res = bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "thb:expense:transport" });
+    const res = bulkRecategorize(db, "thb:expense:food", "thb:expense:transport");
     expect(res).toMatchObject({ ok: true, affected: 2, skipped_self_transaction: 1 });
     expect(findTransactionById(db, "tx:d")?.debit_account_id).toBe("thb:expense:transport");
     expect(findTransactionById(db, "tx:c")?.credit_account_id).toBe("thb:expense:transport");
@@ -355,7 +367,7 @@ describe("bulkRecategorize", () => {
   });
 
   it("refuses a target account that does not exist as not_found", () => {
-    expect(bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "thb:expense:nope" })).toEqual({
+    expect(bulkRecategorize(db, "thb:expense:food", "thb:expense:nope")).toEqual({
       ok: false,
       reason: "not_found",
       message: 'account "thb:expense:nope" not found',
@@ -363,10 +375,10 @@ describe("bulkRecategorize", () => {
   });
 
   it("refuses the no-op where set == filter account", () => {
-    expect(bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "thb:expense:food" })).toEqual({
+    expect(bulkRecategorize(db, "thb:expense:food", "thb:expense:food")).toEqual({
       ok: false,
       reason: "same_account",
-      message: "bulkRecategorize: set.accountId equals filter.accountId (no-op).",
+      message: "Cannot recategorize an account into itself.",
     });
   });
 
@@ -387,7 +399,7 @@ describe("bulkRecategorize", () => {
     });
     seed();
 
-    const res = bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "thb:expense:transport" });
+    const res = bulkRecategorize(db, "thb:expense:food", "thb:expense:transport");
     if (!res.ok) throw new Error(res.message);
     expect(res.affected).toBe(BEYOND_CHUNK + 2); // the seeded rows plus tx:d and tx:c from beforeEach
     expect(res.sample_transaction_ids).toHaveLength(10);
@@ -398,7 +410,7 @@ describe("bulkRecategorize", () => {
   it("pre-filters rows whose other side sits on another ledger, before the cross-ledger trigger would abort the statement", () => {
     seedAccount(db, { id: "usd:asset:cash", name: "Cash (USD)" });
 
-    const res = bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "usd:asset:cash" });
+    const res = bulkRecategorize(db, "thb:expense:food", "usd:asset:cash");
 
     // Every seeded row's other side is THB, so all three are pre-filtered before the cross-ledger trigger would see the UPDATE.
     expect(res).toEqual({

@@ -11,7 +11,7 @@ export interface FuzzyAccountMatch {
 
 /** The candidates a caller could actually act on. Both fields are required:
  *  a cross-ledger lookalike proposes a merge the trigger refuses anyway. */
-export interface FuzzyAccountScope {
+interface FuzzyAccountScope {
   readonly type: AccountType;
   /** ISO currency, as `currencyOf` and `AccountRow.currency` both spell it. */
   readonly ledger: string;

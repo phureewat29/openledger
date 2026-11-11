@@ -6,8 +6,8 @@ import {
   type OCRAvailability,
   type PageFacts,
   type Reader,
-  type TextLayer,
 } from "./route.js";
+import type { TextLayer } from "../contract/ingest.js";
 
 const ROUTES: [TextLayer, OCRAvailability, Reader][] = [
   ["complete", "ready", "text-layer"],

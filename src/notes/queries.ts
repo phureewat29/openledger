@@ -1,8 +1,8 @@
 import type Database from "libsql";
 import { inTransaction } from "../db/transaction.js";
+import { NOTE_CATEGORIES } from "../contract/enums.js";
 
-export const NOTE_CATEGORIES = ["rule", "preference", "fact"] as const;
-export type NoteCategory = (typeof NOTE_CATEGORIES)[number];
+type NoteCategory = (typeof NOTE_CATEGORIES)[number];
 
 export interface NoteRow {
   id: number;

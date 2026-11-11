@@ -2,6 +2,7 @@ import * as z from "zod";
 import type { CommandContract } from "./kind.js";
 import { Summary } from "./primitives.js";
 import { FileStatus } from "./files.js";
+import { FILE_STATUSES } from "./enums.js";
 
 /** One row per readable statement under the data dir, registered or not. */
 export const IngestFile = z.object({
@@ -11,8 +12,7 @@ export const IngestFile = z.object({
   hash: z.string().nullable(),
   /** null until a prepare registers the file. */
   file_id: z.string().nullable(),
-  /** `FileStatus` plus the two data-dir-only states: new and unreadable. */
-  status: z.enum(["new", "pending", "ingested", "failed", "unreadable"]),
+  status: z.enum(["new", ...FILE_STATUSES, "unreadable"]),
   encrypted: z.boolean(),
   note: z.string().nullable(),
 });

@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import {
-  ACCOUNT_TYPES,
   countAccounts,
   findAccountById,
   listLedgerCurrencies,
   type AccountType,
 } from "./queries.js";
+import { ACCOUNT_TYPES } from "../contract/enums.js";
 import { findMerchantById, upsertMerchant } from "../merchants/queries.js";
 import { insertTransaction } from "../transactions/queries.js";
 import {

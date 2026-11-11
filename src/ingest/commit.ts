@@ -41,7 +41,7 @@ import {
   type QuestionContext,
   type TransactionSide,
 } from "./questions.js";
-import type { CommitMerchant, CommitSide } from "../contract/ingest.js";
+import type { CommitFailureReason, CommitMerchant, CommitSide } from "../contract/ingest.js";
 import { inTransaction } from "../db/transaction.js";
 
 export function withNoiseTokens(
@@ -84,7 +84,7 @@ export interface RawTransactionInput {
   leg_index?: number | null;
 }
 
-export type TransactionDropReason = "dirty_input" | "currency_mismatch";
+type TransactionDropReason = Exclude<CommitFailureReason, "unexpected_error">;
 
 /** `unopenedLedger` flags the currency_mismatch whose repair is opening that
  *  ledger, not a conversion pair; callers branch on it, not on message text. */
@@ -711,11 +711,7 @@ function commitLinkedRow(
 
   // The upsert inside `insertTransaction` is keyed on canonical_name, so every
   // leg's copy of the header merchant claims one id, inside this transaction.
-  const { results, group_id } = insertLinkedTransactions(
-    db,
-    preps.map((p) => p.input),
-    { group_id: groupId },
-  );
+  const results = insertLinkedTransactions(db, preps.map((p) => p.input), groupId);
 
   // Leg 0 may be a duplicate from an earlier, shorter commit of this row, which
   // took none of this run's merchant claim; the leg that posted carries it.
@@ -738,7 +734,7 @@ function commitLinkedRow(
   );
   return {
     ok: true,
-    group_id,
+    group_id: groupId,
     results,
     raisedQuestions: merchantRaised + legsRaised,
     currencyOverridden: preps.some((p) => p.currencyOverridden),

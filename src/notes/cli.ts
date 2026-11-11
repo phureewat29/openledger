@@ -3,9 +3,9 @@ import {
   listNotes as queryNotes,
   addNote as addNoteRow,
   deleteNote as deleteNoteRow,
-  NOTE_CATEGORIES,
   type NoteRow,
 } from "./queries.js";
+import { NOTE_CATEGORIES } from "../contract/enums.js";
 import { applyRedaction } from "../privacy/redactor.js";
 import { runAction, type Invocation } from "../cli/output.js";
 import type { Column } from "../cli/format.js";

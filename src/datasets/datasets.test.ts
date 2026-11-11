@@ -13,7 +13,7 @@ import {
 describe("institutions dataset", () => {
   it("loads every country's file, tagging and sorting rows by country then code", () => {
     const rows = readDataset("institutions");
-    const sorted = [...rows].sort(
+    const sorted = rows.toSorted(
       (a, b) => a.country.localeCompare(b.country) || String(a.code).localeCompare(String(b.code)),
     );
     expect(rows).toEqual(sorted);

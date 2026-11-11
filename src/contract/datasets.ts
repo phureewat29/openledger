@@ -1,6 +1,7 @@
 import * as z from "zod";
 import type { CommandContract } from "./kind.js";
 import { Summary } from "./primitives.js";
+import { INSTITUTION_KINDS } from "./enums.js";
 
 export const DatasetsSummaryRow = z.object({
   name: z.string(),
@@ -8,20 +9,6 @@ export const DatasetsSummaryRow = z.object({
   rows: z.number().int(),
 });
 export type DatasetsSummaryRow = z.infer<typeof DatasetsSummaryRow>;
-
-// Mirrors INSTITUTION_KINDS in src/datasets/institutions.ts; duplicated to keep the contract a leaf.
-const INSTITUTION_KINDS = [
-  "bank",
-  "card_issuer",
-  "wallet",
-  "payment_rail",
-  "broker",
-  "crypto_exchange",
-  "insurer",
-  "gov",
-  "telco",
-  "utility",
-] as const;
 
 export const DatasetsInstitutionRow = z.object({
   code: z.string(),

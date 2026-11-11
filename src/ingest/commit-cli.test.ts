@@ -63,6 +63,32 @@ describe("commitRows: a row's own throw", () => {
   });
 });
 
+describe("commitRows: a non-string field", () => {
+  it("is that row's dirty_input, not an unexpected_error, and nothing posts", () => {
+    const db = freshDB(seedLedger);
+    const { out } = jsonOutput();
+
+    const results = commitRows(out, db, batch(), [
+      { ...row("Object file"), source_file_id: { id: "sf-1" } },
+      { ...row("Array description"), description: ["Lunch"] },
+    ]);
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        ok: false,
+        reason: "dirty_input",
+        message: '--source-file-id must be a string, got "{"id":"sf-1"}"',
+      }),
+      expect.objectContaining({
+        ok: false,
+        reason: "dirty_input",
+        message: '--description must be a string, got "["Lunch"]"',
+      }),
+    ]);
+    expect(countTransactions(db)).toBe(0);
+  });
+});
+
 describe("commitRows: a row's own source_file_id", () => {
   it("overrides the batch's --file, and the row's ids derive from that file's hash", () => {
     const db = freshDB(seedLedger);

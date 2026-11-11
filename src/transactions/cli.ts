@@ -455,11 +455,7 @@ async function recategorizeTransactions(
     parsed.set_account,
     "run `oled accounts tree --json` for the ids this ledger has, or create it with `oled accounts create`",
   );
-  const result = bulkRecategorize(
-    db,
-    { accountId: parsed.filter_account },
-    { accountId: parsed.set_account },
-  );
+  const result = bulkRecategorize(db, parsed.filter_account, parsed.set_account);
   if (!result.ok) failReason(RECATEGORIZE_EXIT, result);
   const view: TransactionRecategorizeResult = {
     affected: result.affected,

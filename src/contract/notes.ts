@@ -1,13 +1,13 @@
 import * as z from "zod";
 import type { CommandContract } from "./kind.js";
 import { Summary } from "./primitives.js";
+import { NOTE_CATEGORIES } from "./enums.js";
 
-// `content` is redacted by default on list; `category` mirrors the notes.category CHECK
-// (duplicated to keep the contract a leaf).
+// `content` is redacted by default on list.
 export const Note = z.object({
   id: z.number().int(),
   content: z.string(),
-  category: z.enum(["rule", "preference", "fact"]),
+  category: z.enum(NOTE_CATEGORIES),
   created_at: z.iso.datetime(),
 });
 export type Note = z.infer<typeof Note>;

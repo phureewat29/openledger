@@ -4,10 +4,11 @@ import {
   findQuestionByRowKey,
   recordQuestion,
 } from "../questions/queries.js";
-import { ACCOUNT_TYPES, type AccountType } from "../accounts/queries.js";
+import { isAccountType } from "../accounts/queries.js";
 import { typeFromId } from "../lib/ids.js";
+import type { CommitSide } from "../contract/ingest.js";
 
-export type TransactionSide = "debit" | "credit";
+export type TransactionSide = CommitSide["side"];
 
 export interface QuestionContext {
   readonly batchId: string | null;
@@ -15,7 +16,7 @@ export interface QuestionContext {
 }
 
 /** The row fields a question quotes back to the agent, and nothing else. */
-export interface QuotedRow {
+interface QuotedRow {
   readonly date: string;
   readonly description: string;
   readonly raw_descriptor?: string | null;
@@ -23,7 +24,7 @@ export interface QuotedRow {
 
 /** Where a row sits in its file. `row_index` is page-scoped, so the page is part
  *  of the address — the same coordinates `deriveTransactionId` hashes. */
-export interface RowAddress {
+interface RowAddress {
   readonly source_page?: number | null;
   readonly row_index?: number | null;
 }
@@ -127,7 +128,7 @@ export function raiseUnknownMerchant(
   });
 }
 
-export type UncategorizedCause = "fallback" | "requested";
+type UncategorizedCause = "fallback" | "requested";
 
 /** Telling a caller that parked the row here on purpose that it "couldn't be
  *  matched" would be false, and would name a fix it already applied. */
@@ -219,7 +220,7 @@ export function raiseUnknownLedger(
   ledger: string,
 ): 0 | 1 {
   const type = typeFromId(accountId);
-  const repair = ACCOUNT_TYPES.includes(type as AccountType)
+  const repair = isAccountType(type)
     ? `create the account first (\`oled accounts create --id ${accountId} --name <name> --type ${type}\`), ` +
       `or fix the currency prefix and re-ingest.`
     : `fix the id to <currency>:<type>:<path> against an open ledger and re-ingest.`;

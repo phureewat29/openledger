@@ -225,7 +225,7 @@ describe("findDuplicateTransactions", () => {
         dupTf({ id: "tx:same1", debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 5000 }),
         dupTf({ id: "tx:same2", debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash", amount: 5000 }),
       ],
-      { group_id: "tg:split" },
+      "tg:split",
     );
     insertTransaction(db, dupTf({ id: "tx:dup1", debit_account_id: "thb:expense:transport", credit_account_id: "thb:asset:bank", amount: 7000 }));
     insertTransaction(db, dupTf({ id: "tx:dup2", debit_account_id: "thb:expense:transport", credit_account_id: "thb:asset:bank", amount: 7000 }));

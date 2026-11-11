@@ -2,11 +2,10 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type Database from "libsql";
 import type { OpenLedgerConfig } from "../config/config.js";
-import { findFileByHash, replaceFile, type FileStatus } from "../files/queries.js";
+import { findFileByHash, replaceFile } from "../files/queries.js";
 import { extractFile, type Extraction, type TextPage } from "../extract/extract.js";
 import { resolveOCR, type OCRConfigSource } from "../extract/ocr.js";
 import { isEncryptedPDF, unlockPDF, type UnlockFailureReason } from "../extract/pdf.js";
-import type { TextLayer } from "../extract/route.js";
 import { loadSource, type LoadedSource } from "../extract/source.js";
 import { newFileId } from "../lib/ids.js";
 import { ok, tryExecute, type Result } from "../lib/result.js";
@@ -19,8 +18,9 @@ import {
   walkFiles,
   type WalkedFile,
 } from "../files/files.js";
+import type { IngestFile, PrepareImagesResult, PrepareTextResult, TextLayer } from "../contract/ingest.js";
 
-type IngestStatus = FileStatus | "new" | "unreadable";
+type IngestStatus = IngestFile["status"];
 
 export interface IngestEntry extends WalkedFile {
   /** null when the bytes could not be read. */
@@ -104,12 +104,12 @@ interface ImagePagePath {
   path: string;
 }
 
-export type PrepareOutcome =
+type PrepareOutcome =
   | {
       ok: true;
       fileId: string;
       kind: "text";
-      source: "text-layer" | "ocr";
+      source: PrepareTextResult["source"];
       textLayer: TextLayer;
       /** The model that read the pages, on the ocr route only. */
       model?: string;
@@ -124,7 +124,7 @@ export type PrepareOutcome =
       ok: true;
       fileId: string;
       kind: "images";
-      source: "raster" | "original";
+      source: PrepareImagesResult["source"];
       textLayer: TextLayer;
       pageCount: number;
       /** Present when the pages were rasterized from a PDF. */

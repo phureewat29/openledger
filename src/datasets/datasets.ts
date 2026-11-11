@@ -1,19 +1,7 @@
 import * as z from "zod";
 import { memoize, uniq } from "es-toolkit";
 import { loadDatasetRows, type DatasetDefinition, type DatasetRow } from "./loader.js";
-
-const INSTITUTION_KINDS = [
-  "bank",
-  "card_issuer",
-  "wallet",
-  "payment_rail",
-  "broker",
-  "crypto_exchange",
-  "insurer",
-  "gov",
-  "telco",
-  "utility",
-] as const;
+import { INSTITUTION_KINDS } from "../contract/enums.js";
 
 const institutionSchema = z.object({
   code: z.string(),
@@ -44,7 +32,7 @@ const countryDefaultsSchema = z.object({
 
 type CountryDefaults = z.infer<typeof countryDefaultsSchema>;
 
-export const defaultsDataset: DatasetDefinition<CountryDefaults> = {
+const defaultsDataset: DatasetDefinition<CountryDefaults> = {
   schema: countryDefaultsSchema,
   // `country` is re-added by the loader (uppercased); the row carries only the display fields here.
   flatten: (file) => [{ locale: file.locale, currency: file.currency }],
@@ -74,7 +62,7 @@ const noiseFileSchema = z.object({
 
 type NoiseFile = z.infer<typeof noiseFileSchema>;
 
-export const noiseDataset: DatasetDefinition<NoiseFile> = {
+const noiseDataset: DatasetDefinition<NoiseFile> = {
   schema: noiseFileSchema,
   flatten: (file) => (file.noise ?? []).map((token) => ({ token })),
   sortKey: (row) => String(row.token ?? ""),

@@ -15,7 +15,8 @@ import {
 } from "../transactions/queries.js";
 import { inTransaction } from "../db/transaction.js";
 import { currencyOf } from "../lib/ids.js";
-import { fromMinorUnits, toMinorUnits, type CurrencyTotals } from "../lib/money.js";
+import { fromMinorUnits, toMinorUnits } from "../lib/money.js";
+import type { CurrencyTotals } from "../contract/primitives.js";
 import { ensureStructuralAccount, refuse, structuralAccountId, type Refusal } from "./accounts.js";
 
 export interface AccountBalanceMinor extends AccountRow {
@@ -27,6 +28,7 @@ export interface AccountBalanceMinor extends AccountRow {
   balance: number;
 }
 
+// Minor units; the CLI converts with `toDecimalTotals`.
 interface NetWorth {
   assets: CurrencyTotals;
   liabilities: CurrencyTotals;

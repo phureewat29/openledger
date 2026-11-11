@@ -171,7 +171,7 @@ function ensureAccountAncestors(
   return { ok: true, parentId, createdParents: opened.created };
 }
 
-export interface CreatedAccount {
+interface CreatedAccount {
   readonly ok: true;
   id: string;
   created_parents: string[];

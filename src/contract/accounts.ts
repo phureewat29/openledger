@@ -1,12 +1,9 @@
 import * as z from "zod";
 import type { CommandContract } from "./kind.js";
 import { CurrencyTotals, Summary } from "./primitives.js";
+import { ACCOUNT_TYPES } from "./enums.js";
 
-/** Mirrors ACCOUNT_TYPES in db/queries/accounts.ts; duplicated because the
- *  contract is a leaf module and must not import outside its tree (purity.test.ts). */
-const ACCOUNT_TYPE_VALUES = ["asset", "liability", "income", "expense", "equity"] as const;
-
-export const AccountType = z.enum(ACCOUNT_TYPE_VALUES);
+export const AccountType = z.enum(ACCOUNT_TYPES);
 export type AccountType = z.infer<typeof AccountType>;
 
 /** The bare table row `accounts match` nests; no ledger balances joined. */

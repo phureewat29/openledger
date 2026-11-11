@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import Database from "libsql";
 import { migrate } from "../db/schema.js";
-import { ACCOUNT_TYPES } from "../accounts/queries.js";
+import { ACCOUNT_TYPES } from "../contract/enums.js";
 import { createAccount, ensureLedgerRoot } from "../accounts/accounts.js";
 import {
   createSandbox,

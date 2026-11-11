@@ -145,10 +145,10 @@ export function insertTransaction(
   if (!check.ok) throw new Error(check.message);
 
   const id = input.id ?? newTransactionId();
-  let merchantId = input.merchant_id ?? null;
-  if (!merchantId && input.merchant) {
-    merchantId = upsertMerchant(db, input.merchant, input.merchant.noise_tokens).id;
-  }
+  const merchantId =
+    !input.merchant_id && input.merchant
+      ? upsertMerchant(db, input.merchant, input.merchant.noise_tokens).id
+      : (input.merchant_id ?? null);
 
   const result = db
     .prepare(
@@ -160,24 +160,18 @@ export function insertTransaction(
   return { id, duplicate: result.changes === 0 };
 }
 
-interface InsertLinkedTransactionsResult {
-  results: { id: string; duplicate: boolean }[];
-  group_id: string;
-}
-
-/** Every leg takes `opts.group_id`; any leg's failure rolls back all of them. */
+/** Every leg takes `groupId`; any leg's failure rolls back all of them. */
 export function insertLinkedTransactions(
   db: Database.Database,
   inputs: TransactionInput[],
-  opts: { group_id: string },
-): InsertLinkedTransactionsResult {
+  groupId: string,
+): { id: string; duplicate: boolean }[] {
   if (inputs.length === 0) {
     throw new Error("insertLinkedTransactions requires at least one transaction.");
   }
-  const results = inTransaction(db, () =>
-    inputs.map((input) => insertTransaction(db, { ...input, group_id: opts.group_id })),
+  return inTransaction(db, () =>
+    inputs.map((input) => insertTransaction(db, { ...input, group_id: groupId })),
   );
-  return { results, group_id: opts.group_id };
 }
 
 // Shared by listing and counts so a `--query` filter (reads joined names) matches in both.
@@ -196,13 +190,13 @@ const ROW_SELECT = `SELECT t.id, t.group_id, t.date, t.description, t.merchant_i
         m.canonical_name AS merchant_name
    ${LIST_FROM}`;
 
-/** `group` is ordered by id. */
+/** `group` is in insertion order, so legs read as committed. */
 export function findTransactionById(db: Database.Database, id: string): TransactionDetail | null {
   const row = db.prepare(`${ROW_SELECT} WHERE t.id = ?`).get(id) as TransactionRow | undefined;
   if (!row) return null;
   if (!row.group_id) return row;
   const group = db
-    .prepare(`${ROW_SELECT} WHERE t.group_id = ? ORDER BY t.id`)
+    .prepare(`${ROW_SELECT} WHERE t.group_id = ? ORDER BY t.rowid`)
     .all(row.group_id) as TransactionRow[];
   return { ...row, group };
 }
@@ -353,44 +347,42 @@ function repointSides(db: Database.Database, from: string, to: string, ids: stri
 }
 
 /**
- * Re-points the `filter.accountId` side of every transaction touching it onto
- * `set.accountId`, skipping the rows the debit<>credit CHECK or the
+ * Re-points the `fromId` side of every transaction touching it onto `toId`,
+ * skipping the rows the debit<>credit CHECK or the
  * cross-ledger trigger would abort the statement on.
  */
 export function bulkRecategorize(
   db: Database.Database,
-  filter: { accountId: string },
-  set: { accountId: string },
+  fromId: string,
+  toId: string,
 ): BulkRecategorizeOutcome {
-  const from = filter.accountId;
-  const to = set.accountId;
-  if (from === to) {
+  if (fromId === toId) {
     return {
       ok: false,
       reason: "same_account",
-      message: "bulkRecategorize: set.accountId equals filter.accountId (no-op).",
+      message: "Cannot recategorize an account into itself.",
     };
   }
 
   return inTransaction(db, (): BulkRecategorizeOutcome => {
-    if (!accountExists(db, to)) {
-      return { ok: false, reason: "not_found", message: `account "${to}" not found` };
+    if (!accountExists(db, toId)) {
+      return { ok: false, reason: "not_found", message: `account "${toId}" not found` };
     }
     const rows = db
       .prepare(
         `SELECT id, debit_account_id, credit_account_id FROM transactions
           WHERE debit_account_id = ? OR credit_account_id = ?`,
       )
-      .all(from, from) as RecategorizeCandidate[];
+      .all(fromId, fromId) as RecategorizeCandidate[];
     const {
       self_transaction = [],
       currency_mismatch = [],
       update = [],
-    } = groupBy(rows, (row) => recategorizeFate(row, from, to));
+    } = groupBy(rows, (row) => recategorizeFate(row, fromId, toId));
 
     const ids = update.map((row) => row.id);
     const affected = sumBy(chunk(ids, RECATEGORIZE_UPDATE_CHUNK_SIZE), (batch) =>
-      repointSides(db, from, to, batch),
+      repointSides(db, fromId, toId, batch),
     );
     return {
       ok: true,

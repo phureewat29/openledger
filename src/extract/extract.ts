@@ -15,8 +15,9 @@ import {
   type ProbedPage,
   type RenderSpec,
 } from "./pdf.js";
-import { readerFor, verdictOf, type Reader, type TextLayer } from "./route.js";
+import { readerFor, verdictOf, type Reader } from "./route.js";
 import type { SourceKind } from "./source.js";
+import type { PrepareImagesResult, PrepareTextResult, TextLayer } from "../contract/ingest.js";
 
 export interface TextPage {
   page: number;
@@ -26,7 +27,7 @@ export interface TextPage {
 export type Extraction =
   | {
       kind: "text";
-      source: "text-layer" | "ocr";
+      source: PrepareTextResult["source"];
       textLayer: TextLayer;
       model?: string;
       pages: TextPage[];
@@ -34,7 +35,7 @@ export type Extraction =
     }
   | {
       kind: "images";
-      source: "raster" | "original";
+      source: PrepareImagesResult["source"];
       textLayer: TextLayer;
       dpi?: number;
       pages: PageImage[];
@@ -76,7 +77,7 @@ async function probe(input: ExtractInput): Promise<Result<ProbedPage[]>> {
 }
 
 interface PageImages {
-  source: "raster" | "original";
+  source: PrepareImagesResult["source"];
   dpi?: number;
   pages: PageImage[];
 }

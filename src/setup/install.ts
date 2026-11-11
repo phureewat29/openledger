@@ -9,12 +9,12 @@ import { getVersion } from "../lib/version.js";
 export const DEFAULT_SKILLS_DIR = ".agents/skills";
 
 /** The pack's own directory name inside a skills dir; agents discover it by name. */
-export const SKILL_PACK_DIR = "openledger";
+const SKILL_PACK_DIR = "openledger";
 
 /** Directories `doctor` probes for an installed pack; diagnostic only, `setup` never resolves a path from here. */
 export const SKILL_DIRS: readonly string[] = [DEFAULT_SKILLS_DIR, ".claude/skills", ".skills"];
 
-export interface InstallOptions {
+interface InstallOptions {
   /** Install under the home skills dir rather than the cwd. */
   global?: boolean;
   /** The skills directory to install into; the pack lands at <dir>/openledger. */
@@ -23,7 +23,7 @@ export interface InstallOptions {
   force?: boolean;
 }
 
-export type InstallResult =
+type InstallResult =
   | { ok: true; path: string; version: string }
   | {
       ok: false;

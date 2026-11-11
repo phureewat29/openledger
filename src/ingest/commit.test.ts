@@ -512,7 +512,7 @@ describe("commitTransaction", () => {
     expect(a.ok && !a.duplicate).toBe(true);
 
     // thb:expense:food still exists, so re-resolving would wrongly report "exact".
-    bulkRecategorize(db, { accountId: "thb:expense:food" }, { accountId: "thb:expense:tax" });
+    bulkRecategorize(db, "thb:expense:food", "thb:expense:tax");
 
     const b = commitTransaction(db, CTX, input);
     expect(b.ok && b.duplicate).toBe(true);

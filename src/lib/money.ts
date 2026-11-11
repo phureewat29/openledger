@@ -48,10 +48,6 @@ export function fromMinorUnits(minor: number, currency: string): number {
   return minor / 10 ** minorUnitExponent(currency);
 }
 
-/** Per-currency integer minor units; never summed across keys. Decimals only
- *  appear at the CLI boundary, through `toDecimalTotals`. */
-export type CurrencyTotals = Record<string, number>;
-
 // Each currency's own fraction digits (Intl knows the exponents: THB 2, JPY 0, KWD 3).
 export function formatAmount(amount: number, currency: string, locale: string): string {
   return new Intl.NumberFormat(locale, { style: "currency", currency }).format(amount);
@@ -63,10 +59,10 @@ export function formatFixed(amount: number, currency: string): string {
 }
 
 // Keys sorted so the emitted object's key order is stable across runs; each converts with its own exponent.
-export function toDecimalTotals(totals: CurrencyTotals): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const currency of Object.keys(totals).sort()) {
-    out[currency] = fromMinorUnits(totals[currency], currency);
-  }
-  return out;
+export function toDecimalTotals(totals: Record<string, number>): Record<string, number> {
+  return Object.fromEntries(
+    Object.keys(totals)
+      .sort()
+      .map((currency) => [currency, fromMinorUnits(totals[currency], currency)]),
+  );
 }

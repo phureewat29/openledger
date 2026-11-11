@@ -30,7 +30,6 @@ import {
   listLedgerCurrencies,
   renameAccount,
   updateAccountMetadata,
-  ACCOUNT_TYPES,
   type AccountRow,
   type UpdateAccountMetadataFailure,
   type UpdateAccountMetadataPatch,
@@ -43,6 +42,7 @@ import { applyRedaction } from "../privacy/redactor.js";
 import * as z from "zod";
 import { parseInput, safeParse, str, num, int, bool, json } from "../lib/validate.js";
 import type { ExitCode } from "../contract/exit.js";
+import { ACCOUNT_TYPES } from "../contract/enums.js";
 import type {
   Account as PresentedAccount,
   AccountDetail,

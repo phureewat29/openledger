@@ -3,16 +3,13 @@ import { ISO_NOW_SQL } from "../db/timestamps.js";
 import { inTransaction } from "../db/transaction.js";
 import { countTransactionsBySourceFile } from "../transactions/queries.js";
 import { countQuestions } from "../questions/queries.js";
+import type { FileStatus } from "../contract/files.js";
 
 interface FileTotals {
   ingested: number;
   pending: number;
   failed: number;
 }
-
-/** The files.status enum at rest; `new` is an `ingest list` display state, never stored. */
-export const FILE_STATUSES = ["pending", "ingested", "failed"] as const;
-export type FileStatus = (typeof FILE_STATUSES)[number];
 
 export interface FileRow {
   id: string;

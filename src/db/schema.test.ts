@@ -7,6 +7,7 @@ import { migrate, applyMigrations, listMissingTables } from "./schema.js";
 import { DBNotReadyError } from "./errors.js";
 import * as baseline from "./migrations/0001_baseline.js";
 import { MIGRATIONS, type Migration } from "./migrations/index.js";
+import { ACCOUNT_TYPES, FILE_STATUSES, NOTE_CATEGORIES } from "../contract/enums.js";
 
 function freshDB() {
   const db = new Database(":memory:");
@@ -367,6 +368,21 @@ describe("account id CHECKs", () => {
     expect(() => insert(db, "thb:bank:kbank")).toThrow();
     expect(() => insert(db, "thb:assets")).toThrow();
     expect(() => insert(db, "thb:asset:bank:kbank")).not.toThrow();
+  });
+});
+
+describe("enum CHECKs match the contract enums", () => {
+  it.each([
+    ["accounts", "type", ACCOUNT_TYPES],
+    ["files", "status", FILE_STATUSES],
+    ["notes", "category", NOTE_CATEGORIES],
+  ])("%s.%s", (table, column, values) => {
+    const db = freshDB();
+    migrate(db);
+    const { sql } = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table) as {
+      sql: string;
+    };
+    expect(sql).toContain(`CHECK(${column} IN (${values.map((v) => `'${v}'`).join(",")}))`);
   });
 });
 

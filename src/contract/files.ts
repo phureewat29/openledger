@@ -1,10 +1,9 @@
 import * as z from "zod";
 import type { CommandContract } from "./kind.js";
 import { Summary } from "./primitives.js";
+import { FILE_STATUSES } from "./enums.js";
 
-// Mirrors FILE_STATUSES in db/queries/files.ts (duplicated to keep the contract a leaf);
-// `ingest list`'s extra states are display-only, never stored.
-export const FileStatus = z.enum(["pending", "ingested", "failed"]);
+export const FileStatus = z.enum(FILE_STATUSES);
 export type FileStatus = z.infer<typeof FileStatus>;
 
 export const FileRecord = z.object({

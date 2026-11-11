@@ -22,7 +22,7 @@ export interface ModelCard {
   render: RenderSpec;
 }
 
-export type ModelCardName = "typhoon" | "fallback";
+type ModelCardName = "typhoon" | "fallback";
 
 /** Exhaustive by construction: a new ModelCardName breaks the build until it is listed. */
 const MODEL_CARDS: Record<ModelCardName, ModelCard> = {

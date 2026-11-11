@@ -7,8 +7,8 @@ import { requireYes } from "../cli/input.js";
 import { openLedger } from "../config/cli.js";
 import { parseInput } from "../lib/validate.js";
 import * as z from "zod";
+import { FILE_STATUSES } from "../contract/enums.js";
 import {
-  FILE_STATUSES,
   deleteFile,
   findFileById,
   listFiles as queryFiles,

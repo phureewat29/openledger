@@ -3,8 +3,7 @@ import { parseJSONOrNull } from "../lib/json.js";
 import { normalizeMaskedAccountNumber } from "../lib/masked.js";
 import { buildPatch, type PatchField } from "../lib/patch.js";
 import { inTransaction } from "../db/transaction.js";
-
-export const ACCOUNT_TYPES = ["asset", "liability", "income", "expense", "equity"] as const;
+import { ACCOUNT_TYPES } from "../contract/enums.js";
 
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
