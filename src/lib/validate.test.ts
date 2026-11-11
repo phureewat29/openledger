@@ -63,6 +63,51 @@ describe("validate: coercions", () => {
     });
   });
 
+  it("coerces numbers, booleans and bigints to strings", () => {
+    const spec = z.object({ s: str() });
+    expect(parseInput(spec, { s: 5 }).s).toBe("5");
+    expect(parseInput(spec, { s: false }).s).toBe("false");
+    expect(parseInput(spec, { s: 5n }).s).toBe("5");
+  });
+
+  it("rejects objects and arrays as a string, echoing JSON", () => {
+    const spec = z.object({ s: str() });
+    expect(safeParse(spec, { s: { id: "sf-1" } })).toEqual({
+      ok: false,
+      error: '--s must be a string, got "{"id":"sf-1"}"',
+    });
+    expect(safeParse(spec, { s: [1, 2] })).toEqual({ ok: false, error: '--s must be a string, got "[1,2]"' });
+  });
+
+  it("reads a JSON null as absent where the field cannot hold null", () => {
+    expect(safeParse(z.object({ s: str() }), { s: null })).toEqual({ ok: false, error: "--s required" });
+    expect(parseInput(z.object({ s: str().default("") }), { s: null }).s).toBe("");
+    expect(Object.keys(parseInput(z.object({ s: str().optional() }), { s: null }))).toEqual([]);
+    expect(parseInput(z.object({ s: str().nullable().default("x") }), { s: null }).s).toBeNull();
+  });
+
+  it("converts only numbers and non-blank numeric strings to numbers", () => {
+    const spec = z.object({ n: num() });
+    expect(parseInput(spec, { n: "12.5" }).n).toBe(12.5);
+    expect(parseInput(spec, { n: 3 }).n).toBe(3);
+    for (const [raw, echo] of [["", ""], ["  ", "  "], [true, "true"], [[], "[]"]] as const) {
+      expect(safeParse(spec, { n: raw })).toEqual({ ok: false, error: `--n must be a number, got "${echo}"` });
+    }
+  });
+
+  it("truncates a long echoed object", () => {
+    const bad = safeParse(z.object({ s: str() }), { s: { text: "x".repeat(100) } });
+    expect(bad).toEqual({ ok: false, error: `--s must be a string, got "{"text":"${"x".repeat(51)}…"` });
+  });
+
+  it("echoes an object as JSON in number and enum clauses too", () => {
+    expect(safeParse(z.object({ n: num() }), { n: {} })).toEqual({ ok: false, error: '--n must be a number, got "{}"' });
+    expect(safeParse(z.object({ t: z.enum(["a", "b"]) }), { t: { x: 1 } })).toEqual({
+      ok: false,
+      error: '--t must be one of a, b, got "{"x":1}"',
+    });
+  });
+
   it("parses JSON strings and passes already-parsed values through", () => {
     const spec = z.object({ m: json(z.record(z.string(), z.unknown()), "a JSON object") });
     expect(parseInput(spec, { m: '{"a":1}' }).m).toEqual({ a: 1 });

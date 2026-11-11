@@ -1,4 +1,5 @@
 import * as z from "zod";
+import { uniqBy } from "es-toolkit";
 import { ok, tryExecute, type Result } from "./result.js";
 
 /** Thrown by `parseInput`; `src/lib/` can't depend on `src/cli/`, so the CLI layer maps this to its own error/exit-code type. */
@@ -12,11 +13,12 @@ export class ValidationError extends Error {
 // Each preprocess below passes undefined through, so an absent required key
 // surfaces as a missing-required issue rather than a coerced value.
 const toStringInput = (value: unknown): unknown =>
-  typeof value === "string" || value === undefined ? value : String(value);
+  typeof value === "number" || typeof value === "boolean" || typeof value === "bigint" ? String(value) : value;
 
-/** Non-finite results pass through so z.number rejects them and the formatter echoes the original in `got "<value>"`. */
+/** Only a non-blank numeric string converts (Number("") and Number([]) are 0, Number(true) is 1);
+ *  anything else passes through so z.number rejects it and the formatter echoes the original. */
 const toNumberInput = (value: unknown): unknown => {
-  if (typeof value === "number") return value;
+  if (typeof value !== "string" || !value.trim()) return value;
   const n = Number(value);
   return Number.isFinite(n) ? n : value;
 };
@@ -89,26 +91,23 @@ function resolveRaw(
   key: string,
   aliases: readonly string[],
 ): unknown {
-  const candidates = [key, toCamelCase(key), toSnakeCase(key), ...aliases];
-  for (const candidate of candidates) {
-    const value = raw[candidate];
-    if (value !== undefined) return value;
-  }
-  return undefined;
+  return [key, toCamelCase(key), toSnakeCase(key), ...aliases]
+    .map((candidate) => raw[candidate])
+    .find((value) => value !== undefined);
 }
 
 // Absent keys are omitted so zod's optional/default/required handling stays authoritative.
+// A JSON null in a field that cannot hold null reads as absent too, so a default (and the
+// validator behind it) decides, never a coerced "null".
 function normalizeRaw(
-  shape: Record<string, unknown>,
+  shape: Record<string, z.ZodType>,
   raw: Record<string, unknown>,
   aliases: Record<string, string[]> = {},
 ): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const key of Object.keys(shape)) {
-    const value = resolveRaw(raw, key, aliases[key] ?? []);
-    if (value !== undefined) out[key] = value;
-  }
-  return out;
+  const isAbsent = (key: string, value: unknown): boolean =>
+    value === undefined || (value === null && !shape[key].safeParse(null).success);
+  const entries = Object.keys(shape).map((key) => [key, resolveRaw(raw, key, aliases[key] ?? [])] as const);
+  return Object.fromEntries(entries.filter(([key, value]) => !isAbsent(key, value)));
 }
 
 interface Issue {
@@ -121,20 +120,29 @@ interface Issue {
 
 // A Map, not an object literal: `issue.expected` is arbitrary text and must not reach Object.prototype.
 const EXPECTED_TYPE_LABEL = new Map([
+  ["string", "a string"],
   ["int", "an integer"],
   ["number", "a number"],
   ["boolean", "a boolean"],
 ]);
+
+const ECHO_MAX_CHARS = 60;
+
+function echo(raw: unknown): string {
+  if (typeof raw !== "object" || raw === null) return String(raw);
+  const text = JSON.stringify(raw);
+  return text.length > ECHO_MAX_CHARS ? `${text.slice(0, ECHO_MAX_CHARS)}…` : text;
+}
 
 /** Render one non-missing issue into the pinned `<label> <constraint>` clause,
  *  echoing the raw pre-coercion value in `got "<value>"`. */
 function constraintClause(label: string, issue: Issue, raw: unknown): string {
   if (issue.code === "custom") return `${label} ${issue.message}`;
   if (issue.code === "invalid_value") {
-    return `${label} must be one of ${(issue.values ?? []).join(", ")}, got "${String(raw)}"`;
+    return `${label} must be one of ${(issue.values ?? []).join(", ")}, got "${echo(raw)}"`;
   }
   const expected = EXPECTED_TYPE_LABEL.get(issue.expected ?? "");
-  return expected ? `${label} must be ${expected}, got "${String(raw)}"` : `${label} ${issue.message}`;
+  return expected ? `${label} must be ${expected}, got "${echo(raw)}"` : `${label} ${issue.message}`;
 }
 
 /** An issue whose normalized value is `undefined` is a missing-required field.
@@ -145,30 +153,19 @@ function formatError(
   issues: Issue[],
   opts?: ParseOptions,
 ): string {
-  const first = new Map<string, Issue>();
-  for (const issue of issues) {
-    const key = String(issue.path[0]);
-    if (!first.has(key)) first.set(key, issue);
-  }
-
-  const missing: string[] = [];
-  const clauses: string[] = [];
-  let hasConstraint = false;
-  for (const key of Object.keys(shape)) {
-    const issue = first.get(key);
-    if (!issue) continue;
+  const keyOf = (issue: Issue): string => String(issue.path[0]);
+  const firstIssue = new Map(uniqBy(issues, keyOf).map((issue) => [keyOf(issue), issue]));
+  const failed = Object.keys(shape).flatMap((key) => {
+    const issue = firstIssue.get(key);
+    if (!issue) return [];
     const label = opts?.labels?.[key] ?? defaultLabel(key);
-    if (normalized[key] === undefined) {
-      missing.push(label);
-      clauses.push(`${label} required`);
-    } else {
-      hasConstraint = true;
-      clauses.push(constraintClause(label, issue, normalized[key]));
-    }
-  }
+    const missing = normalized[key] === undefined;
+    const clause = missing ? `${label} required` : constraintClause(label, issue, normalized[key]);
+    return [{ label, missing, clause }];
+  });
 
-  if (!hasConstraint) return `${missing.join(", ")} required`;
-  return clauses.join("; ");
+  if (failed.every((f) => f.missing)) return `${failed.map((f) => f.label).join(", ")} required`;
+  return failed.map((f) => f.clause).join("; ");
 }
 
 /** Accumulates every missing-required and coercion error into one thrown `ValidationError`. */
@@ -191,7 +188,7 @@ export function safeParse<S extends z.ZodObject>(
   raw: object,
   opts?: ParseOptions,
 ): Result<z.infer<S>> {
-  const shape = schema.shape as Record<string, unknown>;
+  const shape = schema.shape as Record<string, z.ZodType>;
   const normalized = normalizeRaw(shape, raw as Record<string, unknown>, opts?.aliases);
   const parsed = schema.safeParse(normalized);
   if (parsed.success) return { ok: true, value: parsed.data as z.infer<S> };
