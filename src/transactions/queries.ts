@@ -84,12 +84,8 @@ interface TransactionFields {
  * an agent's `dirty_input` reason.
  */
 export function validateTransactionFields(input: TransactionFields): ValidateTransactionResult {
-  if (!ISO_DATE_RE.test(input.date ?? "")) {
-    return invalidTransaction("date must be an ISO date (YYYY-MM-DD).");
-  }
-  if (!input.description?.trim()) {
-    return invalidTransaction("description must not be empty.");
-  }
+  const meta = validateTransactionMeta({ date: input.date ?? "", description: input.description ?? "" });
+  if (!meta.ok) return meta;
   if (!input.debit_account_id?.trim()) {
     return invalidTransaction("debit_account_id must not be empty.");
   }
@@ -98,6 +94,17 @@ export function validateTransactionFields(input: TransactionFields): ValidateTra
   }
   if (input.debit_account_id === input.credit_account_id) {
     return invalidTransaction("debit and credit accounts must differ.");
+  }
+  return TRANSACTION_VALID;
+}
+
+/** A field the patch leaves out is not checked. */
+export function validateTransactionMeta(fields: UpdateTransactionMetaFields): ValidateTransactionResult {
+  if (fields.date !== undefined && !ISO_DATE_RE.test(fields.date)) {
+    return invalidTransaction("date must be an ISO date (YYYY-MM-DD).");
+  }
+  if (fields.description !== undefined && !fields.description.trim()) {
+    return invalidTransaction("description must not be empty.");
   }
   return TRANSACTION_VALID;
 }
@@ -144,20 +151,22 @@ export function insertTransaction(
   const check = validateTransaction(input);
   if (!check.ok) throw new Error(check.message);
 
-  const id = input.id ?? newTransactionId();
-  const merchantId =
-    !input.merchant_id && input.merchant
-      ? upsertMerchant(db, input.merchant, input.merchant.noise_tokens).id
-      : (input.merchant_id ?? null);
+  return inTransaction(db, () => {
+    const id = input.id ?? newTransactionId();
+    const merchantId =
+      !input.merchant_id && input.merchant
+        ? upsertMerchant(db, input.merchant, input.merchant.noise_tokens).id
+        : (input.merchant_id ?? null);
 
-  const result = db
-    .prepare(
-      `INSERT INTO transactions (${INSERT_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO NOTHING`,
-    )
-    .run(...insertParams(id, merchantId, input));
-  return { id, duplicate: result.changes === 0 };
+    const result = db
+      .prepare(
+        `INSERT INTO transactions (${INSERT_COLUMNS})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO NOTHING`,
+      )
+      .run(...insertParams(id, merchantId, input));
+    return { id, duplicate: result.changes === 0 };
+  });
 }
 
 /** Every leg takes `groupId`; any leg's failure rolls back all of them. */
@@ -371,7 +380,8 @@ export function bulkRecategorize(
     const rows = db
       .prepare(
         `SELECT id, debit_account_id, credit_account_id FROM transactions
-          WHERE debit_account_id = ? OR credit_account_id = ?`,
+          WHERE debit_account_id = ? OR credit_account_id = ?
+          ORDER BY rowid`,
       )
       .all(fromId, fromId) as RecategorizeCandidate[];
     const {
@@ -441,6 +451,20 @@ export function countTransactionsBySourceFile(db: Database.Database, fileId: str
   ).n;
 }
 
+/** Mirrors voided into one of `fileId`'s rows that a drop of the file would un-void;
+ *  mirrors sourced from the same file are deleted with it, so they don't count. */
+export function countUnvoidedBySourceFile(db: Database.Database, fileId: string): number {
+  return (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM transactions
+          WHERE void_of IN (SELECT id FROM transactions WHERE source_file_id = ?)
+            AND source_file_id IS NOT ?`,
+      )
+      .get(fileId, fileId) as { n: number }
+  ).n;
+}
+
 export function accountHasTransactions(db: Database.Database, accountId: string): boolean {
   return !!db
     .prepare(
@@ -467,6 +491,8 @@ export function updateTransactionMeta(
   id: string,
   fields: UpdateTransactionMetaFields,
 ): number {
+  const check = validateTransactionMeta(fields);
+  if (!check.ok) throw new Error(check.message);
   const { sets, params } = buildPatch(TRANSACTION_META_PATCH, {}, fields);
   if (sets.length === 0) return 0;
   return db

@@ -151,6 +151,23 @@ describe("accounts create (subprocess)", () => {
   }, 30000);
 });
 
+describe("accounts create/update --metadata (subprocess)", () => {
+  it("refuses a scalar or an array as USAGE (2): only an object can be merged into later", async () => {
+    const before = snapshot();
+    for (const metadata of ['"abc"', "5", "[1,2]"]) {
+      for (const args of [
+        ["create", "--id", "thb:asset:meta", "--name", "Meta", "--type", "asset"],
+        ["update", "thb:asset:cash"],
+      ]) {
+        const res = await runCLI(["accounts", ...args, "--metadata", metadata, "--json"]);
+        expect(res.code, `${args[0]} ${metadata}`).toBe(2);
+        expect(JSON.parse(res.stderr.trim()).error.message).toBe("--metadata must be a JSON object");
+      }
+    }
+    expect(snapshot()).toEqual(before);
+  }, 60000);
+});
+
 describe("accounts list --type (subprocess)", () => {
   it("refuses an unknown type as USAGE (2) in the wording create uses", async () => {
     const res = await runCLI(["accounts", "list", "--type", "bogus", "--json"]);
@@ -173,9 +190,11 @@ describe("accounts adjust (subprocess)", () => {
     ]);
     expect(res.code).toBe(2);
 
-    const { error } = JSON.parse(res.stderr.trim());
-    expect(error.code).toBe("E_USAGE");
-    expect(error.message).toBe('--date must be an ISO date (YYYY-MM-DD), got "2024/01/31"');
+    expect(JSON.parse(res.stderr.trim()).error).toEqual({
+      code: "E_USAGE",
+      message: '--date must be an ISO date (YYYY-MM-DD), got "2024/01/31"',
+      hint: "run `oled accounts adjust --help` for its flags and usage",
+    });
 
     const db = new Database(dbPath);
     const booked = countTransactions(db, { includeVoid: true });

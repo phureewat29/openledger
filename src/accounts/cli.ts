@@ -37,10 +37,10 @@ import {
 import { findAccountsByFuzzyName, type FuzzyAccountMatch } from "./matching.js";
 import { currencyOf, isLedgerScopedId } from "../lib/ids.js";
 import { formatFixed, fromMinorUnits, toDecimalTotals } from "../lib/money.js";
-import { ISO_DATE_RE, todayISO } from "../lib/date.js";
+import { todayISO } from "../lib/date.js";
 import { prepareRedaction } from "../privacy/redactor.js";
 import * as z from "zod";
-import { parseInput, safeParse, str, num, int, bool, json } from "../lib/validate.js";
+import { parseInput, safeParse, str, num, int, bool, json, isoDate } from "../lib/validate.js";
 import type { ExitCode } from "../contract/exit.js";
 import { ACCOUNT_TYPES } from "../contract/enums.js";
 import type {
@@ -405,7 +405,7 @@ async function deleteAccount(ctx: Invocation, id: string, opts: DeleteAccountOpt
 const ADJUST_ACCOUNT_SPEC = z.object({
   to: num(),
   reason: str(),
-  date: str().optional(),
+  date: isoDate().optional(),
 });
 
 export const ADJUST_ACCOUNT_EXIT: Record<AdjustBalanceFailure, FailureCode> = {
@@ -420,10 +420,6 @@ async function adjustAccount(
   opts: Record<string, unknown>,
 ): Promise<void> {
   const parsed = parseInput(ADJUST_ACCOUNT_SPEC, opts);
-  if (parsed.date !== undefined && !ISO_DATE_RE.test(parsed.date)) {
-    fail("USAGE", `--date must be an ISO date (YYYY-MM-DD), got "${parsed.date}"`);
-  }
-
   const { db } = await openLedger(ctx.configPath);
   const outcome = adjustAccountBalance(db, {
     accountId: id,

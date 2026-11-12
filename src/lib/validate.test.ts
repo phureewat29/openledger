@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import * as z from "zod";
-import { str, num, int, bool, json, parseInput, safeParse, ValidationError } from "./validate.js";
+import { str, num, int, bool, json, isoDate, parseInput, safeParse, ValidationError } from "./validate.js";
 
 describe("validate: defaults", () => {
   it("uses the default when the key is absent", () => {
@@ -122,6 +122,21 @@ describe("validate: coercions", () => {
     for (const raw of ['"abc"', "5", "[1,2]", "null"]) {
       expect(safeParse(spec, { m: raw })).toEqual({ ok: false, error: "--m must be a JSON object" });
     }
+  });
+
+  it("accepts a YYYY-MM-DD date and echoes any other shape in the date clause", () => {
+    const spec = z.object({ date: isoDate().optional() });
+    expect(parseInput(spec, { date: "2026-01-31" }).date).toBe("2026-01-31");
+    for (const raw of ["2026/01/31", "2026-1-31", ""]) {
+      expect(safeParse(spec, { date: raw })).toEqual({
+        ok: false,
+        error: `--date must be an ISO date (YYYY-MM-DD), got "${raw}"`,
+      });
+    }
+    expect(safeParse(spec, { date: ["2026-01-31"] })).toEqual({
+      ok: false,
+      error: '--date must be a string, got "["2026-01-31"]"',
+    });
   });
 });
 

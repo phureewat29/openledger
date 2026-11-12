@@ -25,8 +25,10 @@ import {
   countTransactions,
   countTransactionsBySourceFile,
   updateTransactionMeta,
+  validateTransactionMeta,
   type TransactionInput,
 } from "./queries.js";
+import { findMerchantByName } from "../merchants/queries.js";
 import { freshDB, seedAccount } from "../../fixtures/db.js";
 
 function seedChartOfAccounts(db: Database.Database): void {
@@ -137,6 +139,14 @@ describe("insertTransaction", () => {
   it("upserts a merchant when supplied", () => {
     insertTransaction(db, tf({ id: "tx:mc", merchant: { canonical_name: "Starbucks", noise_tokens: [] } }));
     expect(findTransactionById(db, "tx:mc")?.merchant_name).toBe("Starbucks");
+  });
+
+  it("leaves no merchant behind when the insert itself fails", () => {
+    db.exec(`CREATE TRIGGER refuse_insert BEFORE INSERT ON transactions BEGIN SELECT RAISE(ABORT, 'refused'); END`);
+    expect(() =>
+      insertTransaction(db, tf({ merchant: { canonical_name: "Orphan Shop", noise_tokens: [] } })),
+    ).toThrow("refused");
+    expect(findMerchantByName(db, "Orphan Shop")).toBeNull();
   });
 });
 
@@ -374,6 +384,12 @@ describe("bulkRecategorize", () => {
     });
   });
 
+  it("samples ids in insertion order, whichever side the account sits on", () => {
+    insertTransaction(db, tf({ id: "tx:d2", debit_account_id: "thb:expense:food", credit_account_id: "thb:asset:cash" }));
+    const res = bulkRecategorize(db, "thb:expense:food", "thb:asset:bank");
+    expect(res.ok && res.sample_transaction_ids).toEqual(["tx:d", "tx:c", "tx:self", "tx:d2"]);
+  });
+
   it("refuses the no-op where set == filter account", () => {
     expect(bulkRecategorize(db, "thb:expense:food", "thb:expense:food")).toEqual({
       ok: false,
@@ -447,6 +463,19 @@ describe("counts + updateTransactionMeta", () => {
     const r = findTransactionById(db, "tx:m")!;
     expect(r.description).toBe("Latte");
     expect(updateTransactionMeta(db, "tx:m", {})).toBe(0);
+  });
+
+  it("refuses a patch insert would refuse, before writing", () => {
+    insertTransaction(db, tf({ id: "tx:m" }));
+    expect(validateTransactionMeta({ description: "  " })).toEqual({
+      ok: false,
+      reason: "invalid_transaction",
+      message: "description must not be empty.",
+    });
+    expect(validateTransactionMeta({ date: "2026/05/01" })).toMatchObject({ ok: false });
+    expect(validateTransactionMeta({ merchant_id: null })).toEqual({ ok: true });
+    expect(() => updateTransactionMeta(db, "tx:m", { description: "" })).toThrow("description must not be empty.");
+    expect(findTransactionById(db, "tx:m")!.description).toBe("Coffee");
   });
 });
 

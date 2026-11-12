@@ -1,6 +1,7 @@
 import * as z from "zod";
 import { uniqBy } from "es-toolkit";
 import { ok, tryExecute, type Result } from "./result.js";
+import { ISO_DATE_RE } from "./date.js";
 
 /** Thrown by `parseInput`; `src/lib/` can't depend on `src/cli/`, so the CLI layer maps this to its own error/exit-code type. */
 export class ValidationError extends Error {
@@ -43,6 +44,12 @@ export function int() {
 
 export function bool() {
   return z.preprocess(toBooleanInput, z.boolean());
+}
+
+export function isoDate() {
+  return str().refine((value) => ISO_DATE_RE.test(value), {
+    error: (issue) => `must be an ISO date (YYYY-MM-DD), got "${String(issue.input)}"`,
+  });
 }
 
 /** A JSON string (or an already-parsed value) checked against `schema`; `expected`

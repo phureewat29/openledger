@@ -1,7 +1,7 @@
 import type Database from "libsql";
 import { ISO_NOW_SQL } from "../db/timestamps.js";
 import { inTransaction } from "../db/transaction.js";
-import { countTransactionsBySourceFile } from "../transactions/queries.js";
+import { countTransactionsBySourceFile, countUnvoidedBySourceFile } from "../transactions/queries.js";
 import { countQuestions } from "../questions/queries.js";
 import type { FileStatus } from "../contract/files.js";
 
@@ -97,15 +97,7 @@ export function deleteFile(db: Database.Database, id: string): DeleteFileResult 
     }
     const removedTransactions = countTransactionsBySourceFile(db, id);
     const removedQuestions = countQuestions(db, { file_id: id, includeDeferred: true });
-    // Excludes mirrors that are themselves doomed (also sourced from this
-    // file): those get deleted outright, not un-voided.
-    const unvoided = (db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM transactions
-          WHERE void_of IN (SELECT id FROM transactions WHERE source_file_id = ?)
-            AND source_file_id IS NOT ?`,
-      )
-      .get(id, id) as { n: number }).n;
+    const unvoided = countUnvoidedBySourceFile(db, id);
     db.prepare(`DELETE FROM files WHERE id = ?`).run(id);
     return { removed, removedTransactions, removedQuestions, unvoided };
   });

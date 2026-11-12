@@ -437,6 +437,46 @@ describe("transactions CLI integration (subprocess)", () => {
   );
 
   it(
+    "a non-ISO --date is USAGE (2) with the --help hint on add and update alike; update refuses an empty description as add does",
+    async () => {
+      const dateError = (command: string) => ({
+        code: "E_USAGE",
+        message: '--date must be an ISO date (YYYY-MM-DD), got "2026/03/02"',
+        hint: `run \`oled transactions ${command} --help\` for its flags and usage`,
+      });
+      const entry = [
+        "--debit-account", "thb:expense:coffee",
+        "--credit-account", "thb:asset:bank",
+        "--amount", "5",
+        "--description", "espresso",
+      ];
+
+      const badAdd = await runCLI(["transactions", "add", ...entry, "--date", "2026/03/02", "--json"]);
+      expect(badAdd.code).toBe(2);
+      expect(JSON.parse(badAdd.stderr.trim()).error).toEqual(dateError("add"));
+
+      const added = await runCLI(["transactions", "add", ...entry, "--date", "2026-03-02", "--json"]);
+      expect(added.code).toBe(0);
+      const id = parseOne(added.stdout).transaction_id as string;
+
+      const badUpdate = await runCLI(["transactions", "update", id, "--date", "2026/03/02", "--json"]);
+      expect(badUpdate.code).toBe(2);
+      expect(JSON.parse(badUpdate.stderr.trim()).error).toEqual(dateError("update"));
+
+      const blank = await runCLI(["transactions", "update", id, "--description", "", "--json"]);
+      expect(blank.code).toBe(6);
+      expect(JSON.parse(blank.stderr.trim()).error).toEqual({
+        code: "E_INVALID",
+        message: "description must not be empty.",
+      });
+
+      const shown = parseOne((await runCLI(["transactions", "show", id, "--no-redact", "--json"])).stdout);
+      expect(shown).toMatchObject({ date: "2026-03-02", description: "espresso" });
+    },
+    60000,
+  );
+
+  it(
     "transactions dedupe groups same-amount / same-pair transactions",
     async () => {
       await runCLI([
@@ -1207,7 +1247,7 @@ describe("transactions CLI integration (subprocess)", () => {
       const cappedSummary = parseNDJSON(capped.stdout).find((o) => o.type === "summary");
       expect(cappedSummary).toMatchObject({ total: 3, returned: 1, has_more: true, limit: 1, offset: 0 });
 
-      // offset walks the stable (date DESC, id DESC) order to the tail; pages never overlap.
+      // offset walks the stable list order to the tail; pages never overlap.
       const pageOne = await runCLI([
         "transactions", "list", "--account", "thb:expense:pagination", "--limit", "2", "--json",
       ]);
@@ -1232,7 +1272,7 @@ describe("transactions CLI integration (subprocess)", () => {
   );
 });
 
-describe("transactions dedupe --auto-merge with unreadable context.md (subprocess)", () => {
+describe("transactions with unreadable context.md (subprocess)", () => {
   let sb: Sandbox;
   let run: CLIRunner;
 
@@ -1298,6 +1338,17 @@ describe("transactions dedupe --auto-merge with unreadable context.md (subproces
         auto_merged: 1,
       });
       expect(liveCount()).toBe(1);
+    },
+    45000,
+  );
+
+  it(
+    "list refuses bad input as USAGE (2) before the unreadable file's NOT_READY (3)",
+    async () => {
+      for (const args of [["--limit", "abc"], ["--amount", "5"]]) {
+        expect((await run(["transactions", "list", ...args, "--json"])).code, args.join(" ")).toBe(2);
+      }
+      expect((await run(["transactions", "list", "--json"])).code).toBe(3);
     },
     45000,
   );

@@ -104,13 +104,13 @@ export function ensureStructuralAccount(
   return id;
 }
 
-export interface Refusal<R extends string> {
+interface Refusal<R extends string> {
   readonly ok: false;
   readonly reason: R;
   readonly message: string;
 }
 
-export function refuse<R extends string>(reason: R, message: string): Refusal<R> {
+function refuse<R extends string>(reason: R, message: string): Refusal<R> {
   return { ok: false, reason, message };
 }
 

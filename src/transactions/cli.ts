@@ -16,6 +16,7 @@ import {
   clampListLimit,
   findTransactionById,
   validateTransaction,
+  validateTransactionMeta,
   voidTransactionAsMirror,
   type RecategorizeFailure,
   type TransactionInput,
@@ -42,7 +43,7 @@ import { currencyOf, newBatchId } from "../lib/ids.js";
 import { prepareRedaction } from "../privacy/redactor.js";
 import { todayISO } from "../lib/date.js";
 import * as z from "zod";
-import { parseInput, str, num } from "../lib/validate.js";
+import { parseInput, str, num, isoDate } from "../lib/validate.js";
 import type {
   TransactionView,
   TransactionClusterView,
@@ -111,7 +112,6 @@ function amountFilterCurrency(account?: string, currency?: string): string {
 
 async function listTransactions(ctx: Invocation, opts: ListTransactionsOpts): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
-  const redact = prepareRedaction(redactionEnabled(opts), config);
   const { currency, amount, ...filters } = parseInput(LIST_TRANSACTIONS_SPEC, opts);
   const listOpts: ListTransactionsOptions = {
     ...filters,
@@ -122,6 +122,7 @@ async function listTransactions(ctx: Invocation, opts: ListTransactionsOpts): Pr
         : toMinorUnits(amount, amountFilterCurrency(filters.account, currency)),
     includeVoid: opts.includeVoid,
   };
+  const redact = prepareRedaction(redactionEnabled(opts), config);
 
   const total = countTransactions(db, listOpts);
   const rows = redact(
@@ -276,7 +277,7 @@ const ADD_TRANSACTION_FLAGS_SPEC = z.object({
   debit_account_id: str(),
   credit_account_id: str(),
   amount: num(),
-  date: str().optional(),
+  date: isoDate().optional(),
   description: str().optional(),
 });
 
@@ -386,7 +387,7 @@ async function addTransaction(ctx: Invocation, opts: AddTransactionOpts): Promis
 }
 
 const UPDATE_TRANSACTION_SPEC = z.object({
-  date: str().optional(),
+  date: isoDate().optional(),
   description: str().optional(),
   merchant_id: str().optional(),
 });
@@ -402,6 +403,9 @@ async function updateTransaction(
     aliases: UPDATE_TRANSACTION_ALIASES,
     atLeastOne: "at least one of --date, --description, --merchant is required",
   });
+  // updateTransactionMeta throws on the same check; refused here so it reads as bad input.
+  const check = validateTransactionMeta(fields);
+  if (!check.ok) fail("INVALID", check.message);
   const { db } = await openLedger(ctx.configPath);
   const changes = updateTransactionMeta(db, id, fields);
   if (changes === 0) fail("NOT_FOUND", `transaction "${id}" not found`);

@@ -15,8 +15,8 @@ import {
 import { findAccountById, insertAccount } from "./queries.js";
 import { failingAccountInsert, freshDB, ledgerLockedAtTransaction } from "../../fixtures/db.js";
 import { createOutput, describeFailure } from "../cli/output.js";
-import { failReason, type FailureCode } from "../cli/errors.js";
 import { EXIT } from "../contract/exit.js";
+import { describeReasonTable } from "../../fixtures/reason-table.js";
 
 function jsonOutput(): { out: ReturnType<typeof createOutput>; lines: () => Record<string, unknown>[] } {
   const chunks: string[] = [];
@@ -159,59 +159,31 @@ describe("failAccountNotFound", () => {
   });
 });
 
-interface ReasonTable {
-  name: string;
-  table: Record<string, FailureCode>;
-  /** The exit code each reason's plain-Error message mapped to before it had a type. */
-  pinned: Record<string, number>;
-}
+describeReasonTable("ACCOUNT_FAILURE_EXIT", ACCOUNT_FAILURE_EXIT, {
+  account_exists: EXIT.INVALID,
+  parent_not_found: EXIT.NOT_FOUND,
+  invalid_hierarchy: EXIT.INVALID,
+});
 
-/** Pinned as data, not read off the tables: a re-pointed reason must fail here. */
-const REASON_TABLES: ReasonTable[] = [
-  {
-    name: "ACCOUNT_FAILURE_EXIT",
-    table: ACCOUNT_FAILURE_EXIT,
-    pinned: { account_exists: EXIT.INVALID, parent_not_found: EXIT.NOT_FOUND, invalid_hierarchy: EXIT.INVALID },
-  },
-  {
-    name: "MERGE_ACCOUNTS_EXIT",
-    table: MERGE_ACCOUNTS_EXIT,
-    pinned: {
-      same_account: EXIT.INVALID,
-      not_found: EXIT.NOT_FOUND,
-      cross_ledger: EXIT.INVALID,
-      has_children: EXIT.INVALID,
-    },
-  },
-  {
-    name: "DELETE_ACCOUNT_EXIT",
-    table: DELETE_ACCOUNT_EXIT,
-    pinned: { has_transactions: EXIT.INVALID, has_children: EXIT.INVALID },
-  },
-  {
-    name: "ADJUST_ACCOUNT_EXIT",
-    table: ADJUST_ACCOUNT_EXIT,
-    pinned: { not_found: EXIT.NOT_FOUND, balancing_account: EXIT.INVALID, invalid_transaction: EXIT.INVALID },
-  },
-  {
-    name: "UPDATE_ACCOUNT_EXIT",
-    table: UPDATE_ACCOUNT_EXIT,
-    pinned: { not_found: EXIT.NOT_FOUND, unreadable_metadata: EXIT.INVALID },
-  },
-];
+describeReasonTable("MERGE_ACCOUNTS_EXIT", MERGE_ACCOUNTS_EXIT, {
+  same_account: EXIT.INVALID,
+  not_found: EXIT.NOT_FOUND,
+  cross_ledger: EXIT.INVALID,
+  has_children: EXIT.INVALID,
+});
 
-describe.each(REASON_TABLES)("$name", ({ table, pinned }) => {
-  it.each(Object.entries(pinned))("%s exits %i", (reason, exitCode) => {
-    let thrown: { code: keyof typeof EXIT } | undefined;
-    try {
-      failReason(table, { reason, message: "refused" });
-    } catch (err) {
-      thrown = err as { code: keyof typeof EXIT };
-    }
-    expect(EXIT[thrown!.code]).toBe(exitCode);
-  });
+describeReasonTable("DELETE_ACCOUNT_EXIT", DELETE_ACCOUNT_EXIT, {
+  has_transactions: EXIT.INVALID,
+  has_children: EXIT.INVALID,
+});
 
-  it("assigns an exit code to every reason arm", () => {
-    expect(Object.keys(table).sort()).toEqual(Object.keys(pinned).sort());
-  });
+describeReasonTable("ADJUST_ACCOUNT_EXIT", ADJUST_ACCOUNT_EXIT, {
+  not_found: EXIT.NOT_FOUND,
+  balancing_account: EXIT.INVALID,
+  invalid_transaction: EXIT.INVALID,
+});
+
+describeReasonTable("UPDATE_ACCOUNT_EXIT", UPDATE_ACCOUNT_EXIT, {
+  not_found: EXIT.NOT_FOUND,
+  unreadable_metadata: EXIT.INVALID,
 });
