@@ -138,30 +138,30 @@ function requireContext(contextPath: string): string {
   );
 }
 
-/** Redacts a string value only when its key is in the per-command `fields`
- *  allowlist; returns a fresh structure, a no-op when `enabled` is false. */
-export function applyRedaction<T>(
-  data: T,
+/** Reads context.md once (when enabled); call it before any write so an unreadable file refuses before the ledger changes.
+ *  The returned function redacts a string value only when its key is in the per-command `fields`
+ *  allowlist and returns a fresh structure; it is the identity when `enabled` is false. */
+export function prepareRedaction(
   enabled: boolean,
-  fields: readonly string[],
   source: RedactionSource,
-): T {
-  if (!enabled) return data;
+): <T>(data: T, fields: readonly string[]) => T {
+  if (!enabled) return (data) => data;
   const redact = createRedactor(source.userName, requireContext(source.contextPath));
-  const allow = new Set(fields);
 
-  const walk = (value: unknown, key: string | undefined): unknown => {
-    if (typeof value === "string") {
-      return key !== undefined && allow.has(key) ? redact(value) : value;
-    }
-    if (Array.isArray(value)) {
-      return value.map((item) => walk(item, key));
-    }
-    if (value !== null && typeof value === "object") {
-      return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, walk(v, k)]));
-    }
-    return value;
+  return <T>(data: T, fields: readonly string[]): T => {
+    const allow = new Set(fields);
+    const walk = (value: unknown, key: string | undefined): unknown => {
+      if (typeof value === "string") {
+        return key !== undefined && allow.has(key) ? redact(value) : value;
+      }
+      if (Array.isArray(value)) {
+        return value.map((item) => walk(item, key));
+      }
+      if (value !== null && typeof value === "object") {
+        return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, walk(v, k)]));
+      }
+      return value;
+    };
+    return walk(data, undefined) as T;
   };
-
-  return walk(data, undefined) as T;
 }

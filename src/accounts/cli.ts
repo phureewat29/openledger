@@ -38,7 +38,7 @@ import { findAccountsByFuzzyName, type FuzzyAccountMatch } from "./matching.js";
 import { currencyOf, isLedgerScopedId } from "../lib/ids.js";
 import { formatFixed, fromMinorUnits, toDecimalTotals } from "../lib/money.js";
 import { ISO_DATE_RE, todayISO } from "../lib/date.js";
-import { applyRedaction } from "../privacy/redactor.js";
+import { prepareRedaction } from "../privacy/redactor.js";
 import * as z from "zod";
 import { parseInput, safeParse, str, num, int, bool, json } from "../lib/validate.js";
 import type { ExitCode } from "../contract/exit.js";
@@ -183,12 +183,8 @@ interface ListAccountsOpts {
 async function listAccounts(ctx: Invocation, opts: ListAccountsOpts): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
   const filter = parseInput(ACCOUNT_FILTER_SPEC, opts);
-  const rows = applyRedaction(
-    getAccountBalances(db, filter).map(presentAccount),
-    redactionEnabled(opts),
-    ACCOUNT_REDACT_FIELDS,
-    config,
-  );
+  const redact = prepareRedaction(redactionEnabled(opts), config);
+  const rows = redact(getAccountBalances(db, filter).map(presentAccount), ACCOUNT_REDACT_FIELDS);
   ctx.out.emitList(rows, ACCOUNT_COLUMNS);
   const summary: Omit<ListAccountsSummary, "type"> = { total: rows.length, returned: rows.length };
   ctx.out.emitSummary(summary);
@@ -197,12 +193,8 @@ async function listAccounts(ctx: Invocation, opts: ListAccountsOpts): Promise<vo
 async function showAccountTree(ctx: Invocation, opts: ListAccountsOpts): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
   const filter = parseInput(ACCOUNT_FILTER_SPEC, opts);
-  const roots = applyRedaction(
-    getBalanceTree(db, filter).map(presentTreeNode),
-    redactionEnabled(opts),
-    ACCOUNT_REDACT_FIELDS,
-    config,
-  );
+  const redact = prepareRedaction(redactionEnabled(opts), config);
+  const roots = redact(getBalanceTree(db, filter).map(presentTreeNode), ACCOUNT_REDACT_FIELDS);
   ctx.out.render({
     json: () => {
       // One object per root so every stdout line stays a single JSON object.
@@ -221,6 +213,7 @@ interface ShowAccountOpts {
 
 async function showAccount(ctx: Invocation, id: string, opts: ShowAccountOpts): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
+  const redact = prepareRedaction(redactionEnabled(opts), config);
   const balances = getAccountBalances(db, { idOrParent: id });
   const self = balances.find((b) => b.id === id);
   if (!self) failAccountNotFound(db, id);
@@ -231,7 +224,7 @@ async function showAccount(ctx: Invocation, id: string, opts: ShowAccountOpts): 
       .filter((b) => b.parent_id === id)
       .map((b) => ({ id: b.id, name: b.name, type: b.type, balance: b.balance })),
   };
-  ctx.out.emitObject(applyRedaction(detail, redactionEnabled(opts), ACCOUNT_REDACT_FIELDS, config));
+  ctx.out.emitObject(redact(detail, ACCOUNT_REDACT_FIELDS));
 }
 
 // A record, not any JSON: a scalar or array stored here would refuse every later metadata patch.

@@ -1,8 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "libsql";
+import { openDB } from "../db/connection.js";
+import { createAccount } from "../accounts/accounts.js";
+import { upsertMerchant } from "../merchants/queries.js";
+import { insertTransaction } from "./queries.js";
 import {
   createSandbox,
   writeConfig,
@@ -1225,5 +1229,76 @@ describe("transactions CLI integration (subprocess)", () => {
       expect(new Set([...oneIds, ...twoIds]).size).toBe(3);
     },
     90000,
+  );
+});
+
+describe("transactions dedupe --auto-merge with unreadable context.md (subprocess)", () => {
+  let sb: Sandbox;
+  let run: CLIRunner;
+
+  beforeAll(async () => {
+    sb = createSandbox("oled-dedupe-redact-it-");
+    run = makeRunCLI(sb);
+    writeConfig(sb, {});
+    const db = await openDB(sb.dbPath);
+    for (const [id, type, parent] of [
+      ["thb:expense", "expense", null],
+      ["thb:expense:food", "expense", "thb:expense"],
+      ["thb:asset", "asset", null],
+      ["thb:asset:cash", "asset", "thb:asset"],
+    ] as const) {
+      createAccount(db, { id, name: id, type, parent_id: parent });
+    }
+    const merchant = upsertMerchant(db, { canonical_name: "Starbucks" }, []);
+    for (const id of ["sf-1", "sf-2"]) {
+      db.prepare(
+        `INSERT INTO files (id, path, file_hash, mime, status)
+         VALUES (?, ?, ?, 'application/pdf', 'ingested')`,
+      ).run(id, `/${id}.pdf`, `hash-${id}`);
+      insertTransaction(db, {
+        date: "2026-05-01",
+        description: "Starbucks",
+        debit_account_id: "thb:expense:food",
+        credit_account_id: "thb:asset:cash",
+        amount: 15000,
+        source_file_id: id,
+        merchant_id: merchant.id,
+      });
+    }
+    db.close();
+    // A directory at the path is the portable stand-in for EACCES: it fails even as root.
+    mkdirSync(join(sb.oledDir, "context.md"));
+  });
+
+  afterAll(() => {
+    sb.cleanup();
+  });
+
+  const liveCount = (): number => {
+    const db = new Database(sb.dbPath);
+    try {
+      return (db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE void_of IS NULL").get() as { n: number }).n;
+    } finally {
+      db.close();
+    }
+  };
+
+  it(
+    "exits 3 before merging, leaving the ledger unchanged; --no-redact still merges",
+    async () => {
+      expect(liveCount()).toBe(2);
+
+      const refused = await run(["transactions", "dedupe", "--auto-merge", "--json"]);
+      expect(refused.code).toBe(3);
+      expect(liveCount()).toBe(2);
+
+      const merged = await run(["transactions", "dedupe", "--auto-merge", "--no-redact", "--json"]);
+      expect(merged.code).toBe(0);
+      expect(parseNDJSON(merged.stdout).find((o) => o.type === "summary")).toMatchObject({
+        auto_merged: 1,
+      });
+      expect(liveCount()).toBe(1);
+    },
+    45000,
   );
 });

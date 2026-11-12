@@ -32,7 +32,7 @@ import type {
 } from "../contract/merchants.js";
 import { requireAccount } from "../accounts/cli.js";
 import { noiseTokens } from "../datasets/datasets.js";
-import { applyRedaction } from "../privacy/redactor.js";
+import { prepareRedaction } from "../privacy/redactor.js";
 import * as z from "zod";
 import { parseInput, str, bool, int } from "../lib/validate.js";
 import { clampOffset } from "../lib/limit.js";
@@ -65,11 +65,10 @@ const LIST_MERCHANTS_SPEC = z.object({
 async function listMerchants(ctx: Invocation, opts: ListMerchantsOpts): Promise<void> {
   const parsed = parseInput(LIST_MERCHANTS_SPEC, opts);
   const { config, db } = await openLedger(ctx.configPath);
-  const rows = applyRedaction(
+  const redact = prepareRedaction(redactionEnabled(opts), config);
+  const rows = redact(
     queryMerchants(db, { limit: parsed.limit, offset: parsed.offset }),
-    redactionEnabled(opts),
     MERCHANT_REDACT_FIELDS,
-    config,
   );
   ctx.out.emitList(rows, MERCHANT_COLUMNS);
   ctx.out.emitSummary(

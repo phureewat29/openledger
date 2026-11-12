@@ -11,7 +11,7 @@ import { countNotes } from "../../notes/queries.js";
 import { countQuestions } from "../../questions/queries.js";
 import { countTransactions } from "../../transactions/queries.js";
 import { countNewFiles } from "../../files/files.js";
-import { applyRedaction } from "../../privacy/redactor.js";
+import { prepareRedaction } from "../../privacy/redactor.js";
 import { homeRelative } from "../../lib/path.js";
 import { formatAmount, toDecimalTotals } from "../../lib/money.js";
 import { banner, visibleLength, ANSI_RE, formatInt, flattenRows } from "../format.js";
@@ -99,12 +99,8 @@ interface ShowStatusOpts {
 export async function showStatus(ctx: Invocation, opts: ShowStatusOpts): Promise<void> {
   const loaded = inspectConfig(ctx.configPath, homedir());
   const ledger = await probeLedger(loaded.config.dbPath);
-  const report = applyRedaction(
-    buildReport(loaded, ledger),
-    redactionEnabled(opts),
-    STATUS_REDACT_FIELDS,
-    loaded.config,
-  );
+  const redact = prepareRedaction(redactionEnabled(opts), loaded.config);
+  const report = redact(buildReport(loaded, ledger), STATUS_REDACT_FIELDS);
   const { out } = ctx;
   out.render({
     json: () => out.emit(report),

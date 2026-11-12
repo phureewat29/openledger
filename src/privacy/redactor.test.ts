@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyRedaction, createRedactor, type RedactionSource } from "./redactor.js";
+import { createRedactor, prepareRedaction, type RedactionSource } from "./redactor.js";
 import { ContextUnreadableError } from "../db/errors.js";
 
 const CONTEXT = `## Family
@@ -74,10 +74,10 @@ describe("createRedactor (masking patterns)", () => {
   });
 });
 
-describe("applyRedaction (field allowlisting)", () => {
+describe("prepareRedaction (field allowlisting)", () => {
   it("is an identity no-op when disabled", () => {
     const data = { memo: "call 0812345678", account_id: "asset:kbank" };
-    expect(applyRedaction(data, false, ["memo"], SOURCE)).toBe(data);
+    expect(prepareRedaction(false, SOURCE)(data, ["memo"])).toBe(data);
   });
 
   it("redacts allowlisted string fields but leaves other fields verbatim", () => {
@@ -86,7 +86,7 @@ describe("applyRedaction (field allowlisting)", () => {
       memo: "refund to 0812345678",
       currency: "THB",
     };
-    const out = applyRedaction(row, true, ["memo"], SOURCE);
+    const out = prepareRedaction(true, SOURCE)(row, ["memo"]);
     expect(out.memo).toBe("refund to [PHONE]");
     // ids/enums must survive untouched even when they contain digits.
     expect(out.account_id).toBe("asset:0812345678");
@@ -102,7 +102,7 @@ describe("applyRedaction (field allowlisting)", () => {
         { id: "e:3", account_id: "expense:food", memo: null },
       ],
     };
-    const out = applyRedaction(detail, true, ["description", "memo"], SOURCE);
+    const out = prepareRedaction(true, SOURCE)(detail, ["description", "memo"]);
     expect(out.description).toBe("salary [NATID]");
     expect(out.entries[0].memo).toBe("card [CARD]");
     expect(out.entries[0].account_id).toBe("asset:kbank");
@@ -112,28 +112,28 @@ describe("applyRedaction (field allowlisting)", () => {
 
   it("does not mutate the input", () => {
     const row = { memo: "0812345678" };
-    const out = applyRedaction(row, true, ["memo"], SOURCE);
+    const out = prepareRedaction(true, SOURCE)(row, ["memo"]);
     expect(row.memo).toBe("0812345678");
     expect(out.memo).toBe("[PHONE]");
   });
 
   it("redacts the user's name with no context.md at all", () => {
-    expect(applyRedaction({ text: "Alpaca Beagle" }, true, ["text"], SOURCE).text).toBe("[USER]");
+    expect(prepareRedaction(true, SOURCE)({ text: "Alpaca Beagle" }, ["text"]).text).toBe("[USER]");
   });
 });
 
-describe("applyRedaction (fail closed)", () => {
+describe("prepareRedaction (fail closed)", () => {
   // A directory at the path is the portable stand-in for EACCES: it fails even as root.
   const unreadable: RedactionSource = { userName: "Alpaca Beagle", contextPath: HERE };
 
   it("refuses to run when context.md exists but cannot be read, with a type the exit contract maps", () => {
-    const run = () => applyRedaction({ text: "Corgi" }, true, ["text"], unreadable);
+    const run = () => prepareRedaction(true, unreadable)({ text: "Corgi" }, ["text"]);
     expect(run).toThrow(ContextUnreadableError);
     expect(run).toThrow(/cannot read .*so redaction cannot run$/);
   });
 
   it("never reads context.md when redaction is off", () => {
     const data = { text: "Corgi" };
-    expect(applyRedaction(data, false, ["text"], unreadable)).toBe(data);
+    expect(prepareRedaction(false, unreadable)(data, ["text"])).toBe(data);
   });
 });

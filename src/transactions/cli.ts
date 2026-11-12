@@ -39,7 +39,7 @@ import { requireAccount } from "../accounts/cli.js";
 import { formatFixed, fromMinorUnits, toMinorUnits } from "../lib/money.js";
 import { clampOffset } from "../lib/limit.js";
 import { currencyOf, newBatchId } from "../lib/ids.js";
-import { applyRedaction } from "../privacy/redactor.js";
+import { prepareRedaction } from "../privacy/redactor.js";
 import { todayISO } from "../lib/date.js";
 import * as z from "zod";
 import { parseInput, str, num } from "../lib/validate.js";
@@ -111,6 +111,7 @@ function amountFilterCurrency(account?: string, currency?: string): string {
 
 async function listTransactions(ctx: Invocation, opts: ListTransactionsOpts): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
+  const redact = prepareRedaction(redactionEnabled(opts), config);
   const { currency, amount, ...filters } = parseInput(LIST_TRANSACTIONS_SPEC, opts);
   const listOpts: ListTransactionsOptions = {
     ...filters,
@@ -123,11 +124,9 @@ async function listTransactions(ctx: Invocation, opts: ListTransactionsOpts): Pr
   };
 
   const total = countTransactions(db, listOpts);
-  const rows = applyRedaction(
+  const rows = redact(
     queryTransactions(db, listOpts).map(presentTransaction),
-    redactionEnabled(opts),
     TRANSACTION_REDACT_FIELDS,
-    config,
   );
   // Offset pages rows before clustering, so a group can straddle a page, same as the limit.
   if (opts.group) emitClusters(ctx.out, clusterByGroup(rows));
@@ -174,6 +173,7 @@ async function showTransaction(
   opts: { redact?: boolean },
 ): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
+  const redact = prepareRedaction(redactionEnabled(opts), config);
   const detail = findTransactionById(db, id);
   if (!detail) fail("NOT_FOUND", `transaction "${id}" not found`);
 
@@ -181,9 +181,7 @@ async function showTransaction(
     ...presentTransaction(detail),
     ...(detail.group && { group: detail.group.map(presentTransaction) }),
   };
-  ctx.out.emitObject(
-    applyRedaction(view, redactionEnabled(opts), TRANSACTION_REDACT_FIELDS, config),
-  );
+  ctx.out.emitObject(redact(view, TRANSACTION_REDACT_FIELDS));
 }
 
 const DUPLICATE_COLUMNS: Column<TransactionDuplicateRow>[] = [
@@ -212,15 +210,14 @@ const DEDUPE_HINT =
 
 async function dedupeTransactions(ctx: Invocation, opts: DedupeTransactionsOpts): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
+  const redact = prepareRedaction(redactionEnabled(opts), config);
   const autoMerged = opts.autoMerge ? autoMergeStrictDuplicateTransactions(db).merged : undefined;
   const groups = findDuplicateTransactions(db);
-  const rows: TransactionDuplicateRow[] = applyRedaction(
+  const rows: TransactionDuplicateRow[] = redact(
     groups.flatMap((group, i) =>
       group.map((t) => ({ ...t, amount: fromMinorUnits(t.amount, t.currency), group: i })),
     ),
-    redactionEnabled(opts),
     TRANSACTION_REDACT_FIELDS,
-    config,
   );
 
   ctx.out.emitList<TransactionDuplicateRow>(rows, DUPLICATE_COLUMNS);

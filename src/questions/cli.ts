@@ -9,7 +9,7 @@ import {
   findQuestionById,
   type QuestionRow,
 } from "./queries.js";
-import { applyRedaction } from "../privacy/redactor.js";
+import { prepareRedaction } from "../privacy/redactor.js";
 import { cappedSummary, runAction, type Invocation } from "../cli/output.js";
 import type { Column } from "../cli/format.js";
 import { fail } from "../cli/errors.js";
@@ -81,15 +81,11 @@ const LIST_QUESTIONS_SPEC = z.object({
 async function listQuestions(ctx: Invocation, opts: ListQuestionsOpts): Promise<void> {
   const parsed = parseInput(LIST_QUESTIONS_SPEC, opts);
   const { config, db } = await openLedger(ctx.configPath);
+  const redact = prepareRedaction(redactionEnabled(opts), config);
   // One filter object for both queries, so `total` counts what the list filtered.
   const filter = { batch_id: parsed.batch, includeDeferred: !!opts.includeDeferred };
   const rows = queryQuestions(db, { ...filter, limit: parsed.limit, offset: parsed.offset });
-  const listRows = applyRedaction(
-    rows.map(toListRow),
-    redactionEnabled(opts),
-    QUESTION_REDACT_FIELDS,
-    config,
-  );
+  const listRows = redact(rows.map(toListRow), QUESTION_REDACT_FIELDS);
   ctx.out.emitList(listRows, LIST_COLUMNS);
   const total = countQuestions(db, filter);
   ctx.out.emitSummary(

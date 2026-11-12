@@ -6,7 +6,7 @@ import {
   type NoteRow,
 } from "./queries.js";
 import { NOTE_CATEGORIES } from "../contract/enums.js";
-import { applyRedaction } from "../privacy/redactor.js";
+import { prepareRedaction } from "../privacy/redactor.js";
 import { runAction, type Invocation } from "../cli/output.js";
 import type { Column } from "../cli/format.js";
 import { fail } from "../cli/errors.js";
@@ -36,12 +36,8 @@ interface ListNotesOpts {
 
 async function listNotes(ctx: Invocation, opts: ListNotesOpts): Promise<void> {
   const { config, db } = await openLedger(ctx.configPath);
-  const rows = applyRedaction(
-    queryNotes(db),
-    redactionEnabled(opts),
-    NOTE_REDACT_FIELDS,
-    config,
-  );
+  const redact = prepareRedaction(redactionEnabled(opts), config);
+  const rows = redact(queryNotes(db), NOTE_REDACT_FIELDS);
   ctx.out.emitList(rows, NOTE_COLUMNS);
   const summary: Omit<NotesListSummary, "type"> = { total: rows.length, returned: rows.length };
   ctx.out.emitSummary(summary);
