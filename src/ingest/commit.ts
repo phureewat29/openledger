@@ -1,5 +1,5 @@
 import type Database from "libsql";
-import { sumBy } from "es-toolkit";
+import { sum, sumBy } from "es-toolkit";
 import {
   shouldPlaceAccount,
   isUncategorizedId,
@@ -179,9 +179,6 @@ type RowRefusal =
     }
   | UnopenedLedgerRefusal;
 
-/** Once refusals are past, only the row's own accounts can still fail it. */
-type ResolveResult = { ok: true; prepared: PreparedTransaction } | DirtyInput;
-
 function validateRawTransaction(input: RawTransactionInput): ValidateTransactionResult {
   const fields = validateTransactionFields(input);
   if (!fields.ok) return fields;
@@ -345,14 +342,14 @@ function refuseRow(db: Database.Database, input: RawTransactionInput): RowRefusa
   return null;
 }
 
-/** Resolution writes (placeholder accounts, ledger structure) can't be taken
- *  back by a later refusal, so `refuseRow` must have cleared this row (and,
- *  in a group, every other leg) before this runs. */
+/** Resolution writes (placeholder accounts, ledger structure), so `refuseRow` must
+ *  have cleared this row (and, in a group, every other leg) first. Its backstops
+ *  throw, so the row's transaction rolls those writes back. */
 function resolveRow(
   db: Database.Database,
   ctx: TransactionCommitContext,
   input: RawTransactionInput,
-): ResolveResult {
+): PreparedTransaction {
   const resolved = resolveTransactionAccounts(
     db,
     input.debit_account_id,
@@ -361,7 +358,7 @@ function resolveRow(
   // Backstop only: `refuseRow` proved one side placeable, so both sides coming
   // back unplaced means creating that path was refused after it validated.
   if (!resolved) {
-    return dirtyInput("creating the account path was refused, so neither side could be placed.");
+    throw new Error("creating the account path was refused, so neither side could be placed.");
   }
   const { debit, credit } = resolved;
 
@@ -399,12 +396,9 @@ function resolveRow(
   // Backstop only: `refuseRow` decides every one of these before resolution
   // writes, so reaching a refusal here means the two have drifted apart.
   const v = validateTransaction(built);
-  if (!v.ok) return dirtyInput(v.message);
+  if (!v.ok) throw new Error(v.message);
 
-  return {
-    ok: true,
-    prepared: { input: built, sides: [debit, credit], merchant, currencyOverridden, raw: input },
-  };
+  return { input: built, sides: [debit, credit], merchant, currencyOverridden, raw: input };
 }
 
 interface HintDispatchArgs {
@@ -589,10 +583,7 @@ function commitOneRow(
   const refused = refuseRow(db, input);
   if (refused) return reportRefusal(db, ctx, refused, input);
 
-  const prep = resolveRow(db, ctx, input);
-  if (!prep.ok) return reportRefusal(db, ctx, prep, input);
-  const prepared = prep.prepared;
-
+  const prepared = resolveRow(db, ctx, input);
   const { id, duplicate } = insertTransaction(db, prepared.input);
   if (duplicate) {
     const stored = reportStoredRow(db, id, prepared);
@@ -702,12 +693,7 @@ function commitLinkedRow(
     if (refused) return reportRefusal(db, ctx, refused, raw);
   }
 
-  const preps: PreparedTransaction[] = [];
-  for (const raw of merged) {
-    const prep = resolveRow(db, ctx, raw);
-    if (!prep.ok) return reportRefusal(db, ctx, prep, raw);
-    preps.push(prep.prepared);
-  }
+  const preps = merged.map((raw) => resolveRow(db, ctx, raw));
 
   // The upsert inside `insertTransaction` is keyed on canonical_name, so every
   // leg's copy of the header merchant claims one id, inside this transaction.
@@ -725,7 +711,7 @@ function commitLinkedRow(
 
   const merchantRaised =
     posted === -1 ? 0 : raiseMerchantQuestion(db, ctx, preps[anchor], results[anchor].id);
-  const legsRaised = sumBy(results, (r, i) =>
+  const legsRaised = results.map((r, i) =>
     r.duplicate ? 0 : applyTransactionHints(db, ctx, r.id, preps[i]).raisedQuestions,
   );
   const merchant = committedMerchant(
@@ -736,7 +722,7 @@ function commitLinkedRow(
     ok: true,
     group_id: groupId,
     results,
-    raisedQuestions: merchantRaised + legsRaised,
+    raisedQuestions: merchantRaised + sum(legsRaised),
     currencyOverridden: preps.some((p) => p.currencyOverridden),
     merchant,
   };

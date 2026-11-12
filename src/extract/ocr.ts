@@ -40,7 +40,7 @@ export function resolveOCR(source: OCRConfigSource): OCRSettings | null {
   if (!baseURL) return null;
 
   const configured = source.ocrModel.trim();
-  const { card } = modelCardFor(configured);
+  const card = modelCardFor(configured);
 
   return {
     baseURL,
@@ -207,5 +207,5 @@ export async function resolveServedModel(settings: OCRSettings): Promise<OCRSett
   if (!served.ok) return settings;
   const match = pickServedModel(settings.model, served.value);
   if (!match || match === settings.model) return settings;
-  return { ...settings, model: match, ...cardSettings(modelCardFor(match).card) };
+  return { ...settings, model: match, ...cardSettings(modelCardFor(match)) };
 }

@@ -1,7 +1,7 @@
 /**
  * Generic loader for the shipped reference datasets: one `<cc>.json` per
  * country under `datasets/`. Adding a country is a new file, not a code
- * change; dataset-specific shape lives in the per-dataset modules.
+ * change; dataset-specific shape lives in datasets.ts.
  */
 
 import * as z from "zod";
@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 const DATASETS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../datasets");
 
 /** A flattened dataset row, always tagged with the (uppercased) country it loaded from. */
-export type DatasetRow = Record<string, unknown> & { country: string };
+export type DatasetRow = Readonly<Record<string, unknown> & { country: string }>;
 
 // `flatten` returns base rows (the loader adds `country`); unknown sibling
 // keys in `<cc>.json` are ignored.

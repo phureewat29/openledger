@@ -85,16 +85,15 @@ export function resolveEntryPath(
 /** Retries absorb the transient EBUSY/EPERM thrown while a Windows scanner briefly holds a fresh artifact. */
 export const RM_OPTS = { recursive: true, force: true, maxRetries: 3 } as const;
 
-function isCacheEntry(rel: string): boolean {
-  return rel !== "" && rel !== ".." && !rel.includes(sep) && !isAbsolute(rel);
-}
+// The shape `newFileId` mints: one plain path segment, so it resolves to exactly `<cacheDir>/<id>`.
+const FILE_ID_RE = /^sf-[A-Za-z0-9-]+$/;
 
-/** Throws unless `fileId` names exactly one directory inside `cacheDir`: the delete is recursive. */
+/** Throws unless `fileId` is a file id, naming exactly one directory inside `cacheDir`: the delete is recursive. */
 export function cleanCache(cacheDir: string, fileId: string): { removed: string[] } {
-  const dir = resolve(cacheDir, fileId);
-  if (!isCacheEntry(relative(cacheDir, dir))) {
-    throw new Error(`refusing to clean "${fileId}": not a single entry inside the cache dir`);
+  if (!FILE_ID_RE.test(fileId)) {
+    throw new Error(`refusing to clean "${fileId}": not a file id, so not a single entry inside the cache dir`);
   }
+  const dir = resolve(cacheDir, fileId);
   if (!existsSync(dir)) return { removed: [] };
   rmSync(dir, RM_OPTS);
   return { removed: [dir] };

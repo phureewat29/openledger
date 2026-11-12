@@ -171,11 +171,13 @@ describe("cleanCache", () => {
     // Nested, so a broken guard could only ever reach this test's own temp dirs.
     const cache = resolve(cacheDir, "cache");
     mkdirSync(resolve(cache, "sf-1", "nested"), { recursive: true });
+    mkdirSync(resolve(cache, "sf-2"));
 
-    for (const id of ["..", ".", "", "sf-1/nested", "sf-1/../..", outsideDir]) {
+    for (const id of ["..", ".", "", "sf-1/nested", "sf-1/../..", "sf-1/../sf-2", outsideDir]) {
       expect(() => cleanCache(cache, id), id).toThrow(/refusing to clean/);
     }
     expect(existsSync(resolve(cache, "sf-1", "nested"))).toBe(true);
+    expect(existsSync(resolve(cache, "sf-2"))).toBe(true);
     expect(existsSync(outsideDir)).toBe(true);
   });
 });

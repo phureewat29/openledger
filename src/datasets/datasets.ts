@@ -22,8 +22,6 @@ export const institutionsDataset: DatasetDefinition<z.infer<typeof institutionsF
   kinds: INSTITUTION_KINDS,
 };
 
-// Locale + currency read from the top level of `datasets/<cc>.json`.
-
 const countryDefaultsSchema = z.object({
   country: z.string(),
   locale: z.string(),
@@ -39,12 +37,12 @@ const defaultsDataset: DatasetDefinition<CountryDefaults> = {
   sortKey: (row) => row.country,
 };
 
-function all(): readonly CountryDefaults[] {
-  return loadDatasetRows(defaultsDataset) as unknown as readonly CountryDefaults[];
+function all(): readonly Readonly<CountryDefaults>[] {
+  return loadDatasetRows(defaultsDataset) as unknown as readonly Readonly<CountryDefaults>[];
 }
 
 /** Case-insensitive lookup; null when the country has no defaults. */
-export function findCountryDefaults(country: string): CountryDefaults | null {
+export function findCountryDefaults(country: string): Readonly<CountryDefaults> | null {
   const cc = country.toUpperCase();
   return all().find((r) => r.country === cc) ?? null;
 }

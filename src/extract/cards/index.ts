@@ -30,8 +30,6 @@ const MODEL_CARDS: Record<ModelCardName, ModelCard> = {
   fallback: fallbackModelCard,
 };
 
-const MODEL_CARD_NAMES = Object.keys(MODEL_CARDS) as ModelCardName[];
-
 /** Supplies the model when none is configured. */
 const DEFAULT_MODEL_CARD: ModelCardName = "typhoon";
 
@@ -42,9 +40,10 @@ export const DEFAULT_MODEL_ID = MODEL_CARDS[DEFAULT_MODEL_CARD].model;
 const FALLBACK_MODEL_CARD: ModelCardName = "fallback";
 
 /** An empty id reads with the default model card and its own model; an id no family claims is sent as-is with the fallback card. */
-export function modelCardFor(modelId: string): { name: ModelCardName; card: ModelCard } {
-  if (!modelId) return { name: DEFAULT_MODEL_CARD, card: MODEL_CARDS[DEFAULT_MODEL_CARD] };
-  const name =
-    MODEL_CARD_NAMES.find((key) => MODEL_CARDS[key].family.test(modelId)) ?? FALLBACK_MODEL_CARD;
-  return { name, card: MODEL_CARDS[name] };
+export function modelCardFor(modelId: string): ModelCard {
+  if (!modelId) return MODEL_CARDS[DEFAULT_MODEL_CARD];
+  return (
+    Object.values(MODEL_CARDS).find((card) => card.family.test(modelId)) ??
+    MODEL_CARDS[FALLBACK_MODEL_CARD]
+  );
 }

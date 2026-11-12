@@ -92,7 +92,7 @@ describe("resolveOCR", () => {
   });
 
   it("selects the typhoon card from its own model id", () => {
-    expect(modelCardFor(TYPHOON.model).card).toBe(TYPHOON);
+    expect(modelCardFor(TYPHOON.model)).toBe(TYPHOON);
   });
 });
 
@@ -201,7 +201,7 @@ describe.skipIf(!liveOCR)("ocrPages and probeOCREndpoint (live OCR endpoint)", (
       const servedId = served.value[0];
 
       const resolved = await resolveServedModel({ ...live, model: servedId.slice(0, -1) });
-      const { card } = modelCardFor(servedId);
+      const card = modelCardFor(servedId);
       expect(resolved).toMatchObject({
         model: servedId,
         prompt: card.prompt,

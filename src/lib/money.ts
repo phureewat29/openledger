@@ -12,10 +12,10 @@ const exponentOf = memoize((code: string): number =>
     tryExecute(
       () =>
         new Intl.NumberFormat("en", { style: "currency", currency: code }).resolvedOptions()
-          .maximumFractionDigits,
+          .maximumFractionDigits ?? 2,
     ),
-    undefined,
-  ) ?? 2,
+    2,
+  ),
 );
 
 /** Resolved via Intl and memoized; falls back to 2 on an unresolvable (or empty/garbage) code. */
