@@ -8,6 +8,7 @@ function fail(reason: string): never {
 }
 
 // argv arrays, not a shell string, so a version argument can never become a command.
+// POSIX only: Windows ships npm as npm.cmd, which Node spawns only through a shell.
 function run(file: string, args: string[]): void {
   execFileSync(file, args, { stdio: "inherit" });
 }
