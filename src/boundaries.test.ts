@@ -27,7 +27,8 @@ function violations(files: SourceFile[], isViolation: Rule): string[] {
 }
 
 // `.exec(` on a regex is not SQL: a regex literal or a `*RE` constant is the receiver.
-const SQL_CALL_RE = /(\w+|\/[a-z]*)\.(prepare|exec|pragma)\(/g;
+// `\s*` before the dot: chained calls put the receiver on the line above (`db\n  .prepare(`).
+const SQL_CALL_RE = /(\w+|\/[a-z]*)\s*\.(prepare|exec|pragma)\(/g;
 
 function sqlCalls(text: string): string[] {
   return [...text.matchAll(SQL_CALL_RE)]

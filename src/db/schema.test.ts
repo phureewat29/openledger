@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import Database from "libsql";
-import { mkdtempSync, rmSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { migrate, applyMigrations, listMissingTables } from "./schema.js";
@@ -595,6 +595,20 @@ describe("version-1 databases are rebaselined, not adopted", () => {
       ).toEqual(["assets-kbank", "expenses-food"]);
       expect(rowCount(saved, "settings")).toBe(1);
       saved.close();
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("writes the backup owner-only (0600): it is a full copy of the ledger", () => {
+    withTempDir((dir) => {
+      const dbPath = join(dir, "db.sqlite");
+      const db = oldShapeDB(dbPath);
+      // copyFileSync carries the source's mode over, so this proves the backup is tightened, not inherited.
+      chmodSync(dbPath, 0o644);
+
+      migrate(db, dbPath);
+      db.close();
+
+      expect(statSync(join(dir, backups(dir)[0])).mode & 0o777).toBe(0o600);
     });
   });
 
