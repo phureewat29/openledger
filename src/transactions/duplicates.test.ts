@@ -42,6 +42,26 @@ function seedAccountsAndFile(db: Database.Database): void {
   }
 }
 
+/** `edit` commits just before `db` opens its first write transaction, as another process's could. */
+function editedAtFirstLock(db: Database.Database, edit: () => void): Database.Database {
+  let fired = false;
+  return new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === "exec") {
+        return (sql: string) => {
+          if (sql === "BEGIN IMMEDIATE" && !fired) {
+            fired = true;
+            edit();
+          }
+          return target.exec(sql);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Database.Database;
+}
+
 function tf(over: Partial<TransactionInput>): TransactionInput {
   return {
     date: "2026-05-01",
@@ -174,6 +194,33 @@ describe("autoMergeStrictDuplicateTransactions", () => {
 
     // Re-running finds nothing left to merge: the live set is down to one row.
     expect(autoMergeStrictDuplicateTransactions(db)).toEqual({ merged: 0 });
+  });
+
+  it("reads candidates under its own lock: an edit that commits as it opens keeps a real purchase live", () => {
+    const starbucks = upsertMerchant(db, { canonical_name: "Starbucks" }, []);
+    const other = upsertMerchant(db, { canonical_name: "Other" }, []);
+    insertTransaction(db, tf({ id: "tx:head", merchant_id: starbucks.id, source_file_id: "sf-1" }));
+    insertTransaction(db, tf({ id: "tx:real", merchant_id: starbucks.id, source_file_id: "sf-2" }));
+    const raced = editedAtFirstLock(db, () =>
+      db.prepare(`UPDATE transactions SET merchant_id = ? WHERE id = 'tx:real'`).run(other.id),
+    );
+
+    expect(autoMergeStrictDuplicateTransactions(raced)).toEqual({ merged: 0 });
+    expect(findTransactionById(db, "tx:real")!.void_of).toBeNull();
+  });
+
+  it("voids all of a run or none: a failure on a later void rolls back the earlier ones", () => {
+    const merchant = upsertMerchant(db, { canonical_name: "Starbucks" }, []);
+    for (const [id, source_file_id] of [["tx:a", "sf-1"], ["tx:b", "sf-2"], ["tx:c", "sf-3"]]) {
+      insertTransaction(db, tf({ id, merchant_id: merchant.id, source_file_id }));
+    }
+    db.exec(
+      `CREATE TRIGGER fail_void BEFORE UPDATE OF void_of ON transactions WHEN NEW.id = 'tx:c'
+       BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`,
+    );
+
+    expect(() => autoMergeStrictDuplicateTransactions(db)).toThrow("disk I/O error");
+    expect(countTransactions(db)).toBe(3);
   });
 
   it("never merges repeat postings on an equity:adjustments account: those are corrections, not duplicated statement rows", () => {

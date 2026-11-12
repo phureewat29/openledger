@@ -1,5 +1,6 @@
 import type Database from "libsql";
 import { groupBy, range, sortBy, sumBy } from "es-toolkit";
+import { inTransaction } from "../db/transaction.js";
 import {
   listDuplicateCandidateTransactions,
   voidTransactionAsMirror,
@@ -68,12 +69,16 @@ export function findDuplicateTransactions(db: Database.Database): DuplicateTrans
   return clusterDuplicateCandidates(listDuplicateCandidateTransactions(db));
 }
 
-/** Voids cross-statement mirrors into the earliest transaction, never deletes:
- *  a delete's `void_of` self-FK (ON DELETE SET NULL) would un-void an
- *  already-voided mirror. */
+/**
+ * Voids cross-statement mirrors into the earliest transaction, never deletes:
+ * a delete's `void_of` self-FK (ON DELETE SET NULL) would un-void an
+ * already-voided mirror. Candidates are read under the voids' own lock, so the
+ * strict rule still holds for every row it voids.
+ */
 export function autoMergeStrictDuplicateTransactions(db: Database.Database): { merged: number } {
-  const merged = sumBy(findDuplicateTransactions(db), (group) => autoMergeStrictGroup(db, group));
-  return { merged };
+  return inTransaction(db, () => ({
+    merged: sumBy(findDuplicateTransactions(db), (group) => autoMergeStrictGroup(db, group)),
+  }));
 }
 
 /** One cluster: how many of its rows were voided into the earliest. */
