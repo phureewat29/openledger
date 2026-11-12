@@ -2,9 +2,10 @@
 
 import { execFile, type ExecFileException } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export interface Sandbox {
   root: string;
@@ -90,9 +91,12 @@ export type CLIRunner = (args: string[], opts?: RunCLIOpts) => Promise<CLIResult
 /** `"src"` transpiles the TypeScript entry per spawn; `"dist"` runs the built artifact (needs a prior build; the e2e suite's globalSetup owns that). */
 type CLITarget = "src" | "dist";
 
+// Resolved from this repo, not the spawn cwd: outside the repo `npx tsx` may fetch a copy and warn on stderr.
+const TSX_LOADER = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+
 const CLI_COMMAND: Record<CLITarget, { file: string; argv: string[] }> = {
   // Absolute entry path so a caller can override cwd without breaking tsx's entrypoint lookup.
-  src: { file: "npx", argv: ["tsx", cliEntry] },
+  src: { file: process.execPath, argv: ["--import", TSX_LOADER, cliEntry] },
   dist: { file: process.execPath, argv: [distEntry] },
 };
 
