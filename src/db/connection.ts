@@ -1,5 +1,5 @@
 import type Database from "libsql";
-import { DBBusyError, DBNotReadyError, isBusyError, sqliteErrorCode } from "./errors.js";
+import { DBBusyError, DBNotReadyError, isBusyError, isDamagedDBError, sqliteErrorCode } from "./errors.js";
 import { migrate } from "./schema.js";
 import { dirname } from "path";
 import { mkdirSync } from "fs";
@@ -11,8 +11,6 @@ const BUSY_TIMEOUT_MS = 5000;
 
 // Codes libsql reports when the volume or its permissions block the write, not contention.
 const NOT_WRITABLE_CODES = new Set(["SQLITE_READONLY", "SQLITE_PERM", "SQLITE_CANTOPEN"]);
-// SQLITE_CORRUPT is folded in on the chance it ever surfaces here too, per prior behavior.
-const NOT_A_DATABASE_CODES = new Set(["SQLITE_NOTADB", "SQLITE_CORRUPT"]);
 
 // libsql loads lazily here so its native binding stays off the startup path of commands that never open the ledger.
 export async function openDB(dbPath: string): Promise<Database.Database> {
@@ -81,7 +79,7 @@ function openFailureError(err: unknown, dbPath: string): DBNotReadyError {
       { cause: err },
     );
   }
-  if (NOT_A_DATABASE_CODES.has(code)) {
+  if (isDamagedDBError(err)) {
     return new DBNotReadyError(
       `Failed to open database. ${dbPath} is not a database OpenLedger can read. ` +
         "Move it aside (keep a backup) and re-run to start a fresh one.",

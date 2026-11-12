@@ -33,3 +33,10 @@ export function sqliteErrorCode(err: unknown): string {
 export function isBusyError(err: unknown): boolean {
   return sqliteErrorCode(err).startsWith("SQLITE_BUSY");
 }
+
+const DAMAGED_DB_CODES = ["SQLITE_NOTADB", "SQLITE_CORRUPT"];
+
+/** The file is not a database SQLite can read: damaged pages, or not SQLite at all. */
+export function isDamagedDBError(err: unknown): boolean {
+  return DAMAGED_DB_CODES.includes(sqliteErrorCode(err));
+}
