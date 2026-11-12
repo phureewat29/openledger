@@ -104,6 +104,12 @@ export function ensureStructuralAccount(
   return id;
 }
 
+/** Every structural account of one ledger, opening the ledger's roots they hang from. */
+export function ensureStructuralAccounts(db: Database.Database, currency: string): string[] {
+  const kinds = Object.keys(STRUCTURAL_ACCOUNTS) as StructuralKind[];
+  return inTransaction(db, () => kinds.map((kind) => ensureStructuralAccount(db, currency, kind)));
+}
+
 interface Refusal<R extends string> {
   readonly ok: false;
   readonly reason: R;

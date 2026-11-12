@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { homedir } from "os";
 import { runAction, type Invocation } from "../cli/output.js";
 import { fail } from "../cli/errors.js";
 import { DEFAULT_SKILLS_DIR, installSkill, skillMd } from "./install.js";
@@ -26,7 +25,7 @@ function setupSkill(ctx: Invocation, opts: SetupSkillOpts): void {
     });
   }
 
-  const installed = installSkill(opts, { cwd: process.cwd(), home: homedir() });
+  const installed = installSkill(opts, ctx.roots);
   if (!installed.ok) {
     fail("INVALID", installed.message, {
       hint: "re-run with --force to overwrite the installed skill pack",
@@ -38,7 +37,7 @@ function setupSkill(ctx: Invocation, opts: SetupSkillOpts): void {
     });
   }
 
-  if (ctx.out.mode.json) {
+  if (ctx.out.mode.kind === "json") {
     const result: SetupInstallResult = {
       installed: [{ path: installed.path, version: installed.version }],
     };

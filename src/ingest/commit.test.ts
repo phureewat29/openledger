@@ -11,8 +11,8 @@ import {
   commitTransaction,
   commitLinkedTransactions,
   type TransactionCommitContext,
-  type RawTransactionInput,
 } from "./commit.js";
+import type { RawTransactionInput } from "./refuse.js";
 import { noiseTokens } from "../datasets/datasets.js";
 import { failingAccountInsert, failingStatement, freshDB } from "../../fixtures/db.js";
 

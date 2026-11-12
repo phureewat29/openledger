@@ -49,18 +49,17 @@ interface ListDatasetsOpts {
   kind?: string;
 }
 
-function listDatasets(ctx: Invocation, name: string | undefined, opts: ListDatasetsOpts): void {
-  if (name === undefined) {
-    if (opts.country || opts.kind) {
-      fail("USAGE", "--country/--kind need a dataset name (e.g. `oled datasets institutions --country th`)");
-    }
-    const sets = queryDatasets();
-    ctx.out.emitList(sets, DATASET_COLUMNS);
-    const summary: Omit<DatasetsListSummary, "type"> = { returned: sets.length };
-    ctx.out.emitSummary(summary);
-    return;
+function listAllDatasets(ctx: Invocation, opts: ListDatasetsOpts): void {
+  if (opts.country || opts.kind) {
+    fail("USAGE", "--country/--kind need a dataset name (e.g. `oled datasets institutions --country th`)");
   }
+  const sets = queryDatasets();
+  ctx.out.emitList(sets, DATASET_COLUMNS);
+  const summary: Omit<DatasetsListSummary, "type"> = { returned: sets.length };
+  ctx.out.emitSummary(summary);
+}
 
+function showDataset(ctx: Invocation, name: string, opts: ListDatasetsOpts): void {
   if (!isDatasetName(name)) {
     fail("NOT_FOUND", `unknown dataset "${name}"`, {
       hint: `known datasets: ${listDatasetNames().join(", ")}`,
@@ -73,6 +72,10 @@ function listDatasets(ctx: Invocation, name: string | undefined, opts: ListDatas
   ctx.out.emitList(rows, COLUMNS_BY_DATASET[name]);
   const summary: Omit<DatasetsListSummary, "type"> = { returned: rows.length };
   ctx.out.emitSummary(summary);
+}
+
+function listDatasets(ctx: Invocation, name: string | undefined, opts: ListDatasetsOpts): void {
+  return name === undefined ? listAllDatasets(ctx, opts) : showDataset(ctx, name, opts);
 }
 
 export function registerDatasets(program: Command): void {

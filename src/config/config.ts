@@ -3,7 +3,7 @@ import { createHash } from "crypto";
 import { dirname, resolve } from "path";
 import { isPlainObject, mapValues, pick, pickBy } from "es-toolkit";
 import { DEFAULT_MODEL_ID } from "../extract/cards/index.js";
-import { expandHome, relativizeHomeIn } from "../lib/path.js";
+import { expandHome, relativizeHomeIn, type PathRoots } from "../lib/path.js";
 import { decodeUserText } from "../lib/text.js";
 import { chmod600 } from "../lib/perms.js";
 import { tryExecute } from "../lib/result.js";
@@ -39,11 +39,6 @@ export interface LoadedConfig {
   fileValues: Partial<OpenLedgerConfig>;
   /** Why the file is unusable, or null when it is fine or simply absent. */
   problem: string | null;
-}
-
-export interface PathRoots {
-  cwd: string;
-  home: string;
 }
 
 /** The default config file lives here. */
@@ -135,8 +130,11 @@ function withDefaults(
 
 /** Reads the config file (default: `<home>/.oled/config.json`). A broken file degrades
  *  to defaults with `problem` set; the caller decides whether that is fatal. */
-export function loadConfig(configPath: string | undefined, home: string): LoadedConfig {
-  const resolved = resolve(expandHome(configPath ?? resolve(oledDir(home), "config.json"), home));
+export function loadConfig(
+  configPath: string | undefined,
+  { cwd, home }: PathRoots,
+): LoadedConfig {
+  const resolved = resolve(cwd, expandHome(configPath ?? resolve(oledDir(home), "config.json"), home));
   const { fileValues, problem, exists } = readFileValues(resolved, home);
   const config: ResolvedConfig = {
     ...withDefaults(fileValues, resolved, home),

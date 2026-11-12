@@ -76,7 +76,7 @@ describe("describeFailure", () => {
 
 function captured(mode: Partial<OutputMode>): { out: ReturnType<typeof createOutput>; text: () => string } {
   const chunks: string[] = [];
-  const full: OutputMode = { json: false, tty: false, color: false, kind: "plain", ...mode };
+  const full: OutputMode = { tty: false, color: false, kind: "plain", ...mode };
   return { out: createOutput(full, (s) => chunks.push(s)), text: () => chunks.join("") };
 }
 
@@ -89,7 +89,7 @@ describe("createOutput", () => {
   });
 
   it("strips libsql's top-level _metadata in both modes", () => {
-    const json = captured({ json: true, kind: "json" });
+    const json = captured({ kind: "json" });
     json.out.emitObject({ id: "x", _metadata: { duration: 1 } });
     json.out.emitSummary({ total: 1 });
     expect(json.text()).toBe('{"id":"x"}\n{"type":"summary","total":1}\n');
@@ -97,6 +97,26 @@ describe("createOutput", () => {
     const plain = captured({});
     plain.out.emitObject({ id: "x", nested: { a: 1 }, _metadata: { duration: 1 } });
     expect(plain.text()).toBe('id\tx\nnested\t{"a":1}\n');
+  });
+
+  it("emitRecord writes one JSON line, or one flattened key/value line per entry", () => {
+    const record = { from: "2026-01-01", net: { THB: 1.5, USD: -2 } };
+    const json = captured({ kind: "json" });
+    json.out.emitRecord(record);
+    expect(json.text()).toBe('{"from":"2026-01-01","net":{"THB":1.5,"USD":-2}}\n');
+
+    const plain = captured({});
+    plain.out.emitRecord(record, { boldKeys: true });
+    expect(plain.text()).toBe("from\t2026-01-01\nnet.THB\t1.5\nnet.USD\t-2\n");
+
+    const tty = captured({ kind: "tty", tty: true });
+    tty.out.emitRecord(record, { boldKeys: true });
+    expect(tty.text()).toBe("from     2026-01-01\nnet.THB  1.5\nnet.USD  -2\n");
+  });
+
+  it("paints nothing once colour is off, so NO_COLOR reaches every renderer", () => {
+    const { out } = captured({ kind: "tty", tty: true, color: false });
+    expect(out.paint.bold.yellow("x")).toBe("x");
   });
 });
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +7,12 @@ import Database from "libsql";
 import { commitRows, type BatchContext } from "./commit-cli.js";
 import { seedAccount, failingStatement, freshDB, ledgerLockedAtTransaction } from "../../fixtures/db.js";
 import { createOutput, describeFailure } from "../cli/output.js";
-import { countTransactions, findTransactionById, listTransactions } from "../transactions/queries.js";
+import {
+  countTransactions,
+  findTransactionById,
+  insertTransaction,
+  listTransactions,
+} from "../transactions/queries.js";
 import { findAccountById } from "../accounts/queries.js";
 import { EXIT } from "../contract/exit.js";
 import { deriveGroupId, deriveTransactionId, newBatchId } from "../lib/ids.js";
@@ -34,7 +39,7 @@ function row(description: string, debit = "thb:expense:food"): Record<string, un
 
 function jsonOutput(): { out: ReturnType<typeof createOutput>; lines: () => Record<string, unknown>[] } {
   const chunks: string[] = [];
-  const out = createOutput({ json: true, tty: false, color: false, kind: "json" }, (s) => chunks.push(s));
+  const out = createOutput({ tty: false, color: false, kind: "json" }, (s) => chunks.push(s));
   const lines = (): Record<string, unknown>[] =>
     chunks.join("").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
   return { out, lines };
@@ -157,6 +162,15 @@ describe("commitRows: a row's own source_file_id", () => {
   });
 });
 
+function commitUntilThrown(db: Database.Database, items: unknown[]): unknown {
+  try {
+    commitRows(jsonOutput().out, db, batch(), items);
+  } catch (thrown) {
+    return thrown;
+  }
+  throw new Error("expected the batch to stop mid-way");
+}
+
 describe("commitRows: a locked ledger", () => {
   const dirs: string[] = [];
   afterEach(() => {
@@ -167,15 +181,6 @@ describe("commitRows: a locked ledger", () => {
     const dir = mkdtempSync(join(tmpdir(), "oled-commit-busy-"));
     dirs.push(dir);
     return join(dir, "db.sqlite");
-  }
-
-  function commitUntilThrown(db: Database.Database, items: unknown[]): unknown {
-    try {
-      commitRows(jsonOutput().out, db, batch(), items);
-    } catch (err) {
-      return err;
-    }
-    throw new Error("expected the batch to stop on the lock");
   }
 
   it("stops the batch with BUSY (8), keeping the row that posted before the lock reported", () => {
@@ -198,8 +203,25 @@ describe("commitRows: a locked ledger", () => {
 
   it("names what posted and where to resume, and resuming there posts every row once", () => {
     const path = dbPath();
-    const ledger = ledgerLockedAtTransaction(path, 3, seedLedger);
-    const items = [row("Coffee"), row("Lunch"), row("Dinner"), row("Snack")];
+    // One transaction per row: the duplicate, the refused row, Coffee, then the lock at Lunch.
+    const ledger = ledgerLockedAtTransaction(path, 4, (db) => {
+      seedLedger(db);
+      insertTransaction(db, {
+        id: "tx:fixed",
+        date: "2026-05-01",
+        description: "Fixed",
+        debit_account_id: "thb:expense:food",
+        credit_account_id: "thb:asset:cash",
+        amount: 5000,
+      });
+    });
+    const items = [
+      { ...row("Fixed"), id: "tx:fixed" },
+      { ...row("Refused"), amount: -1 },
+      row("Coffee"),
+      row("Lunch"),
+      row("Dinner"),
+    ];
 
     const thrown = commitUntilThrown(ledger.db, items);
     ledger.release();
@@ -210,19 +232,19 @@ describe("commitRows: a locked ledger", () => {
       code: "E_BUSY",
       message: "The ledger is in use by another process.",
       hint:
-        "rows before index 2 already ran (2 posted, results above); re-run only the rows from index 2, " +
+        "rows before index 3 already ran (1 posted, results above); re-run only the rows from index 3, " +
         "since re-running them all would post rows without a stable id twice",
-      details: { posted: 2, resume_from_index: 2 },
+      details: { posted: 1, resume_from_index: 3 },
     });
 
     const db = new Database(path);
     db.pragma("foreign_keys = ON");
-    commitRows(jsonOutput().out, db, batch(), items.slice(2));
+    commitRows(jsonOutput().out, db, batch(), items.slice(3));
     expect(countBy(listTransactions(db), (t) => t.description)).toEqual({
+      Fixed: 1,
       Coffee: 1,
       Lunch: 1,
       Dinner: 1,
-      Snack: 1,
     });
     db.close();
   });
@@ -237,5 +259,26 @@ describe("commitRows: a locked ledger", () => {
     expect(error.code).toBe("E_BUSY");
     expect(error.hint).toBe("another oled process is using the ledger; re-run the same command in a moment");
     expect(error.details).toBeUndefined();
+  });
+});
+
+describe("commitRows: a ledger failure that is not a lock", () => {
+  it("propagates unchanged after a row posted, with no resume details", () => {
+    const db = freshDB(seedLedger);
+    const damaged = Object.assign(new Error("database disk image is malformed"), { code: "SQLITE_CORRUPT" });
+    const prepare = db.prepare.bind(db);
+    let inserts = 0;
+    vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
+      if (sql.startsWith("INSERT INTO transactions") && ++inserts === 2) throw damaged;
+      return prepare(sql);
+    });
+
+    const thrown = commitUntilThrown(db, [row("Coffee"), row("Lunch")]);
+
+    expect(thrown).toBe(damaged);
+    const failure = describeFailure(thrown, true);
+    expect(failure.exitCode).toBe(EXIT.NOT_READY);
+    expect(JSON.parse(failure.stderr).error.details).toBeUndefined();
+    expect(countTransactions(db)).toBe(1);
   });
 });

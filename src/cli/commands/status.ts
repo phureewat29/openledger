@@ -1,6 +1,5 @@
 import type { Command } from "commander";
-import chalk from "chalk";
-import { homedir } from "os";
+import type { ChalkInstance } from "chalk";
 import { uniq } from "es-toolkit";
 import { getNetWorth } from "../../accounts/balances.js";
 import type { LoadedConfig } from "../../config/config.js";
@@ -14,16 +13,13 @@ import { countNewFiles } from "../../files/files.js";
 import { prepareRedaction } from "../../privacy/redactor.js";
 import { homeRelative } from "../../lib/path.js";
 import { formatAmount, toDecimalTotals } from "../../lib/money.js";
-import { banner, visibleLength, ANSI_RE, formatInt, flattenRows } from "../format.js";
+import { banner, visibleLength, formatInt, flattenRows, formatKeyValues } from "../format.js";
 import { runAction, type Invocation } from "../output.js";
 import { redactionEnabled } from "../input.js";
-import { inspectConfig, probeLedger, type LedgerProbe } from "../../config/cli.js";
+import { inspectConfig, ledgerProblem, probeLedger, type LedgerProbe } from "../../config/cli.js";
 import { getVersion } from "../../lib/version.js";
 import { CONTRACT_VERSION } from "../../contract/version.js";
 import type { StatusReport } from "../../contract/status.js";
-
-/** `status` never creates the ledger, so a missing db file is reported, not opened. */
-const NO_LEDGER = "no ledger yet";
 
 // Exported for tests: lets the default-profile-problem path be pinned directly, without a
 // subprocess or a real ~/.oled to leave a broken file in.
@@ -54,16 +50,12 @@ export function buildReport(loaded: LoadedConfig, ledger: LedgerProbe): StatusRe
     net_worth: null,
   };
 
-  if (ledger.state === "missing") {
-    // Nothing is registered without a ledger, so every readable file is new.
-    return {
-      ...base,
-      db: { ...base.db, error: NO_LEDGER },
-      files: { ...base.files, new: countNewFiles(null, cfg.dataDir) },
-    };
-  }
   // Opening the db is the only reachability check; a failing count query must not read as not-ready.
-  if (ledger.state === "unreachable") return { ...base, db: { ...base.db, error: ledger.error } };
+  if (ledger.state !== "open") {
+    // Nothing is registered without a ledger, so every readable file is new.
+    const fresh = ledger.state === "missing" ? countNewFiles(null, cfg.dataDir) : 0;
+    return { ...base, db: { ...base.db, error: ledgerProblem(ledger) }, files: { ...base.files, new: fresh } };
+  }
 
   const { db } = ledger;
   const open = countQuestions(db);
@@ -97,129 +89,113 @@ interface ShowStatusOpts {
 
 // Redaction defaults on, so bare `oled` (no --no-redact flag) masks the same fields `status` does.
 export async function showStatus(ctx: Invocation, opts: ShowStatusOpts): Promise<void> {
-  const loaded = inspectConfig(ctx.configPath, homedir());
+  const loaded = inspectConfig(ctx.configPath, ctx.roots);
   const ledger = await probeLedger(loaded.config.dbPath, loaded.config.home);
   const redact = prepareRedaction(redactionEnabled(opts), loaded.config);
   const report = redact(buildReport(loaded, ledger), STATUS_REDACT_FIELDS);
   const { out } = ctx;
   out.render({
     json: () => out.emit(report),
-    tty: () => out.write(renderTTY(report, out.mode.color, ledger.state === "missing")),
+    tty: () => out.write(renderTTY(report, out.paint, ledger.state === "missing")),
     plain: () => out.write(renderPlain(report)),
   });
 }
 
+type Line = [string, string | number | boolean];
+
 function renderPlain(r: StatusReport): string {
-  const lines: [string, string | number | boolean][] = [
+  const lines: Line[] = [
     ["configured", r.configured],
     ["config_path", r.config_path],
-  ];
-  if (r.config_problem) lines.push(["config_problem", r.config_problem]);
-  lines.push(
+    ...(r.config_problem ? [["config_problem", r.config_problem] satisfies Line] : []),
     ["data_dir", r.data_dir],
     ["locale", r.locale],
     ["currency", r.currency],
     ["user_name", r.user_name],
     ["db_path", r.db.path],
     ["db_reachable", r.db.reachable],
-  );
-  if (r.db.error) lines.push(["db_error", r.db.error]);
-  if (r.counts) {
-    lines.push(
-      ["accounts", r.counts.accounts],
-      ["transactions", r.counts.transactions],
-      ["merchants", r.counts.merchants],
-      ["notes", r.counts.notes],
-    );
-  }
-  lines.push(
+    ...(r.db.error ? [["db_error", r.db.error] satisfies Line] : []),
+    ...(r.counts
+      ? [
+          ["accounts", r.counts.accounts],
+          ["transactions", r.counts.transactions],
+          ["merchants", r.counts.merchants],
+          ["notes", r.counts.notes],
+        ] satisfies Line[]
+      : []),
     ["files_new", r.files.new],
     ["files_ingested", r.files.ingested],
     ["files_pending", r.files.pending],
     ["files_failed", r.files.failed],
-  );
-  if (r.questions) {
-    lines.push(
-      ["questions_open", r.questions.open],
-      ["questions_deferred", r.questions.deferred],
-    );
-  }
-  // One key per currency, never a scalar: different currencies must not be added together.
-  if (r.net_worth) lines.push(...flattenRows(r.net_worth));
-  return lines.map(([k, v]) => `${k}\t${v}`).join("\n") + "\n";
+    ...(r.questions
+      ? [
+          ["questions_open", r.questions.open],
+          ["questions_deferred", r.questions.deferred],
+        ] satisfies Line[]
+      : []),
+    // One key per currency, never a scalar: different currencies must not be added together.
+    ...(r.net_worth ? flattenRows(r.net_worth) : []),
+  ];
+  return formatKeyValues(lines, { tty: false });
 }
 
 const LABEL_WIDTH = 18;
 
-// Exported for tests: this renderer only runs on a real TTY, so no subprocess suite executes it.
-export function renderTTY(r: StatusReport, color: boolean, ledgerMissing = false): string {
-  const dim = (s: string) => (color ? chalk.dim(s) : s);
-  const bold = (s: string) => (color ? chalk.bold.yellow(s) : s);
+type Row = [string, string];
 
-  const section = (title: string, rows: [string, string][]): string => {
+// Exported for tests: this renderer only runs on a real TTY, so no subprocess suite executes it.
+export function renderTTY(r: StatusReport, paint: ChalkInstance, ledgerMissing = false): string {
+  const section = (title: string, rows: Row[]): string => {
     const valueWidth = Math.max(0, ...rows.map(([, v]) => visibleLength(v)));
     const body = rows.map(([label, value]) => {
       const pad = " ".repeat(Math.max(0, valueWidth - visibleLength(value)));
       return `  ${label.padEnd(LABEL_WIDTH)}${pad}${value}\n`;
     });
-    return bold(title) + "\n" + body.join("") + "\n";
+    return paint.bold.yellow(title) + "\n" + body.join("") + "\n";
   };
 
-  const parts = ["\n" + (color ? banner() : stripBanner()) + "\n\n"];
-
-  const system: [string, string][] = [["Configured", r.configured ? "yes" : dim("no")]];
-  if (r.config_problem) system.push(["Config", dim(`unusable: ${r.config_problem}`)]);
-  system.push(
-    ["User", dim(r.user_name)],
-    ["Locale", dim(r.locale)],
-    ["Currency", dim(r.currency)],
-    ["Data dir", dim(r.data_dir)],
-    [
-      "Database",
-      r.db.reachable ? "ready" : dim(r.db.error ? `not ready: ${r.db.error}` : "not ready"),
-    ],
-  );
-  parts.push(section("System", system));
-
-  if (!r.db.reachable) {
-    const next = ledgerMissing
-      ? "run `oled config --init` to create one"
-      : "run `oled doctor` for details";
-    parts.push(dim(`  ${next}`) + "\n\n");
-  }
-
-  if (r.counts) {
-    parts.push(
-      section("Ledger", [
-        ["Accounts", formatInt(r.counts.accounts)],
-        ["Transactions", formatInt(r.counts.transactions)],
-        ["Merchants", formatInt(r.counts.merchants)],
-        ["Notes", formatInt(r.counts.notes)],
-      ]),
-    );
-  }
+  const system: Row[] = [
+    ["Configured", r.configured ? "yes" : paint.dim("no")],
+    ...(r.config_problem ? [["Config", paint.dim(`unusable: ${r.config_problem}`)] satisfies Row] : []),
+    ["User", paint.dim(r.user_name)],
+    ["Locale", paint.dim(r.locale)],
+    ["Currency", paint.dim(r.currency)],
+    ["Data dir", paint.dim(r.data_dir)],
+    ["Database", r.db.reachable ? "ready" : paint.dim(r.db.error ? `not ready: ${r.db.error}` : "not ready")],
+  ];
+  const nextStep = ledgerMissing ? "run `oled config --init` to create one" : "run `oled doctor` for details";
 
   const fileExtras = (["new", "pending", "failed"] as const)
     .filter((state) => r.files[state] > 0)
     .map((state) => `${r.files[state]} ${state}`);
-
-  const pipeline: [string, string][] = [
-    [
-      "Files",
-      `${formatInt(r.files.ingested)}${fileExtras.length ? "  " + dim(`(${fileExtras.join(", ")})`) : ""}`,
-    ],
+  const pipeline: Row[] = [
+    ["Files", `${formatInt(r.files.ingested)}${fileExtras.length ? "  " + paint.dim(`(${fileExtras.join(", ")})`) : ""}`],
+    ...(r.questions
+      ? [
+          [
+            "Questions",
+            `${formatInt(r.questions.open)} open${r.questions.deferred ? "  " + paint.dim(`(${r.questions.deferred} deferred)`) : ""}`,
+          ] satisfies Row,
+        ]
+      : []),
   ];
-  if (r.questions) {
-    pipeline.push([
-      "Questions",
-      `${formatInt(r.questions.open)} open${r.questions.deferred ? "  " + dim(`(${r.questions.deferred} deferred)`) : ""}`,
-    ]);
-  }
-  parts.push(section("Pipeline", pipeline));
+  const financial = r.net_worth ? financialRows(r.net_worth, paint.dim, r.locale) : [];
 
-  const financial = r.net_worth ? financialRows(r.net_worth, dim, r.locale) : [];
-  if (financial.length) parts.push(section("Financial", financial));
-  return parts.join("");
+  return [
+    "\n" + banner(paint) + "\n\n",
+    section("System", system),
+    r.db.reachable ? "" : paint.dim(`  ${nextStep}`) + "\n\n",
+    r.counts
+      ? section("Ledger", [
+          ["Accounts", formatInt(r.counts.accounts)],
+          ["Transactions", formatInt(r.counts.transactions)],
+          ["Merchants", formatInt(r.counts.merchants)],
+          ["Notes", formatInt(r.counts.notes)],
+        ])
+      : "",
+    section("Pipeline", pipeline),
+    financial.length ? section("Financial", financial) : "",
+  ].join("");
 }
 
 // Ledgers in ISO order; each amount formats in its own currency, not the display currency.
@@ -227,14 +203,14 @@ function financialRows(
   worth: NonNullable<StatusReport["net_worth"]>,
   dim: (s: string) => string,
   locale: string,
-): [string, string][] {
+): Row[] {
   const currencies = uniq([
     ...Object.keys(worth.net_worth),
     ...Object.keys(worth.assets),
     ...Object.keys(worth.liabilities),
   ]).sort();
 
-  return currencies.flatMap((currency): [string, string][] => {
+  return currencies.flatMap((currency): Row[] => {
     const amount = (totals: Record<string, number>): string =>
       formatAmount(totals[currency] ?? 0, currency, locale);
     return [
@@ -243,10 +219,6 @@ function financialRows(
       [`${currency} liabilities`, dim(amount(worth.liabilities))],
     ];
   });
-}
-
-function stripBanner(): string {
-  return banner().replace(ANSI_RE, "");
 }
 
 export function registerStatus(program: Command): void {

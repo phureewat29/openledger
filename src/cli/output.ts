@@ -1,13 +1,15 @@
 import type { Command } from "commander";
-import { omit } from "es-toolkit";
-import { renderPlain, renderTable, type Column } from "./format.js";
+import { homedir } from "node:os";
+import chalk, { Chalk, type ChalkInstance } from "chalk";
+import { omit, pickBy } from "es-toolkit";
+import { flattenRows, formatKeyValues, renderPlain, renderTable, type Column } from "./format.js";
 import { toCLIError } from "./errors.js";
 import { EXIT, type ExitCode } from "../contract/exit.js";
 import type { ErrorEnvelope } from "../contract/error.js";
 import type { CappedSummary } from "../contract/primitives.js";
+import type { PathRoots } from "../lib/path.js";
 
 export interface OutputMode {
-  json: boolean;
   tty: boolean;
   color: boolean;
   kind: "json" | "tty" | "plain";
@@ -15,6 +17,8 @@ export interface OutputMode {
 
 export interface Output {
   readonly mode: OutputMode;
+  /** Styles only while `mode.color` is on; otherwise every style returns its input unchanged. */
+  readonly paint: ChalkInstance;
   /** No-op outside --json; a single result goes through emitObject() instead. */
   emit(obj: unknown): void;
   /** The terminal `{"type":"summary",...}` line of a streaming command. */
@@ -22,6 +26,8 @@ export interface Output {
   emitList<T>(rows: readonly T[], columns: Column<T>[]): void;
   /** Human output is tab-separated key/value lines, ANSI-free so it stays stable when piped. */
   emitObject(obj: Record<string, unknown>): void;
+  /** One JSON line, or one `key  value` line per (flattened) entry for humans. */
+  emitRecord(obj: Record<string, unknown>, opts?: { boldKeys?: boolean }): void;
   write(text: string): void;
   render(byKind: Record<OutputMode["kind"], () => void>): void;
 }
@@ -29,6 +35,7 @@ export interface Output {
 export interface Invocation {
   readonly out: Output;
   readonly configPath: string | undefined;
+  readonly roots: PathRoots;
 }
 
 interface Globals {
@@ -52,7 +59,7 @@ function outputMode(
   { tty, noColorEnv }: { tty: boolean; noColorEnv: boolean },
 ): OutputMode {
   const color = !(json || noColor || noColorEnv || !tty);
-  return { json, tty, color, kind: json ? "json" : tty ? "tty" : "plain" };
+  return { tty, color, kind: json ? "json" : tty ? "tty" : "plain" };
 }
 
 // libsql attaches `_metadata: { duration }` to every `.get()` row; stripped once here.
@@ -67,13 +74,16 @@ function plainValue(v: unknown): string {
 }
 
 export function createOutput(mode: OutputMode, write: (chunk: string) => void): Output {
+  const isJSON = mode.kind === "json";
+  const paint = new Chalk({ level: mode.color ? chalk.level : 0 });
   const writeLine = (obj: unknown): void => write(JSON.stringify(stripMetadata(obj)) + "\n");
   const render = (byKind: Record<OutputMode["kind"], () => void>): void => byKind[mode.kind]();
   const emit = (obj: unknown): void => {
-    if (mode.json) writeLine(obj);
+    if (isJSON) writeLine(obj);
   };
   return {
     mode,
+    paint,
     emit,
     emitSummary: (fields) => emit({ type: "summary", ...fields }),
     emitList: (rows, columns) =>
@@ -81,16 +91,24 @@ export function createOutput(mode: OutputMode, write: (chunk: string) => void): 
         json: () => {
           for (const row of rows) writeLine(row);
         },
-        tty: () => write(renderTable(rows, columns, mode.color)),
+        tty: () => write(renderTable(rows, columns, paint)),
         plain: () => write(renderPlain(rows, columns)),
       }),
     emitObject: (obj) => {
       const row = stripMetadata(obj);
-      if (mode.json) {
+      if (isJSON) {
         writeLine(row);
         return;
       }
       write(Object.entries(row).map(([k, v]) => `${k}\t${plainValue(v)}\n`).join(""));
+    },
+    emitRecord: (obj, opts) => {
+      if (isJSON) {
+        writeLine(obj);
+        return;
+      }
+      const paintKey = opts?.boldKeys ? paint.bold : undefined;
+      write(formatKeyValues(flattenRows(obj), { tty: mode.tty, paintKey }));
     },
     write,
     render,
@@ -116,9 +134,11 @@ export function describeFailure(
   const cliErr = toCLIError(err, cmd);
   const exitCode = EXIT[cliErr.code];
   if (json) {
-    const error: ErrorEnvelope["error"] = { code: `E_${cliErr.code}`, message: cliErr.message };
-    if (cliErr.hint !== undefined) error.hint = cliErr.hint;
-    if (cliErr.details !== undefined) error.details = cliErr.details;
+    const error: ErrorEnvelope["error"] = {
+      code: `E_${cliErr.code}`,
+      message: cliErr.message,
+      ...pickBy({ hint: cliErr.hint, details: cliErr.details }, (value) => value !== undefined),
+    };
     return { stderr: JSON.stringify({ error }) + "\n", exitCode };
   }
   const hint = cliErr.hint ? `hint: ${cliErr.hint}\n` : "";
@@ -154,10 +174,11 @@ export function runAction<A extends unknown[]>(
     });
     const out = createOutput(mode, (chunk) => process.stdout.write(chunk));
     try {
-      const exit = await handler({ out, configPath: globals.config }, ...(args.slice(0, -1) as A));
+      const roots: PathRoots = { cwd: process.cwd(), home: homedir() };
+      const exit = await handler({ out, configPath: globals.config, roots }, ...(args.slice(0, -1) as A));
       if (exit) process.exitCode = EXIT[exit];
     } catch (err) {
-      process.exitCode = reportError(err, mode.json, cmd);
+      process.exitCode = reportError(err, mode.kind === "json", cmd);
     }
   };
 }

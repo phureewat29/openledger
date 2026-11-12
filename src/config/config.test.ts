@@ -18,7 +18,7 @@ describe("loadConfig hardening", () => {
   it("parses a config.json carrying a UTF-8 BOM (Windows editors and redirects)", () => {
     const path = resolve(dir, "bom.json");
     writeFileSync(path, "﻿" + JSON.stringify({ displayCurrency: "USD" }));
-    const { config, problem } = loadConfig(path, dir);
+    const { config, problem } = loadConfig(path, { cwd: dir, home: dir });
     expect(problem).toBeNull();
     expect(config.displayCurrency).toBe("USD");
   });
@@ -26,10 +26,15 @@ describe("loadConfig hardening", () => {
   it("expands `~` against the given home, in the config path and in persisted path fields alike", () => {
     mkdirSync(join(dir, "profile"));
     writeFileSync(join(dir, "profile", "tilde.json"), JSON.stringify({ dataDir: "~/statements" }));
-    const { config } = loadConfig("~/profile/tilde.json", dir);
+    const { config } = loadConfig("~/profile/tilde.json", { cwd: join(dir, "elsewhere"), home: dir });
     expect(config.configPath).toBe(join(dir, "profile", "tilde.json"));
     expect(config.dataDir).toBe(resolve(dir, "statements"));
     expect(config.home).toBe(dir);
+  });
+
+  it("resolves a relative config path against the given cwd", () => {
+    const { config } = loadConfig("profile/conf.json", { cwd: join(dir, "work"), home: dir });
+    expect(config.configPath).toBe(join(dir, "work", "profile", "conf.json"));
   });
 
   it("resolves a hand-edited relative path against the config file's dir, not the cwd", () => {
@@ -37,13 +42,13 @@ describe("loadConfig hardening", () => {
     mkdirSync(profileDir);
     const path = join(profileDir, "config.json");
     writeFileSync(path, JSON.stringify({ dbPath: "ledger.sqlite", dataDir: "../statements" }));
-    const { config } = loadConfig(path, dir);
+    const { config } = loadConfig(path, { cwd: dir, home: dir });
     expect(config.dbPath).toBe(join(profileDir, "ledger.sqlite"));
     expect(config.dataDir).toBe(join(dir, "statements"));
   });
 
   it("puts the default config file and every default location under the given home", () => {
-    const { config } = loadConfig(undefined, dir);
+    const { config } = loadConfig(undefined, { cwd: dir, home: dir });
     expect(config.configPath).toBe(join(dir, ".oled", "config.json"));
     expect(config.dbPath).toBe(join(dir, ".oled", "db.sqlite"));
     expect(config.dataDir).toBe(join(dir, ".oled", "data"));
@@ -53,7 +58,7 @@ describe("loadConfig hardening", () => {
 
   it("defaults the db, data and cache beside whichever config file is loaded", () => {
     for (const profile of ["p1", "p2"]) {
-      const { config } = loadConfig(join(dir, profile, "conf.json"), dir);
+      const { config } = loadConfig(join(dir, profile, "conf.json"), { cwd: dir, home: dir });
       expect(config.dbPath).toBe(join(dir, profile, "db.sqlite"));
       expect(config.dataDir).toBe(join(dir, profile, "data"));
       expect(config.cacheDir).toBe(join(dir, profile, "cache"));
@@ -86,7 +91,7 @@ describe("loadConfig: a malformed file never echoes its content", () => {
       const path = join(dir, ".oled", "config.json");
       mkdirSync(join(dir, ".oled"));
       writeFileSync(path, "{}", { mode: 0o000 });
-      const { problem } = loadConfig(undefined, dir);
+      const { problem } = loadConfig(undefined, { cwd: dir, home: dir });
       expect(problem).toContain(join("~", ".oled", "config.json"));
       expect(problem).not.toContain(dir);
     },
@@ -95,7 +100,7 @@ describe("loadConfig: a malformed file never echoes its content", () => {
   it.each(MALFORMED)("%s yields a fixed problem with at most a line and column", (_, text, expected) => {
     const path = join(dir, "config.json");
     writeFileSync(path, text);
-    const { problem, config } = loadConfig(path, dir);
+    const { problem, config } = loadConfig(path, { cwd: dir, home: dir });
     expect(problem).toBe(expected);
     // A broken file degrades to defaults; nothing from it survives into the values either.
     expect(config.ocrApiKey).toBe("");

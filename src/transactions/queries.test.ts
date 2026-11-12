@@ -459,10 +459,11 @@ describe("counts + updateTransactionMeta", () => {
 
   it("edits mutable metadata only", () => {
     insertTransaction(db, tf({ id: "tx:m" }));
-    expect(updateTransactionMeta(db, "tx:m", { description: "Latte" })).toBe(1);
+    expect(updateTransactionMeta(db, "tx:m", { description: "Latte" })).toEqual({ ok: true, changes: 1 });
     const r = findTransactionById(db, "tx:m")!;
     expect(r.description).toBe("Latte");
-    expect(updateTransactionMeta(db, "tx:m", {})).toBe(0);
+    expect(updateTransactionMeta(db, "tx:m", {})).toEqual({ ok: true, changes: 0 });
+    expect(updateTransactionMeta(db, "tx:none", { description: "Latte" })).toEqual({ ok: true, changes: 0 });
   });
 
   it("refuses a patch insert would refuse, before writing", () => {
@@ -474,7 +475,11 @@ describe("counts + updateTransactionMeta", () => {
     });
     expect(validateTransactionMeta({ date: "2026/05/01" })).toMatchObject({ ok: false });
     expect(validateTransactionMeta({ merchant_id: null })).toEqual({ ok: true });
-    expect(() => updateTransactionMeta(db, "tx:m", { description: "" })).toThrow("description must not be empty.");
+    expect(updateTransactionMeta(db, "tx:m", { description: "" })).toEqual({
+      ok: false,
+      reason: "invalid_transaction",
+      message: "description must not be empty.",
+    });
     expect(findTransactionById(db, "tx:m")!.description).toBe("Coffee");
   });
 });

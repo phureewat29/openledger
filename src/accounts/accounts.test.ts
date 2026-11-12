@@ -14,6 +14,7 @@ import {
   deleteAccount,
   ensureLedgerRoot,
   ensureStructuralAccount,
+  ensureStructuralAccounts,
   isLedgerRootId,
   mergeAccounts,
   structuralAccountId,
@@ -264,6 +265,20 @@ describe("ensureStructuralAccount", () => {
 
   it("accepts an uppercase currency and lowercases it into the id", () => {
     expect(ensureStructuralAccount(db, "THB", "opening")).toBe("thb:equity:opening");
+  });
+});
+
+describe("ensureStructuralAccounts", () => {
+  it("seeds every structural kind of one ledger, and only that ledger, idempotently", () => {
+    const db = freshDB();
+    const ids = ensureStructuralAccounts(db, "thb");
+    expect(ids).toEqual(STRUCTURAL_KINDS.map((kind) => structuralAccountId("thb", kind)));
+    for (const id of ids) expect(findAccountById(db, id)).not.toBeNull();
+    expect(listLedgerCurrencies(db)).toEqual(["thb"]);
+
+    const after = countAccounts(db);
+    expect(ensureStructuralAccounts(db, "thb")).toEqual(ids);
+    expect(countAccounts(db)).toBe(after);
   });
 });
 

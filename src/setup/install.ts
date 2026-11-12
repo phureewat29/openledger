@@ -2,7 +2,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
-import type { PathRoots } from "../config/config.js";
+import type { PathRoots } from "../lib/path.js";
 import { getVersion } from "../lib/version.js";
 
 /** Default skills dir `setup` writes to when no `--dir` is given; callers name their own dir rather than picking a host id from a registry. */

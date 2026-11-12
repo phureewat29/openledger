@@ -20,7 +20,7 @@ import { describeReasonTable } from "../../fixtures/reason-table.js";
 
 function jsonOutput(): { out: ReturnType<typeof createOutput>; lines: () => Record<string, unknown>[] } {
   const chunks: string[] = [];
-  const out = createOutput({ json: true, tty: false, color: false, kind: "json" }, (s) => chunks.push(s));
+  const out = createOutput({ tty: false, color: false, kind: "json" }, (s) => chunks.push(s));
   const lines = (): Record<string, unknown>[] =>
     chunks.join("").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
   return { out, lines };

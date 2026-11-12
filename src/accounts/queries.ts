@@ -179,6 +179,27 @@ function storedMetadata(metadataJSON: string | null): Record<string, unknown> | 
   return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
 }
 
+type PatchResult = ReturnType<typeof buildPatch>;
+
+const NO_METADATA_PATCH: PatchResult = { sets: [], params: [], before: {}, after: {} };
+
+/** Null when the stored blob is unreadable. */
+function metadataPatch(
+  current: AccountRow,
+  metadata: Record<string, unknown> | undefined,
+): PatchResult | null {
+  if (metadata === undefined) return NO_METADATA_PATCH;
+  const existing = storedMetadata(current.metadata_json);
+  if (!existing) return null;
+  const merged = { ...existing, ...metadata };
+  return {
+    sets: ["metadata_json = ?"],
+    params: [JSON.stringify(merged)],
+    before: { metadata: existing },
+    after: { metadata: merged },
+  };
+}
+
 /** `metadata` is shallow-merged into the existing `metadata_json` blob, not replaced. */
 export function updateAccountMetadata(
   db: Database.Database,
@@ -189,27 +210,26 @@ export function updateAccountMetadata(
     const current = findAccountById(db, id);
     if (!current) return { ok: false, reason: "not_found", message: `Account "${id}" not found.` };
 
-    const { sets, params, before, after } = buildPatch(ACCOUNT_PATCH, current, patch);
-    if (patch.metadata !== undefined) {
-      const existing = storedMetadata(current.metadata_json);
-      if (!existing) {
-        return {
-          ok: false,
-          reason: "unreadable_metadata",
-          message: `Account "${id}" has unreadable metadata_json; refusing to overwrite it.`,
-        };
-      }
-      const merged = { ...existing, ...patch.metadata };
-      sets.push("metadata_json = ?");
-      params.push(JSON.stringify(merged));
-      before.metadata = existing;
-      after.metadata = merged;
+    const fields = buildPatch(ACCOUNT_PATCH, current, patch);
+    const metadata = metadataPatch(current, patch.metadata);
+    if (!metadata) {
+      return {
+        ok: false,
+        reason: "unreadable_metadata",
+        message: `Account "${id}" has unreadable metadata_json; refusing to overwrite it.`,
+      };
     }
 
+    const sets = [...fields.sets, ...metadata.sets];
     if (sets.length > 0) {
-      db.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).run(...params, id);
+      db.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`)
+        .run(...fields.params, ...metadata.params, id);
     }
-    return { ok: true, before, after };
+    return {
+      ok: true,
+      before: { ...fields.before, ...metadata.before },
+      after: { ...fields.after, ...metadata.after },
+    };
   });
 }
 

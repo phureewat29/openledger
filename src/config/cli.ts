@@ -1,11 +1,10 @@
 import type { Command } from "commander";
 import type Database from "libsql";
 import { existsSync, mkdirSync } from "fs";
-import { homedir } from "os";
 import { resolve } from "path";
 import { mapValues, pick } from "es-toolkit";
 import { openDB } from "../db/connection.js";
-import { STRUCTURAL_ACCOUNTS, ensureStructuralAccount } from "../accounts/accounts.js";
+import { ensureStructuralAccounts } from "../accounts/accounts.js";
 import {
   CONFIG_SECRETS,
   keyFingerprint,
@@ -13,15 +12,13 @@ import {
   saveConfig,
   type LoadedConfig,
   type OpenLedgerConfig,
-  type PathRoots,
   type ResolvedConfig,
 } from "./config.js";
-import { expandHome, relativizeHomeIn } from "../lib/path.js";
+import { expandHome, relativizeHomeIn, type PathRoots } from "../lib/path.js";
 import { tryExecute } from "../lib/result.js";
 import { findCountryDefaults, availableCountries } from "../datasets/datasets.js";
 import { createContextTemplate } from "./context.js";
 import { DEFAULT_MODEL_ID } from "../extract/cards/index.js";
-import { flattenRows, formatKeyValues } from "../cli/format.js";
 import { runAction, type Invocation, type Output } from "../cli/output.js";
 import { fail } from "../cli/errors.js";
 import * as z from "zod";
@@ -47,14 +44,14 @@ function assertUsable(loaded: LoadedConfig): ResolvedConfig {
 }
 
 /** For commands that operate on the ledger: no config file, no ledger. */
-export function requireConfig(path: string | undefined): ResolvedConfig {
-  return assertUsable(loadConfig(path, homedir()));
+export function requireConfig(path: string | undefined, roots: PathRoots): ResolvedConfig {
+  return assertUsable(loadConfig(path, roots));
 }
 
 export async function openLedger(
-  path: string | undefined,
+  ctx: Invocation,
 ): Promise<{ config: ResolvedConfig; db: Database.Database }> {
-  const config = requireConfig(path);
+  const config = requireConfig(ctx.configPath, ctx.roots);
   return { config, db: await openDB(config.dbPath) };
 }
 
@@ -64,8 +61,8 @@ export async function openLedger(
  * leniently. But a --config the caller actually named must still resolve: otherwise the
  * report would silently describe the default profile's ledger instead of the one asked for.
  */
-export function inspectConfig(path: string | undefined, home: string): LoadedConfig {
-  const loaded = loadConfig(path, home);
+export function inspectConfig(path: string | undefined, roots: PathRoots): LoadedConfig {
+  const loaded = loadConfig(path, roots);
   // An explicit empty path still counts as "named"; only true absence stays lenient.
   if (path !== undefined) assertUsable(loaded);
   return loaded;
@@ -75,6 +72,14 @@ export type LedgerProbe =
   | { state: "missing" }
   | { state: "unreachable"; error: string }
   | { state: "open"; db: Database.Database };
+
+const NO_LEDGER = "no ledger yet";
+
+/** Why the ledger can't be read, or null once it is open. */
+export function ledgerProblem(ledger: LedgerProbe): string | null {
+  if (ledger.state === "missing") return NO_LEDGER;
+  return ledger.state === "unreachable" ? ledger.error : null;
+}
 
 /** Opens the ledger only if it exists (`openDB` would create it); the error names the path home-relative. */
 export async function probeLedger(dbPath: string, home: string): Promise<LedgerProbe> {
@@ -114,14 +119,6 @@ function showPayload(loaded: LoadedConfig): ConfigShowResult {
     // A broken file degrades to defaults; the payload must say so, not imply them.
     ...(loaded.problem ? { problem: loaded.problem } : {}),
   };
-}
-
-function printConfig(out: Output, data: Record<string, unknown>): void {
-  if (out.mode.json) {
-    out.emit(data);
-    return;
-  }
-  out.write(formatKeyValues(flattenRows(data), { tty: out.mode.tty }));
 }
 
 /** The display currency names a ledger (`<currency>:<type>`), so anything but three
@@ -222,9 +219,7 @@ async function convergeConfig(
   const db = await openDB(merged.dbPath);
 
   // Seeds the display-currency ledger's structural accounts so first ingest resolves them.
-  for (const kind of Object.keys(STRUCTURAL_ACCOUNTS) as (keyof typeof STRUCTURAL_ACCOUNTS)[]) {
-    ensureStructuralAccount(db, merged.displayCurrency, kind);
-  }
+  ensureStructuralAccounts(db, merged.displayCurrency);
 
   // createContextTemplate no-ops if the file exists, so this never clobbers edits.
   createContextTemplate(loaded.config.contextPath, merged.userName);
@@ -235,12 +230,23 @@ async function convergeConfig(
     context_path: loaded.config.contextPath,
     created: { config: configPath, db: merged.dbPath, data_dir: merged.dataDir },
   };
-  printConfig(out, result);
+  out.emitRecord(result);
 }
 
 /** `--init` asserts a fresh setup; a missing db or data dir is a recovery case it may rebuild. */
 function fullyInitialized(cfg: ResolvedConfig): boolean {
   return cfg.exists && existsSync(cfg.dbPath) && existsSync(cfg.dataDir);
+}
+
+function showConfig(out: Output, path: string | undefined, loaded: LoadedConfig): void {
+  // Naming a file that does not exist is a mistake, not a defaults view:
+  // `config show` muscle memory would otherwise read a file named "show".
+  if (path && !loaded.config.exists) {
+    fail("NOT_FOUND", `no config file at ${loaded.config.configPath}`, {
+      hint: "create it with `oled config <path> --init`",
+    });
+  }
+  out.emitRecord(showPayload(loaded));
 }
 
 // One verb, three moods: bare shows, setting flags write (creating the file on
@@ -257,22 +263,10 @@ async function configureHarness(
     });
   }
   const flags = parseInput(CONVERGE_FLAGS_SPEC, opts);
-  const roots: PathRoots = { cwd: process.cwd(), home: homedir() };
-  const loaded = loadConfig(path, roots.home);
+  const loaded = loadConfig(path, ctx.roots);
   const { init, ...settings } = flags;
   const writing = init || Object.keys(settings).length > 0;
-
-  if (!writing) {
-    // Naming a file that does not exist is a mistake, not a defaults view:
-    // `config show` muscle memory would otherwise read a file named "show".
-    if (path && !loaded.config.exists) {
-      fail("NOT_FOUND", `no config file at ${loaded.config.configPath}`, {
-        hint: "create it with `oled config <path> --init`",
-      });
-    }
-    printConfig(ctx.out, showPayload(loaded));
-    return;
-  }
+  if (!writing) return showConfig(ctx.out, path, loaded);
 
   // A file that exists but does not parse never converges: writing would
   // silently discard whatever the user hand-edited into it.
@@ -286,7 +280,7 @@ async function configureHarness(
       hint: "drop --init to change settings",
     });
   }
-  await convergeConfig(ctx.out, settings, loaded, roots);
+  await convergeConfig(ctx.out, settings, loaded, ctx.roots);
 }
 
 export function registerConfig(program: Command): void {

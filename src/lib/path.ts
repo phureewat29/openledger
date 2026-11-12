@@ -1,5 +1,11 @@
 import { isAbsolute, resolve, sep } from "path";
 
+/** Where `~` and relative paths resolve; read once per invocation, at the CLI boundary. */
+export interface PathRoots {
+  cwd: string;
+  home: string;
+}
+
 /** `/` separates everywhere; `\` also separates on Windows, where it is an
  *  ordinary filename byte on POSIX. */
 const TILDE_PREFIXES = process.platform === "win32" ? ["~/", "~\\"] : ["~/"];

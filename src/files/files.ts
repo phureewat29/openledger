@@ -70,13 +70,14 @@ export function resolveEntryPath(
   db: Database.Database,
   dataDir: string,
   entryOrId: string,
+  cwd: string,
 ): string | null {
   if (isAbsolute(entryOrId) && existsSync(entryOrId)) return entryOrId;
 
   const viaDataDir = resolve(dataDir, entryOrId);
   if (existsSync(viaDataDir)) return viaDataDir;
 
-  const viaCwd = resolve(entryOrId);
+  const viaCwd = resolve(cwd, entryOrId);
   if (existsSync(viaCwd)) return viaCwd;
 
   return findFileById(db, entryOrId)?.path ?? null;
@@ -85,8 +86,9 @@ export function resolveEntryPath(
 /** Retries absorb the transient EBUSY/EPERM thrown while a Windows scanner briefly holds a fresh artifact. */
 export const RM_OPTS = { recursive: true, force: true, maxRetries: 3 } as const;
 
-// The shape `newFileId` mints: one plain path segment, so it resolves to exactly `<cacheDir>/<id>`.
-const FILE_ID_RE = /^sf-[A-Za-z0-9-]+$/;
+/** The shape `newFileId` mints, plus the legacy `sf:` form still stored by older ledgers:
+ *  one plain path segment, so it resolves to exactly `<cacheDir>/<id>`. */
+const FILE_ID_RE = /^sf[-:][A-Za-z0-9-]+$/;
 
 /** Throws unless `fileId` is a file id, naming exactly one directory inside `cacheDir`: the delete is recursive. */
 export function cleanCache(cacheDir: string, fileId: string): { removed: string[] } {

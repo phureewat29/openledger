@@ -80,7 +80,7 @@ const LIST_QUESTIONS_SPEC = z.object({
 
 async function listQuestions(ctx: Invocation, opts: ListQuestionsOpts): Promise<void> {
   const parsed = parseInput(LIST_QUESTIONS_SPEC, opts);
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   const redact = prepareRedaction(redactionEnabled(opts), config);
   // One filter object for both queries, so `total` counts what the list filtered.
   const filter = { batch_id: parsed.batch, includeDeferred: !!opts.includeDeferred };
@@ -116,7 +116,7 @@ async function answerQuestion(
   // answer once, not delete once and then fail NOT_FOUND on its own second pass.
   const ids = uniq([id, ...also]);
 
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
 
   // One transaction, every id resolved before any closes: closing is irreversible, so a
   // bogus id or a failure partway through the list must not cost the ids before it.
@@ -155,7 +155,7 @@ async function deferQuestion(
   opts: Record<string, unknown>,
 ): Promise<void> {
   const parsed = parseInput(DEFER_SPEC, opts);
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   if (!deferQuestionRow(db, id, parsed.days)) fail("NOT_FOUND", `question "${id}" not found`);
   ctx.out.emitList([{ id, days: parsed.days }], DEFER_COLUMNS);
   const summary: Omit<QuestionsDeferSummary, "type"> = { deferred: 1 };

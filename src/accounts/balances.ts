@@ -1,4 +1,4 @@
-import { groupBy, mapValues, partition } from "es-toolkit";
+import { groupBy, mapValues, partition, sumBy } from "es-toolkit";
 import type Database from "libsql";
 import { findAccountById, type AccountRow, type AccountType } from "./queries.js";
 import {
@@ -15,9 +15,7 @@ import {
 } from "../transactions/queries.js";
 import { inTransaction } from "../db/transaction.js";
 import { currencyOf } from "../lib/ids.js";
-import { fromMinorUnits, toMinorUnits } from "../lib/money.js";
-/** Per-currency sums in minor units; the contract's CurrencyTotals carries decimals. */
-export type MinorTotals = Record<string, number>;
+import { fromMinorUnits, toMinorUnits, type MinorTotals } from "../lib/money.js";
 import { ensureStructuralAccount, structuralAccountId } from "./accounts.js";
 
 export interface AccountBalanceMinor extends AccountRow {
@@ -45,12 +43,23 @@ function addMinor(totals: MinorTotals, currency: string, minor: number): void {
   totals[currency] = (totals[currency] ?? 0) + minor;
 }
 
+interface CurrencyMinor {
+  currency: string;
+  minor: number;
+}
+
+/** Added per currency key, never across keys. */
+function totalsByCurrency(entries: CurrencyMinor[]): MinorTotals {
+  return mapValues(
+    groupBy(entries, (e) => e.currency),
+    (group) => sumBy(group, (e) => e.minor),
+  );
+}
+
 function sumTotals(maps: MinorTotals[]): MinorTotals {
-  const totals: MinorTotals = {};
-  for (const map of maps) {
-    for (const [currency, minor] of Object.entries(map)) addMinor(totals, currency, minor);
-  }
-  return totals;
+  return totalsByCurrency(
+    maps.flatMap((map) => Object.entries(map).map(([currency, minor]) => ({ currency, minor }))),
+  );
 }
 
 /** Per-currency `a - b` over the union of both key sets; nothing collapses across keys. */
@@ -70,9 +79,9 @@ function balanceMinor(type: AccountType, sumDebit: number, sumCredit: number): n
 
 /** Each (type, currency) row's normal-side balance, added per currency. */
 function totalsOf(rows: TypeCurrencyLegSums[]): MinorTotals {
-  const totals: MinorTotals = {};
-  for (const r of rows) addMinor(totals, r.currency, balanceMinor(r.type, r.sum_debit, r.sum_credit));
-  return totals;
+  return totalsByCurrency(
+    rows.map((r) => ({ currency: r.currency, minor: balanceMinor(r.type, r.sum_debit, r.sum_credit) })),
+  );
 }
 
 /** `balance` is the decimal of `balance_minor` under the account's own currency exponent. */

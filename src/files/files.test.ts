@@ -102,53 +102,36 @@ describe("registerPendingFile", () => {
 });
 
 describe("resolveEntryPath", () => {
-  it("resolves a rel_path (as emitted by `ingest list`) relative to the data dir, regardless of cwd", () => {
+  it("resolves a rel_path (as emitted by `ingest list`) relative to the data dir, whatever the cwd", () => {
     const db = freshDB();
     mkdirSync(resolve(dataDir, "sub"), { recursive: true });
     const path = write("sub/b.pdf", textPDF());
-
-    const elsewhere = mkdtempSync(resolve(tmpdir(), "oled-files-elsewhere-"));
-    const prevCwd = process.cwd();
-    process.chdir(elsewhere);
-    try {
-      expect(resolveEntryPath(db, dataDir, "sub/b.pdf")).toBe(path);
-    } finally {
-      process.chdir(prevCwd);
-      rmSync(elsewhere, { recursive: true, force: true });
-    }
+    expect(resolveEntryPath(db, dataDir, "sub/b.pdf", outsideDir)).toBe(path);
   });
 
   it("still resolves an absolute path", () => {
     const db = freshDB();
     const path = write("a.pdf", textPDF());
-    expect(resolveEntryPath(db, dataDir, path)).toBe(path);
+    expect(resolveEntryPath(db, dataDir, path, outsideDir)).toBe(path);
   });
 
-  it("still resolves a cwd-relative path when it isn't rooted under the data dir", () => {
+  it("resolves a relative path against the given cwd when it isn't rooted under the data dir", () => {
     const db = freshDB();
     writeFileSync(resolve(outsideDir, "c.pdf"), textPDF());
-    const prevCwd = process.cwd();
-    process.chdir(outsideDir);
-    try {
-      // Compare against process.cwd(), not the pre-chdir string: macOS tmpdir is a
-      // symlink that chdir resolves to its real path.
-      expect(resolveEntryPath(db, dataDir, "c.pdf")).toBe(resolve(process.cwd(), "c.pdf"));
-    } finally {
-      process.chdir(prevCwd);
-    }
+    expect(resolveEntryPath(db, dataDir, "c.pdf", outsideDir)).toBe(resolve(outsideDir, "c.pdf"));
   });
 
   it("still resolves a file id", () => {
     const db = freshDB();
     const path = write("a.pdf", textPDF());
     const fileId = registerPendingFile(db, loaded(path));
-    expect(resolveEntryPath(db, dataDir, fileId)).toBe(path);
+    expect(resolveEntryPath(db, dataDir, fileId, outsideDir)).toBe(path);
   });
 
   it("returns null for a path or id that matches nothing", () => {
     const db = freshDB();
-    expect(resolveEntryPath(db, dataDir, "sf-does-not-exist")).toBeNull();
-    expect(resolveEntryPath(db, dataDir, "no/such/file.pdf")).toBeNull();
+    expect(resolveEntryPath(db, dataDir, "sf-does-not-exist", outsideDir)).toBeNull();
+    expect(resolveEntryPath(db, dataDir, "no/such/file.pdf", outsideDir)).toBeNull();
   });
 });
 
@@ -167,13 +150,23 @@ describe("cleanCache", () => {
     expect(cleanCache(cacheDir, "sf-nothing").removed).toEqual([]);
   });
 
+  it("purges a legacy `sf:` id's subdir too", () => {
+    const id = "sf:3f1c2a9e-0b4d-4c7e-9a1f-5d6e7f809a1b";
+    const dir = resolve(cacheDir, id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(resolve(dir, "document.txt"), "text");
+
+    expect(cleanCache(cacheDir, id).removed).toEqual([dir]);
+    expect(existsSync(dir)).toBe(false);
+  });
+
   it("refuses any id that is not exactly one entry inside the cache dir", () => {
     // Nested, so a broken guard could only ever reach this test's own temp dirs.
     const cache = resolve(cacheDir, "cache");
     mkdirSync(resolve(cache, "sf-1", "nested"), { recursive: true });
     mkdirSync(resolve(cache, "sf-2"));
 
-    for (const id of ["..", ".", "", "sf-1/nested", "sf-1/../..", "sf-1/../sf-2", outsideDir]) {
+    for (const id of ["..", ".", "", "sf-1/nested", "sf-1/../..", "sf-1/../sf-2", "sf:1/../..", outsideDir]) {
       expect(() => cleanCache(cache, id), id).toThrow(/refusing to clean/);
     }
     expect(existsSync(resolve(cache, "sf-1", "nested"))).toBe(true);

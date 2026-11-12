@@ -1,11 +1,12 @@
 import type { Command } from "commander";
 import { ValidationError } from "../lib/validate.js";
-import { errorMessage, type Result } from "../lib/result.js";
+import { err, errorMessage, ok, type Result } from "../lib/result.js";
 import {
   ContextUnreadableError,
   DBBusyError,
   DBNotReadyError,
   isBusyError,
+  isDamagedDBError,
   sqliteErrorCode,
 } from "../db/errors.js";
 import type { ExitCode } from "../contract/exit.js";
@@ -47,42 +48,39 @@ export function commandPath(cmd: Command): string {
 
 const BUSY_HINT = "another oled process is using the ledger; re-run the same command in a moment";
 
-// Page-body damage never reaches the open pragma; it surfaces at the query that reads the page.
-const DAMAGED_DB_CODES = ["SQLITE_CORRUPT", "SQLITE_NOTADB"];
-
-export function toCLIError(err: unknown, cmd?: Command): CLIError {
-  if (err instanceof CLIError) return err;
-  if (err instanceof ValidationError) {
-    return new CLIError("USAGE", err.message, {
+export function toCLIError(thrown: unknown, cmd?: Command): CLIError {
+  if (thrown instanceof CLIError) return thrown;
+  if (thrown instanceof ValidationError) {
+    return new CLIError("USAGE", thrown.message, {
       hint: cmd
         ? `run \`${commandPath(cmd)} --help\` for its flags and usage`
         : "append --help to the command for its flags and usage",
     });
   }
-  if (err instanceof DBNotReadyError) {
-    return new CLIError("NOT_READY", err.message, {
+  if (thrown instanceof DBNotReadyError) {
+    return new CLIError("NOT_READY", thrown.message, {
       hint: "run `oled config --init` to configure the harness",
     });
   }
-  if (err instanceof ContextUnreadableError) {
+  if (thrown instanceof ContextUnreadableError) {
     // Bare `oled` runs status but takes no --no-redact of its own.
     const bypass = cmd && !cmd.parent ? "run `oled status --no-redact`" : "pass --no-redact";
-    return new CLIError("NOT_READY", err.message, { hint: `fix the file, or ${bypass}` });
+    return new CLIError("NOT_READY", thrown.message, { hint: `fix the file, or ${bypass}` });
   }
-  if (err instanceof DBBusyError) return new CLIError("BUSY", err.message, { hint: BUSY_HINT });
+  if (thrown instanceof DBBusyError) return new CLIError("BUSY", thrown.message, { hint: BUSY_HINT });
   // A lock lost past the open (a write that waited out its busy timeout) says the same thing.
-  if (isBusyError(err)) {
+  if (isBusyError(thrown)) {
     return new CLIError("BUSY", "The ledger is in use by another process.", { hint: BUSY_HINT });
   }
-  const sqliteCode = sqliteErrorCode(err);
-  if (DAMAGED_DB_CODES.includes(sqliteCode)) {
+  // Page-body damage never reaches the open pragma; it surfaces at the query that reads the page.
+  if (isDamagedDBError(thrown)) {
     return new CLIError(
       "NOT_READY",
-      `The ledger file is damaged (${sqliteCode}): ${errorMessage(err)}`,
+      `The ledger file is damaged (${sqliteErrorCode(thrown)}): ${errorMessage(thrown)}`,
       { hint: "restore the newest `<db>.<stamp>.bak` beside it, or move the file aside and re-ingest" },
     );
   }
-  return new CLIError("GENERIC", errorMessage(err));
+  return new CLIError("GENERIC", errorMessage(thrown));
 }
 
 // Declare `table` as `Record<Reason, FailureCode>` so a reason nobody assigned a code fails the build.
@@ -103,9 +101,9 @@ const LEDGER_FAILURES: FailureCode[] = ["BUSY", "NOT_READY"];
  */
 export function tryBatchItem<T>(fn: () => T): Result<T> {
   try {
-    return { ok: true, value: fn() };
+    return ok(fn());
   } catch (thrown) {
     if (LEDGER_FAILURES.includes(toCLIError(thrown).code)) throw thrown;
-    return { ok: false, error: errorMessage(thrown) };
+    return err(errorMessage(thrown));
   }
 }

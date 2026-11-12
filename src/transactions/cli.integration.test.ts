@@ -189,6 +189,24 @@ describe("transactions CLI integration (subprocess)", () => {
   );
 
   it(
+    "transactions list: a malformed date or a fractional page bound is USAGE (exit 2), never reaching SQL",
+    async () => {
+      const cases: [string[], string][] = [
+        [["--limit", "2.5"], '--limit must be an integer, got "2.5"'],
+        [["--offset", "1.5"], '--offset must be an integer, got "1.5"'],
+        [["--from", "2026/01/01"], '--from must be an ISO date (YYYY-MM-DD), got "2026/01/01"'],
+        [["--to", "soon"], '--to must be an ISO date (YYYY-MM-DD), got "soon"'],
+      ];
+      for (const [args, message] of cases) {
+        const result = await runCLI(["transactions", "list", ...args, "--json"]);
+        expect(result.code, args.join(" ")).toBe(2);
+        expect(JSON.parse(result.stderr.trim()).error).toMatchObject({ code: "E_USAGE", message });
+      }
+    },
+    60000,
+  );
+
+  it(
     "transactions add: an empty account flag fails USAGE (exit 2), not NOT_FOUND",
     async () => {
       const result = await runCLI([

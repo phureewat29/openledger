@@ -4,10 +4,10 @@ import {
   commitLinkedTransactions,
   commitTransaction,
   type TransactionCommitContext,
-  type RawTransactionInput,
   type LinkedTransactionHeader,
   type LinkedTransactionLeg,
 } from "./commit.js";
+import type { RawTransactionInput } from "./refuse.js";
 import type {
   CommitCompoundResult,
   CommitFailureReason,
@@ -288,7 +288,7 @@ function tallyRows(results: CommitResult[]): BatchTally {
 }
 
 function reportBatch(out: Output, summary: Omit<CommitSummary, "type">): void {
-  if (out.mode.json) {
+  if (out.mode.kind === "json") {
     out.emitSummary(summary);
     return;
   }
@@ -310,7 +310,7 @@ export async function commitIngest(
   const items = await readStdinBatch(opts.input);
   if (items.length === 0) fail("USAGE", "no transaction data provided");
 
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
 
   // An unknown --file id must fail before insert, else a null file hash breaks id determinism.
   // Held for the summary: a commit writes transactions, never `files`, so the status stays current.
@@ -322,7 +322,7 @@ export async function commitIngest(
       )
     : null;
 
-  // Must be non-null: raise() no-ops when batchId is null, silently dropping every question.
+  // Must be non-null: raiseQuestion records nothing without a batch id.
   const batchId = newBatchId();
   const batch: BatchContext = { batchId, file: opts.file, noise: noiseTokens(config.country) };
   const tally = tallyRows(commitRows(ctx.out, db, batch, items));

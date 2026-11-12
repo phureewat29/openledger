@@ -35,7 +35,7 @@ interface ListNotesOpts {
 }
 
 async function listNotes(ctx: Invocation, opts: ListNotesOpts): Promise<void> {
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   const redact = prepareRedaction(redactionEnabled(opts), config);
   const rows = redact(queryNotes(db), NOTE_REDACT_FIELDS);
   ctx.out.emitList(rows, NOTE_COLUMNS);
@@ -50,7 +50,7 @@ const ADD_NOTE_SPEC = z.object({
 
 async function addNote(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(ADD_NOTE_SPEC, opts);
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   const saved = addNoteRow(db, parsed.content, parsed.category);
   ctx.out.emitList([saved], NOTE_COLUMNS);
   const summary: Omit<NotesAddSummary, "type"> = { added: 1 };
@@ -64,7 +64,7 @@ async function removeNote(ctx: Invocation, id: string, opts: { yes?: boolean }):
   requireYes(opts, "removing this note");
   const parsed = parseInput(NOTE_ID_SPEC, { id }, { labels: NOTE_ID_LABELS });
 
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   const deleted = deleteNoteRow(db, parsed.id);
   if (!deleted) fail("NOT_FOUND", `note "${id}" not found`);
   ctx.out.emitList([deleted], NOTE_COLUMNS);

@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import type Database from "libsql";
-import { camelCase, countBy, isPlainObject, pick } from "es-toolkit";
+import { camelCase, countBy, isEmptyObject, isPlainObject, pick } from "es-toolkit";
 import { runAction, type Invocation, type Output } from "../cli/output.js";
 import type { Column } from "../cli/format.js";
 import { fail, failReason, tryBatchItem, type FailureCode } from "../cli/errors.js";
@@ -37,7 +37,7 @@ import {
 import { findAccountsByFuzzyName, type FuzzyAccountMatch } from "./matching.js";
 import { currencyOf, isLedgerScopedId } from "../lib/ids.js";
 import { formatFixed, fromMinorUnits, toDecimalTotals } from "../lib/money.js";
-import { todayISO } from "../lib/date.js";
+import { localISODate } from "../lib/date.js";
 import { prepareRedaction } from "../privacy/redactor.js";
 import * as z from "zod";
 import { parseInput, safeParse, str, num, int, bool, json, isoDate } from "../lib/validate.js";
@@ -181,7 +181,7 @@ interface ListAccountsOpts {
 }
 
 async function listAccounts(ctx: Invocation, opts: ListAccountsOpts): Promise<void> {
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   const filter = parseInput(ACCOUNT_FILTER_SPEC, opts);
   const redact = prepareRedaction(redactionEnabled(opts), config);
   const rows = redact(getAccountBalances(db, filter).map(presentAccount), ACCOUNT_REDACT_FIELDS);
@@ -191,7 +191,7 @@ async function listAccounts(ctx: Invocation, opts: ListAccountsOpts): Promise<vo
 }
 
 async function showAccountTree(ctx: Invocation, opts: ListAccountsOpts): Promise<void> {
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   const filter = parseInput(ACCOUNT_FILTER_SPEC, opts);
   const redact = prepareRedaction(redactionEnabled(opts), config);
   const roots = redact(getBalanceTree(db, filter).map(presentTreeNode), ACCOUNT_REDACT_FIELDS);
@@ -212,7 +212,7 @@ interface ShowAccountOpts {
 }
 
 async function showAccount(ctx: Invocation, id: string, opts: ShowAccountOpts): Promise<void> {
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   const redact = prepareRedaction(redactionEnabled(opts), config);
   const balances = getAccountBalances(db, { idOrParent: id });
   const self = balances.find((b) => b.id === id);
@@ -251,7 +251,7 @@ const CREATE_ACCOUNT_ALIASES = {
 
 async function createSingleAccount(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(CREATE_ACCOUNT_SPEC, opts, { aliases: CREATE_ACCOUNT_ALIASES });
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   const outcome = createOneAccount(db, parsed);
   if (!outcome.ok) failReason(ACCOUNT_FAILURE_EXIT, outcome);
   const result: CreateAccountResult = {
@@ -333,7 +333,7 @@ export function createAccountsBatch(
   // Partial: countBy omits a tally no row hit.
   const tally: Partial<Record<BatchTally, number>> = countBy(rows, tallyOf);
   const summary: Omit<CreateAccountBatchSummary, "type"> = { created: 0, duplicates: 0, failed: 0, ...tally };
-  if (out.mode.json) out.emitSummary(summary);
+  if (out.mode.kind === "json") out.emitSummary(summary);
   else out.write(`\n${summary.created} created, ${summary.duplicates} duplicate(s), ${summary.failed} failed\n`);
 
   return summary.failed > 0 ? "PARTIAL" : undefined;
@@ -350,7 +350,7 @@ async function createAccount(ctx: Invocation, opts: CreateAccountOpts): Promise<
   }
   const items = await readStdinBatch(opts.input);
   if (items.length === 0) fail("USAGE", "no account data provided");
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   return createAccountsBatch(ctx.out, db, items);
 }
 
@@ -375,7 +375,7 @@ export const DELETE_ACCOUNT_EXIT: Record<DeleteAccountFailure, FailureCode> = {
 async function mergeAccounts(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(MERGE_ACCOUNTS_SPEC, opts);
   requireYes(parsed, "merging accounts");
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   const merged = mergeAccountRows(db, parsed.from, parsed.to);
   if (!merged.ok) failReason(MERGE_ACCOUNTS_EXIT, merged);
   const result: MergeAccountsResult = {
@@ -393,7 +393,7 @@ interface DeleteAccountOpts {
 }
 
 async function deleteAccount(ctx: Invocation, id: string, opts: DeleteAccountOpts): Promise<void> {
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   requireAccount(db, id);
   requireYes(opts, "deleting this account");
   const deleted = deleteAccountRow(db, id);
@@ -420,12 +420,12 @@ async function adjustAccount(
   opts: Record<string, unknown>,
 ): Promise<void> {
   const parsed = parseInput(ADJUST_ACCOUNT_SPEC, opts);
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   const outcome = adjustAccountBalance(db, {
     accountId: id,
     targetAmount: parsed.to,
     reason: parsed.reason,
-    date: parsed.date ?? todayISO(),
+    date: parsed.date ?? localISODate(new Date()),
   });
   if (!outcome.ok) failReason(ADJUST_ACCOUNT_EXIT, outcome);
   const result: AdjustAccountResult = { transaction_id: outcome.transactionId, delta: outcome.delta };
@@ -438,7 +438,7 @@ const MATCH_ACCOUNTS_SPEC = z.object({
 
 async function matchAccounts(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(MATCH_ACCOUNTS_SPEC, opts);
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   const matches: AccountMatch[] = findAccountsByFuzzyName(db, parsed.query);
   ctx.out.emitList(matches, MATCH_COLUMNS);
   const summary: Omit<MatchAccountsSummary, "type"> = { returned: matches.length };
@@ -476,6 +476,25 @@ function buildAccountPatch({
   return merged === undefined ? rest : { ...rest, metadata: merged };
 }
 
+function renameOrFail(
+  db: Database.Database,
+  id: string,
+  name: string,
+): Pick<UpdateAccountResult, "name" | "renamed"> {
+  if (renameAccount(db, id, name) === 0) failAccountNotFound(db, id);
+  return { name, renamed: true };
+}
+
+function patchOrFail(
+  db: Database.Database,
+  id: string,
+  patch: UpdateAccountMetadataPatch,
+): Pick<UpdateAccountResult, "before" | "after"> {
+  const patched = updateAccountMetadata(db, id, patch);
+  if (!patched.ok) failReason(UPDATE_ACCOUNT_EXIT, patched);
+  return { before: patched.before, after: patched.after };
+}
+
 async function updateAccount(
   ctx: Invocation,
   id: string,
@@ -489,26 +508,13 @@ async function updateAccount(
   const { name, ...rest } = parsed;
   const patch = buildAccountPatch(rest);
 
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
 
   // One transaction: a metadata patch that fails must not leave the rename committed.
   const result = inTransaction(db, (): UpdateAccountResult => {
-    const out: UpdateAccountResult = { id };
-
-    if (name !== undefined) {
-      if (renameAccount(db, id, name) === 0) failAccountNotFound(db, id);
-      out.name = name;
-      out.renamed = true;
-    }
-
-    if (Object.keys(patch).length > 0) {
-      const patched = updateAccountMetadata(db, id, patch);
-      if (!patched.ok) failReason(UPDATE_ACCOUNT_EXIT, patched);
-      out.before = patched.before;
-      out.after = patched.after;
-    }
-
-    return out;
+    const renamed = name === undefined ? {} : renameOrFail(db, id, name);
+    const patched = isEmptyObject(patch) ? {} : patchOrFail(db, id, patch);
+    return { id, ...renamed, ...patched };
   });
 
   ctx.out.emitObject(result);

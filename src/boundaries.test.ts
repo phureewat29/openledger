@@ -104,6 +104,11 @@ describe("module boundaries", () => {
     expect(violations(shell, (_, __, target) => target !== null && !allowed(target))).toEqual([]);
   });
 
+  it("the SQL scan sees a receiver on the line above, and skips a regex's .exec", () => {
+    expect(sqlCalls("db\n    .prepare(`SELECT 1`)")).toEqual(["db\n    .prepare("]);
+    expect(sqlCalls("db.exec(sql); ISO_RE.exec(s); /a/g.exec(s)")).toEqual(["db.exec("]);
+  });
+
   it("SQL runs only in *queries.ts modules and src/db", () => {
     const outside = PRODUCTION.filter((file) => !isStore(file.path) && !under(file.path, "db"));
     const found = outside.flatMap((file) => sqlCalls(file.text).map((call) => `${rel(file.path)}: ${call}`));

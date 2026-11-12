@@ -1,14 +1,12 @@
 import type { Command } from "commander";
-import chalk from "chalk";
 import { randomUUID } from "crypto";
 import { existsSync, rmSync, writeFileSync } from "fs";
-import { homedir } from "os";
 import { join, resolve } from "path";
-import type { LoadedConfig, PathRoots, ResolvedConfig } from "../../config/config.js";
+import type { LoadedConfig, ResolvedConfig } from "../../config/config.js";
 import { listMissingTables } from "../../db/schema.js";
-import { inspectConfig, probeLedger, type LedgerProbe } from "../../config/cli.js";
+import { inspectConfig, ledgerProblem, probeLedger, type LedgerProbe } from "../../config/cli.js";
 import { getVersion } from "../../lib/version.js";
-import { homeRelative, relativizeHomeIn } from "../../lib/path.js";
+import { homeRelative, relativizeHomeIn, type PathRoots } from "../../lib/path.js";
 import { installedVersion, SKILL_DIRS } from "../../setup/install.js";
 import { readRedactionContext } from "../../privacy/redactor.js";
 import { loadMupdf } from "../../extract/pdf.js";
@@ -50,9 +48,9 @@ function configReadableCheck(loaded: LoadedConfig): Check {
 
 function dbOpenCheck(ledger: LedgerProbe): Check {
   const name = "db_open";
-  if (ledger.state === "missing") return { name, ok: false, detail: `no ledger yet: ${INIT_HINT}` };
-  if (ledger.state === "unreachable") return { name, ok: false, detail: ledger.error };
-  return { name, ok: true };
+  const problem = ledgerProblem(ledger);
+  if (problem === null) return { name, ok: true };
+  return { name, ok: false, detail: ledger.state === "missing" ? `${problem}: ${INIT_HINT}` : problem };
 }
 
 function dataDirWritableCheck(dir: string, home: string): Check {
@@ -139,16 +137,16 @@ async function runChecks(loaded: LoadedConfig, roots: PathRoots): Promise<Check[
 
 type Verdict = "not_ready" | "degraded" | "ready";
 
-const VERDICT: Record<Verdict, { line: string; paint: (text: string) => string }> = {
+const VERDICT: Record<Verdict, { line: string; tone: "red" | "yellow" | "green" }> = {
   not_ready: {
     line: "OpenLedger is not ready. Fix the failed checks above, then run `oled doctor` again.",
-    paint: chalk.red,
+    tone: "red",
   },
   degraded: {
     line: "OpenLedger is ready, but some checks failed. See the details above.",
-    paint: chalk.yellow,
+    tone: "yellow",
   },
-  ready: { line: "Everything looks good. OpenLedger is ready.", paint: chalk.green },
+  ready: { line: "Everything looks good. OpenLedger is ready.", tone: "green" },
 };
 
 function verdictOf(ready: boolean, checks: Check[]): Verdict {
@@ -163,19 +161,19 @@ const CHECK_COLUMNS: Column<Check>[] = [
 ];
 
 function printReport(out: Output, checks: Check[], ready: boolean): void {
-  if (out.mode.json) {
+  if (out.mode.kind === "json") {
     const report: DoctorReport = { checks, ok: ready };
     out.emit(report);
     return;
   }
   out.emitList(checks, CHECK_COLUMNS);
-  const { line, paint } = VERDICT[verdictOf(ready, checks)];
-  out.write("\n" + (out.mode.color ? paint(line) : line) + "\n");
+  const { line, tone } = VERDICT[verdictOf(ready, checks)];
+  out.write("\n" + out.paint[tone](line) + "\n");
 }
 
 async function diagnoseEnvironment(ctx: Invocation): Promise<ExitCode | undefined> {
-  const roots: PathRoots = { cwd: process.cwd(), home: homedir() };
-  const checks = await runChecks(inspectConfig(ctx.configPath, roots.home), roots);
+  const { roots } = ctx;
+  const checks = await runChecks(inspectConfig(ctx.configPath, roots), roots);
   const ready = checks.filter((c) => HARD_CHECKS.has(c.name)).every((c) => c.ok);
   printReport(ctx.out, checks, ready);
   return ready ? undefined : "NOT_READY";

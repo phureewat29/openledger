@@ -265,9 +265,10 @@ export async function prepareFile(
   db: Database.Database,
   cfg: PrepareConfig,
   entryOrId: string,
+  cwd: string,
   opts: PrepareOptions = {},
 ): Promise<PrepareOutcome> {
-  const absPath = resolveEntryPath(db, cfg.dataDir, entryOrId);
+  const absPath = resolveEntryPath(db, cfg.dataDir, entryOrId, cwd);
   if (absPath === null) {
     return { ok: false, reason: "not_found", message: `no ingest entry or file at "${entryOrId}"` };
   }
@@ -303,9 +304,9 @@ export async function prepareFile(
   try {
     written = writeArtifacts();
     replaceFile(db, prior.id, pendingRow(source, fileId));
-  } catch (err) {
+  } catch (thrown) {
     tryExecute(() => cleanCache(cfg.cacheDir, fileId));
-    throw err;
+    throw thrown;
   }
   cleanCache(cfg.cacheDir, prior.id);
   return written;

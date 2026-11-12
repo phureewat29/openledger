@@ -1,5 +1,5 @@
 import type Database from "libsql";
-import { randomUUID } from "crypto";
+import { newMerchantAliasId, newMerchantId } from "../lib/ids.js";
 import { clampLimit, clampOffset } from "../lib/limit.js";
 import { inTransaction } from "../db/transaction.js";
 
@@ -93,7 +93,7 @@ function adoptDefaultAccount(
   accountId: string | null | undefined,
 ): MerchantRow {
   if (!accountId || accountId === merchant.default_account_id) return merchant;
-  db.prepare(`UPDATE merchants SET default_account_id = ? WHERE id = ?`).run(accountId, merchant.id);
+  setMerchantDefaultAccount(db, merchant.id, accountId);
   return { ...merchant, default_account_id: accountId };
 }
 
@@ -108,7 +108,7 @@ function insertMerchant(
       `INSERT INTO merchants (id, canonical_name, default_account_id) VALUES (?, ?, ?)
        RETURNING ${ROW_COLUMNS}`,
     )
-    .get(`m:${randomUUID()}`, canonicalName, defaultAccountId ?? null) as MerchantRow;
+    .get(newMerchantId(), canonicalName, defaultAccountId ?? null) as MerchantRow;
 }
 
 /** A pattern already held by another merchant stays with its owner and is reported as a conflict. */
@@ -123,7 +123,7 @@ export function claimAlias(
   db.prepare(
     `INSERT INTO merchant_aliases (id, merchant_id, normalized_pattern) VALUES (?, ?, ?)
      ON CONFLICT(normalized_pattern) DO NOTHING`,
-  ).run(`ma:${randomUUID()}`, merchantId, normalized);
+  ).run(newMerchantAliasId(), merchantId, normalized);
   const holder = db
     .prepare(`SELECT merchant_id FROM merchant_aliases WHERE normalized_pattern = ?`)
     .get(normalized) as { merchant_id: string } | undefined;
@@ -256,51 +256,18 @@ export function repointMerchantDefaultAccount(
     .run(toAccountId, fromAccountId).changes;
 }
 
-export type MergeMerchantsFailure = "same_merchant" | "not_found";
-
-type MergeMerchantsOutcome =
-  | {
-      ok: true;
-      moved_transactions: number;
-      moved_aliases: number;
-      /** Present only when the destination had no default_account_id and the
-       *  source's was adopted in its place. */
-      adopted_default_account?: string;
-    }
-  | { ok: false; reason: MergeMerchantsFailure; message: string };
-
-export function mergeMerchants(
+/** The alias half of `mergeMerchants` (src/merchants/merchants.ts). */
+export function repointMerchantAliases(
   db: Database.Database,
-  fromId: string,
-  toId: string,
-): MergeMerchantsOutcome {
-  if (fromId === toId) {
-    return { ok: false, reason: "same_merchant", message: "Cannot merge a merchant into itself." };
-  }
+  fromMerchantId: string,
+  toMerchantId: string,
+): number {
+  return db
+    .prepare(`UPDATE merchant_aliases SET merchant_id = ? WHERE merchant_id = ?`)
+    .run(toMerchantId, fromMerchantId).changes;
+}
 
-  return inTransaction(db, (): MergeMerchantsOutcome => {
-    const from = findMerchantById(db, fromId);
-    if (!from) return { ok: false, reason: "not_found", message: `Source merchant ${fromId} not found.` };
-    const to = findMerchantById(db, toId);
-    if (!to) return { ok: false, reason: "not_found", message: `Destination merchant ${toId} not found.` };
-
-    const movedTransactions = db
-      .prepare(`UPDATE transactions SET merchant_id = ? WHERE merchant_id = ?`)
-      .run(toId, fromId).changes;
-    const movedAliases = db
-      .prepare(`UPDATE merchant_aliases SET merchant_id = ? WHERE merchant_id = ?`)
-      .run(toId, fromId).changes;
-    const adopted = !to.default_account_id && from.default_account_id;
-    if (adopted) {
-      db.prepare(`UPDATE merchants SET default_account_id = ? WHERE id = ?`).run(adopted, toId);
-    }
-    db.prepare(`DELETE FROM merchants WHERE id = ?`).run(fromId);
-
-    return {
-      ok: true,
-      moved_transactions: movedTransactions,
-      moved_aliases: movedAliases,
-      ...(adopted ? { adopted_default_account: adopted } : {}),
-    };
-  });
+/** Deletes the row alone; re-pointing what references it is the caller's (`mergeMerchants`). */
+export function deleteMerchant(db: Database.Database, id: string): boolean {
+  return db.prepare(`DELETE FROM merchants WHERE id = ?`).run(id).changes > 0;
 }

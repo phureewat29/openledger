@@ -16,7 +16,6 @@ import {
   clampListLimit,
   findTransactionById,
   validateTransaction,
-  validateTransactionMeta,
   voidTransactionAsMirror,
   type RecategorizeFailure,
   type TransactionInput,
@@ -25,15 +24,9 @@ import {
   type TransactionRow,
   type VoidMirrorFailure,
 } from "./queries.js";
-import {
-  commitTransaction,
-  crossLedger,
-  withNoiseTokens,
-  CURRENCY_MISMATCH_HINT,
-  DIRECTION_RULES,
-  type TransactionCommitContext,
-  type RawTransactionInput,
-} from "../ingest/commit.js";
+import { crossLedger, withNoiseTokens, DIRECTION_RULES } from "./posting.js";
+import { commitTransaction, type TransactionCommitContext } from "../ingest/commit.js";
+import type { RawTransactionInput } from "../ingest/refuse.js";
 import { autoMergeStrictDuplicateTransactions, findDuplicateTransactions } from "./duplicates.js";
 import { noiseTokens } from "../datasets/datasets.js";
 import { requireAccount } from "../accounts/cli.js";
@@ -41,9 +34,9 @@ import { formatFixed, fromMinorUnits, toMinorUnits } from "../lib/money.js";
 import { clampOffset } from "../lib/limit.js";
 import { currencyOf, newBatchId } from "../lib/ids.js";
 import { prepareRedaction } from "../privacy/redactor.js";
-import { todayISO } from "../lib/date.js";
+import { localISODate } from "../lib/date.js";
 import * as z from "zod";
-import { parseInput, str, num, isoDate } from "../lib/validate.js";
+import { parseInput, str, num, int, isoDate } from "../lib/validate.js";
 import type {
   TransactionView,
   TransactionClusterView,
@@ -93,13 +86,13 @@ interface ListTransactionsOpts {
 
 const LIST_TRANSACTIONS_SPEC = z.object({
   account: str().optional(),
-  from: str().optional(),
-  to: str().optional(),
+  from: isoDate().optional(),
+  to: isoDate().optional(),
   query: str().optional(),
   amount: num().optional(),
   currency: str().optional(),
-  limit: num().optional(),
-  offset: num().optional(),
+  limit: int().optional(),
+  offset: int().optional(),
 });
 
 // `--amount` is decimal but stored amounts are minor units, so the filter needs a currency:
@@ -111,7 +104,7 @@ function amountFilterCurrency(account?: string, currency?: string): string {
 }
 
 async function listTransactions(ctx: Invocation, opts: ListTransactionsOpts): Promise<void> {
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   const { currency, amount, ...filters } = parseInput(LIST_TRANSACTIONS_SPEC, opts);
   const listOpts: ListTransactionsOptions = {
     ...filters,
@@ -161,7 +154,7 @@ function renderClusters(view: TransactionClusterView[]): string {
 }
 
 function emitClusters(out: Output, clusters: TransactionClusterView[]): void {
-  if (out.mode.json) {
+  if (out.mode.kind === "json") {
     for (const c of clusters) out.emit(c);
     return;
   }
@@ -173,7 +166,7 @@ async function showTransaction(
   id: string,
   opts: { redact?: boolean },
 ): Promise<void> {
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   const redact = prepareRedaction(redactionEnabled(opts), config);
   const detail = findTransactionById(db, id);
   if (!detail) fail("NOT_FOUND", `transaction "${id}" not found`);
@@ -210,7 +203,7 @@ const DEDUPE_HINT =
   "or collapse cross-statement mirrors with --auto-merge";
 
 async function dedupeTransactions(ctx: Invocation, opts: DedupeTransactionsOpts): Promise<void> {
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   const redact = prepareRedaction(redactionEnabled(opts), config);
   const autoMerged = opts.autoMerge ? autoMergeStrictDuplicateTransactions(db).merged : undefined;
   const groups = findDuplicateTransactions(db);
@@ -251,7 +244,7 @@ interface MergeTransactionsOpts {
 async function mergeTransactions(ctx: Invocation, opts: MergeTransactionsOpts): Promise<void> {
   const parsed = parseInput(MERGE_TRANSACTIONS_SPEC, opts);
   requireYes(opts, "merging transactions");
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
 
   const result = voidTransactionAsMirror(db, parsed.from, parsed.to);
   if (!result.ok) failReason(MERGE_TRANSACTIONS_EXIT, result);
@@ -272,6 +265,9 @@ interface AddTransactionOpts {
   description?: string;
   merchantName?: string;
 }
+
+const CURRENCY_MISMATCH_HINT =
+  "add a linked conversion pair through <currency>:equity:conversion (one leg per currency, sharing a group)";
 
 const ADD_TRANSACTION_FLAGS_SPEC = z.object({
   debit_account_id: str(),
@@ -296,7 +292,7 @@ function buildRawTransaction(opts: AddTransactionOpts): RawTransactionInput {
   }
 
   return {
-    date: parsed.date ?? todayISO(),
+    date: parsed.date ?? localISODate(new Date()),
     description: parsed.description ?? opts.merchantName ?? "Manual entry",
     debit_account_id: parsed.debit_account_id,
     credit_account_id: parsed.credit_account_id,
@@ -378,7 +374,7 @@ function addStrict(
 }
 
 async function addTransaction(ctx: Invocation, opts: AddTransactionOpts): Promise<void> {
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   const raw = buildRawTransaction(opts);
   const noise = noiseTokens(config.country);
 
@@ -403,12 +399,10 @@ async function updateTransaction(
     aliases: UPDATE_TRANSACTION_ALIASES,
     atLeastOne: "at least one of --date, --description, --merchant is required",
   });
-  // updateTransactionMeta throws on the same check; refused here so it reads as bad input.
-  const check = validateTransactionMeta(fields);
-  if (!check.ok) fail("INVALID", check.message);
-  const { db } = await openLedger(ctx.configPath);
-  const changes = updateTransactionMeta(db, id, fields);
-  if (changes === 0) fail("NOT_FOUND", `transaction "${id}" not found`);
+  const { db } = await openLedger(ctx);
+  const updated = updateTransactionMeta(db, id, fields);
+  if (!updated.ok) fail("INVALID", updated.message);
+  if (updated.changes === 0) fail("NOT_FOUND", `transaction "${id}" not found`);
   const view: TransactionUpdateResult = { transaction_id: id, updated: true };
   ctx.out.emitObject(view);
 }
@@ -419,7 +413,7 @@ async function deleteTransaction(
   opts: { yes?: boolean },
 ): Promise<void> {
   requireYes(opts, "deleting this transaction");
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   const { deleted, unvoided } = deleteTransactionRow(db, id);
   if (!deleted) fail("NOT_FOUND", `transaction "${id}" not found`);
   const view: TransactionDeleteResult = { transaction_id: id, deleted: true, unvoided };
@@ -450,7 +444,7 @@ async function recategorizeTransactions(
   if (!parsed.filter_account.trim()) fail("USAGE", `${RECATEGORIZE_LABELS.filter_account} required`);
   if (!parsed.set_account.trim()) fail("USAGE", "--set-account required");
 
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   requireAccount(
     db,
     parsed.set_account,

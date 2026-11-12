@@ -17,11 +17,10 @@ import {
   renameMerchant,
   upsertMerchant as upsertMerchantRow,
   setMerchantDefaultAccount,
-  mergeMerchants as mergeMerchantRows,
-  type MergeMerchantsFailure,
   type MerchantRow,
   type MerchantUpsertInput,
 } from "./queries.js";
+import { mergeMerchants as mergeMerchantRows, type MergeMerchantsFailure } from "./merchants.js";
 import type {
   Merchant,
   MerchantDefaultResult,
@@ -64,7 +63,7 @@ const LIST_MERCHANTS_SPEC = z.object({
 
 async function listMerchants(ctx: Invocation, opts: ListMerchantsOpts): Promise<void> {
   const parsed = parseInput(LIST_MERCHANTS_SPEC, opts);
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   const redact = prepareRedaction(redactionEnabled(opts), config);
   const rows = redact(
     queryMerchants(db, { limit: parsed.limit, offset: parsed.offset }),
@@ -85,7 +84,7 @@ const RESOLVE_MERCHANT_SPEC = z.object({ descriptor: str() });
 
 async function resolveMerchant(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(RESOLVE_MERCHANT_SPEC, opts);
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   const match = findMerchantByAlias(db, parsed.descriptor, noiseTokens(config.country));
   const resolved: MerchantResolveResult = match
     ? {
@@ -108,11 +107,13 @@ async function upsertMerchant(ctx: Invocation, opts: Record<string, unknown>): P
   const parsed = parseInput(UPSERT_MERCHANT_SPEC, opts);
   // An all-whitespace name is the flag not being passed, and reads that way.
   if (!parsed.name.trim()) fail("USAGE", "--name required");
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   if (parsed.default_account) requireAccount(db, parsed.default_account);
-  const input: MerchantUpsertInput = { canonical_name: parsed.name };
-  if (parsed.alias) input.alias = parsed.alias;
-  if (parsed.default_account) input.default_account_id = parsed.default_account;
+  const input: MerchantUpsertInput = {
+    canonical_name: parsed.name,
+    ...(parsed.alias ? { alias: parsed.alias } : {}),
+    ...(parsed.default_account ? { default_account_id: parsed.default_account } : {}),
+  };
 
   const merchant = upsertMerchantRow(db, input, noiseTokens(config.country));
   const payload: MerchantUpsertResult = {
@@ -120,15 +121,13 @@ async function upsertMerchant(ctx: Invocation, opts: Record<string, unknown>): P
     canonical_name: merchant.canonical_name,
     default_account_id: merchant.default_account_id,
     created_at: merchant.created_at,
+    ...(merchant.alias_conflict ? { alias_conflict: merchant.alias_conflict } : {}),
   };
-  if (merchant.alias_conflict) payload.alias_conflict = merchant.alias_conflict;
   ctx.out.emitObject(payload);
 }
 
-// Separate from the fields spec: a required key would always satisfy `atLeastOne`.
-const MERCHANT_TARGET_SPEC = z.object({ merchant: str() });
-
 const UPDATE_MERCHANT_SPEC = z.object({
+  merchant: str(),
   name: str().optional(),
   alias: str().optional(),
   default_account: str().optional(),
@@ -160,12 +159,11 @@ function addAlias(
 }
 
 async function updateMerchant(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
-  const { merchant: id } = parseInput(MERCHANT_TARGET_SPEC, opts);
-  const parsed = parseInput(UPDATE_MERCHANT_SPEC, opts, {
+  const { merchant: id, ...parsed } = parseInput(UPDATE_MERCHANT_SPEC, opts, {
     atLeastOne: "at least one of --name, --alias, --default-account is required",
   });
   if (parsed.name !== undefined && !parsed.name.trim()) fail("USAGE", "--name required");
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   const noise = noiseTokens(config.country);
 
   const result = inTransaction(db, (): MerchantUpdateResult => {
@@ -198,7 +196,7 @@ async function setMerchantDefault(ctx: Invocation, opts: Record<string, unknown>
     fail("USAGE", "exactly one of --account or --clear is required");
   }
 
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   const payload = inTransaction(db, (): MerchantDefaultResult => {
     const merchant = requireMerchant(db, parsed.merchant);
     if (account) requireAccount(db, account);
@@ -228,7 +226,7 @@ interface MergeMerchantsOpts {
 async function mergeMerchants(ctx: Invocation, opts: MergeMerchantsOpts): Promise<void> {
   const parsed = parseInput(MERGE_MERCHANTS_SPEC, opts);
   requireYes(opts, "merging merchants");
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   const result = mergeMerchantRows(db, parsed.from, parsed.to);
   if (!result.ok) failReason(MERGE_MERCHANTS_EXIT, result);
   const payload: MerchantMergeResult = {
@@ -236,8 +234,8 @@ async function mergeMerchants(ctx: Invocation, opts: MergeMerchantsOpts): Promis
     to: parsed.to,
     moved_transactions: result.moved_transactions,
     moved_aliases: result.moved_aliases,
+    ...(result.adopted_default_account ? { adopted_default_account: result.adopted_default_account } : {}),
   };
-  if (result.adopted_default_account) payload.adopted_default_account = result.adopted_default_account;
   ctx.out.emitObject(payload);
 }
 

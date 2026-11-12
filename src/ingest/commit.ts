@@ -1,9 +1,7 @@
 import type Database from "libsql";
 import { sum, sumBy } from "es-toolkit";
 import {
-  shouldPlaceAccount,
   isUncategorizedId,
-  namesUnopenedLedger,
   resolveOnePosting,
   type AccountHint,
   type PostingResolution,
@@ -13,22 +11,18 @@ import {
   findTransactionById,
   insertTransaction,
   insertLinkedTransactions,
-  invalidTransaction,
   validateTransaction,
-  validateTransactionFields,
   type TransactionInput,
-  type ValidateTransactionResult,
 } from "../transactions/queries.js";
+import { withNoiseTokens } from "../transactions/posting.js";
 import {
   currencyOf,
   deriveTransactionId,
   deriveGroupId,
-  isLedgerScopedId,
   newTransactionId,
   newGroupId,
 } from "../lib/ids.js";
 import { toMinorUnits } from "../lib/money.js";
-import { ledgerExists } from "../accounts/queries.js";
 import { merchantExists, type MerchantUpsertInput } from "../merchants/queries.js";
 import {
   closeRowRefusal,
@@ -41,47 +35,14 @@ import {
   type QuestionContext,
   type TransactionSide,
 } from "./questions.js";
+import { refuseRow, type RawTransactionInput, type RowRefusal } from "./refuse.js";
 import type { CommitFailureReason, CommitMerchant, CommitSide } from "../contract/ingest.js";
 import { inTransaction } from "../db/transaction.js";
-
-export function withNoiseTokens(
-  merchant: MerchantUpsertInput | null | undefined,
-  noise: readonly string[],
-): (MerchantUpsertInput & { noise_tokens: readonly string[] }) | null {
-  return merchant ? { ...merchant, noise_tokens: noise } : null;
-}
-
-/** One authority for the bookkeeping directions shown in CLI help text. */
-export const DIRECTION_RULES =
-  "Direction, not sign: debit the account that grows, amount always positive. Card purchase: debit thb:expense:<cat>, credit thb:liability:credit_card:<x>. Bank spend: debit thb:expense:<cat>, credit thb:asset:bank:<x>. Salary: debit thb:asset:bank:<x>, credit thb:income:salary. A refund reverses the purchase's accounts; a card payment debits the liability and credits the bank; opening balances post against thb:equity:opening. Money crossing currencies is two linked legs through <currency>:equity:conversion, never one row.";
-
-export const CURRENCY_MISMATCH_HINT =
-  "add a linked conversion pair through <currency>:equity:conversion (one leg per currency, sharing a group)";
 
 export interface TransactionCommitContext extends QuestionContext {
   /** Enables idempotent transaction id derivation. */
   readonly fileHash?: string | null;
   readonly noise: readonly string[];
-}
-
-export interface RawTransactionInput {
-  id?: string;
-  group_id?: string | null;
-  date: string;
-  description: string;
-  raw_descriptor?: string | null;
-  merchant?: MerchantUpsertInput | null;
-  merchant_id?: string | null;
-  source_file_id?: string | null;
-  debit_account_id: string;
-  credit_account_id: string;
-  /** DECIMAL in `currency`; converted to minor units during commit. */
-  amount: number;
-  /** Hint only; account ids' currency wins, conflict surfaces as `currencyOverridden`. */
-  currency?: string | null;
-  source_page?: number | null;
-  row_index?: number | null;
-  leg_index?: number | null;
 }
 
 type TransactionDropReason = Exclude<CommitFailureReason, "unexpected_error">;
@@ -152,51 +113,6 @@ interface PreparedTransaction {
   raw: RawTransactionInput;
 }
 
-interface UnopenedLedgerRefusal {
-  ok: false;
-  reason: "unknown_ledger";
-  message: string;
-  side: TransactionSide;
-  accountId: string;
-  ledger: string;
-}
-
-type DirtyInput = { ok: false; reason: "dirty_input"; message: string };
-
-function dirtyInput(message: string): DirtyInput {
-  return { ok: false, reason: "dirty_input", message };
-}
-
-/** Refusals decided by pure read, before resolution writes anything. */
-type RowRefusal =
-  | DirtyInput
-  | {
-      ok: false;
-      reason: "currency_mismatch";
-      message: string;
-      debit: { id: string; currency: string };
-      credit: { id: string; currency: string };
-    }
-  | UnopenedLedgerRefusal;
-
-function validateRawTransaction(input: RawTransactionInput): ValidateTransactionResult {
-  const fields = validateTransactionFields(input);
-  if (!fields.ok) return fields;
-  // tx: ids make re-ingest idempotent; a caller-supplied id must stay in that namespace.
-  if (input.id != null && !input.id.startsWith("tx:")) {
-    return invalidTransaction('id must start with "tx:".');
-  }
-  if (typeof input.amount !== "number" || !Number.isFinite(input.amount) || input.amount <= 0) {
-    return invalidTransaction("amount must be a positive number.");
-  }
-  // Currency isn't resolved yet, so this assumes the largest ISO exponent (3);
-  // conservative, since an exponent-0 currency would tolerate a larger amount.
-  if (input.amount * 1000 > Number.MAX_SAFE_INTEGER) {
-    return invalidTransaction("amount is too large to hold in any currency's minor units.");
-  }
-  return { ok: true };
-}
-
 /** Keyed on where the row landed, not on how it got there: every road to
  *  uncategorized carries a hint, so parking a row there is never the quiet path. */
 function preparedSide(
@@ -231,115 +147,6 @@ function resolveTransactionAccounts(
     debit: preparedSide("debit", debitAccountId, debitId, debit),
     credit: preparedSide("credit", creditAccountId, creditId, credit),
   };
-}
-
-/** An uppercase head is still a currency claim, and the id grammar has no case
- *  to read it in; treating it as no claim would drop the side into the other's
- *  ledger and relabel the amount at that exponent. */
-function miscasedHeadRefusal(side: TransactionSide, accountId: string): DirtyInput | null {
-  if (isLedgerScopedId(accountId)) return null;
-  if (!isLedgerScopedId(accountId.toLowerCase())) return null;
-  return dirtyInput(
-    `${side} ${accountId} carries an uppercase currency head; account ids are lowercase, ` +
-      `e.g. ${accountId.toLowerCase()}`,
-  );
-}
-
-/** The unplaceable side takes the other's uncategorized account, so naming that
- *  very account opposite it would post both legs to one account. */
-function sharedFallbackRefusal(unplaceableId: string, otherId: string): DirtyInput | null {
-  if (!isUncategorizedId(otherId)) return null;
-  return dirtyInput(
-    `${unplaceableId} names no path in an existing ledger and falls back onto ${otherId}, ` +
-      "which the other side already names; debit and credit accounts must differ.",
-  );
-}
-
-/** Refuses the whole row before either side resolves, so a good side's
- *  placeholder tree can't outlive a refused row. */
-function unopenedLedgerRefusal(
-  db: Database.Database,
-  side: TransactionSide,
-  accountId: string,
-): UnopenedLedgerRefusal | null {
-  if (!namesUnopenedLedger(db, accountId)) return null;
-  const ledger = currencyOf(accountId).toLowerCase();
-  return {
-    ok: false,
-    reason: "unknown_ledger",
-    side,
-    accountId,
-    ledger,
-    message:
-      `${side} ${accountId} names ledger "${ledger}", which does not exist here; ` +
-      "open it with `oled accounts create`, or fix the currency prefix",
-  };
-}
-
-/** Only heads naming an EXISTING ledger count as a mismatch; an unopened
- *  ledger is `unopenedLedgerRefusal`'s to catch. */
-export function crossLedger(
-  db: Database.Database,
-  debitAccountId: string,
-  creditAccountId: string,
-): boolean {
-  if (!isLedgerScopedId(debitAccountId) || !isLedgerScopedId(creditAccountId)) return false;
-  const debitCurrency = currencyOf(debitAccountId);
-  const creditCurrency = currencyOf(creditAccountId);
-  if (debitCurrency === creditCurrency) return false;
-  return ledgerExists(db, debitCurrency) && ledgerExists(db, creditCurrency);
-}
-
-/** Pure-read refusals only, decided before resolution writes anything; shared
- *  with the compound pre-scan so a bad later leg is caught first. */
-function refuseRow(db: Database.Database, input: RawTransactionInput): RowRefusal | null {
-  const raw = validateRawTransaction(input);
-  if (!raw.ok) return dirtyInput(raw.message);
-
-  const miscased =
-    miscasedHeadRefusal("debit", input.debit_account_id) ??
-    miscasedHeadRefusal("credit", input.credit_account_id);
-  if (miscased) return miscased;
-
-  const unopened =
-    unopenedLedgerRefusal(db, "debit", input.debit_account_id) ??
-    unopenedLedgerRefusal(db, "credit", input.credit_account_id);
-  if (unopened) return unopened;
-
-  if (crossLedger(db, input.debit_account_id, input.credit_account_id)) {
-    const debit = { id: input.debit_account_id, currency: currencyOf(input.debit_account_id) };
-    const credit = { id: input.credit_account_id, currency: currencyOf(input.credit_account_id) };
-    return {
-      ok: false,
-      reason: "currency_mismatch",
-      message: `debit ${debit.id} is ${debit.currency}, credit ${credit.id} is ${credit.currency}`,
-      debit,
-      credit,
-    };
-  }
-
-  const debitPlaceable = shouldPlaceAccount(db, input.debit_account_id);
-  const creditPlaceable = shouldPlaceAccount(db, input.credit_account_id);
-  if (!debitPlaceable && !creditPlaceable) {
-    return dirtyInput("neither account id names a path in an existing ledger.");
-  }
-
-  if (!debitPlaceable) {
-    const shared = sharedFallbackRefusal(input.debit_account_id, input.credit_account_id);
-    if (shared) return shared;
-  }
-  if (!creditPlaceable) {
-    const shared = sharedFallbackRefusal(input.credit_account_id, input.debit_account_id);
-    if (shared) return shared;
-  }
-
-  // Both sides share a ledger by now (`crossLedger` refused the rest), so the
-  // placeable side already fixes the exponent the decimal converts through.
-  const currency = currencyOf(debitPlaceable ? input.debit_account_id : input.credit_account_id);
-  if (toMinorUnits(input.amount, currency) <= 0) {
-    return dirtyInput("amount must be a positive integer in minor units.");
-  }
-  return null;
 }
 
 /** Resolution writes (placeholder accounts, ledger structure), so `refuseRow` must

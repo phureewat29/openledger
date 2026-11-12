@@ -58,8 +58,11 @@ export function formatFixed(amount: number, currency: string): string {
   return amount.toFixed(minorUnitExponent(currency));
 }
 
+/** Per-currency sums in minor units, keyed by currency code; never emitted as is. */
+export type MinorTotals = Record<string, number>;
+
 // Keys sorted so the emitted object's key order is stable across runs; each converts with its own exponent.
-export function toDecimalTotals(totals: Record<string, number>): Record<string, number> {
+export function toDecimalTotals(totals: MinorTotals): Record<string, number> {
   return Object.fromEntries(
     Object.keys(totals)
       .sort()

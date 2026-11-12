@@ -3,7 +3,7 @@ import Database from "libsql";
 import { chmodSync, mkdtempSync, rmSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { migrate, applyMigrations, listMissingTables } from "./schema.js";
+import { migrate, listMissingTables } from "./schema.js";
 import { DBNotReadyError } from "./errors.js";
 import * as baseline from "./migrations/0001_baseline.js";
 import { MIGRATIONS, type Migration } from "./migrations/index.js";
@@ -650,7 +650,7 @@ describe("migration 3: questions_row_key_idx", () => {
 
   it("upgrades a version-2 ledger in place, keeping every question", () => {
     const db = freshDB();
-    applyMigrations(db, MIGRATIONS.slice(0, 2));
+    migrate(db, undefined, MIGRATIONS.slice(0, 2));
     db.prepare(`INSERT INTO questions (id, prompt, context_json) VALUES (?, ?, ?)`)
       .run("cn:1", "bad row", JSON.stringify({ row_key: "refusal:sf-a:1:3" }));
     expect(questionIndexes(db)).not.toContain("questions_row_key_idx");
@@ -663,23 +663,23 @@ describe("migration 3: questions_row_key_idx", () => {
   });
 });
 
-describe("applyMigrations runner", () => {
+describe("migrate runner", () => {
   const m1: Migration = { up: (db) => db.exec(`CREATE TABLE t1 (id INTEGER PRIMARY KEY)`) };
   const m2: Migration = { up: (db) => db.exec(`CREATE TABLE t2 (id INTEGER PRIMARY KEY)`) };
 
   it("applies every pending migration and records its version", () => {
     const db = freshDB();
-    applyMigrations(db, [m1, m2]);
+    migrate(db, undefined, [m1, m2]);
     expect(tableNames(db)).toEqual(expect.arrayContaining(["t1", "t2"]));
     expect(versions(db)).toEqual([1, 2]);
   });
 
   it("is a no-op once the DB is at the latest version", () => {
     const db = freshDB();
-    applyMigrations(db, [m1, m2]);
+    migrate(db, undefined, [m1, m2]);
     // m1/m2 use bare CREATE TABLE, so a re-apply would throw "table exists";
     // not throwing proves the fast path returned before running anything.
-    expect(() => applyMigrations(db, [m1, m2])).not.toThrow();
+    expect(() => migrate(db, undefined, [m1, m2])).not.toThrow();
     expect(versions(db)).toEqual([1, 2]);
   });
 
@@ -699,7 +699,7 @@ describe("applyMigrations runner", () => {
 
     // The version read before the lock is stale, so without the re-read under it the loser
     // re-runs m2 over the winner's table and stamps a version already recorded.
-    expect(() => applyMigrations(db, [winnerRacesAhead, m2])).not.toThrow();
+    expect(() => migrate(db, undefined, [winnerRacesAhead, m2])).not.toThrow();
 
     expect(versions(db)).toEqual([1, 2]);
     expect(rowCount(db, "schema_migrations")).toBe(2);
@@ -721,18 +721,18 @@ describe("applyMigrations runner", () => {
   it("throws newer-than-build, rather than silently skipping, when a race leaves the DB ahead of this build's manifest", () => {
     // The re-read under the lock sees version 3 against a 2-long manifest; the "already
     // applied" skip below it must not swallow that the same way it safely skips version 2.
-    expect(() => applyMigrations(freshDB(), [winnerRacesAheadOfBuild, m2])).toThrow(
+    expect(() => migrate(freshDB(), undefined, [winnerRacesAheadOfBuild, m2])).toThrow(
       /newer than this build/i,
     );
-    expect(() => applyMigrations(freshDB(), [winnerRacesAheadOfBuild, m2])).toThrow(DBNotReadyError);
+    expect(() => migrate(freshDB(), undefined, [winnerRacesAheadOfBuild, m2])).toThrow(DBNotReadyError);
   });
 
   it("throws when the DB version is newer than the build", () => {
     const db = freshDB();
-    applyMigrations(db, [m1, m2]);
-    expect(() => applyMigrations(db, [m1])).toThrow(/newer than this build/i);
+    migrate(db, undefined, [m1, m2]);
+    expect(() => migrate(db, undefined, [m1])).toThrow(/newer than this build/i);
     // Same "not usable by this build" condition as the foreign-db guard, so it shares the type and exits NOT_READY(3).
-    expect(() => applyMigrations(db, [m1])).toThrow(DBNotReadyError);
+    expect(() => migrate(db, undefined, [m1])).toThrow(DBNotReadyError);
   });
 
   it("refuses an on-disk DB that holds tables but no version ledger", () => {
@@ -741,7 +741,7 @@ describe("applyMigrations runner", () => {
       const db = new Database(dbPath);
       db.exec(`CREATE TABLE preexisting (id INTEGER PRIMARY KEY)`);
 
-      expect(() => applyMigrations(db, [m1, m2], dbPath)).toThrow(/not an OpenLedger database/i);
+      expect(() => migrate(db, dbPath, [m1, m2])).toThrow(/not an OpenLedger database/i);
 
       // Refusal comes before any write, so there is nothing to back up.
       expect(backups(dir)).toEqual([]);
@@ -755,11 +755,11 @@ describe("applyMigrations runner", () => {
       const db = new Database(dbPath);
 
       // An empty file at version 0 has nothing worth copying.
-      applyMigrations(db, [m1], dbPath);
+      migrate(db, dbPath, [m1]);
       db.prepare(`INSERT INTO t1 (id) VALUES (1)`).run();
       expect(backups(dir)).toEqual([]);
 
-      applyMigrations(db, [m1, m2], dbPath);
+      migrate(db, dbPath, [m1, m2]);
 
       expect(backups(dir).length).toBe(1);
       expect(versions(db)).toEqual([1, 2]);

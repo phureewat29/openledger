@@ -34,7 +34,7 @@ afterEach(() => {
 describe("requireConfig (unchanged by the assertUsable extraction)", () => {
   it("fails NOT_READY when the named file does not exist", () => {
     const missing = join(dir, "nope.json");
-    const thrown = thrownBy(() => requireConfig(missing));
+    const thrown = thrownBy(() => requireConfig(missing, { cwd: dir, home: dir }));
     expect(thrown.code).toBe("NOT_READY");
     expect(EXIT[thrown.code]).toBe(3);
     expect(thrown.message).toBe(`no config file at ${missing}`);
@@ -44,7 +44,7 @@ describe("requireConfig (unchanged by the assertUsable extraction)", () => {
   it("fails NOT_READY when the named file exists but does not parse", () => {
     const broken = join(dir, "broken.json");
     writeFileSync(broken, "not json\n");
-    const thrown = thrownBy(() => requireConfig(broken));
+    const thrown = thrownBy(() => requireConfig(broken, { cwd: dir, home: dir }));
     expect(thrown.code).toBe("NOT_READY");
     expect(thrown.message).toContain(`config file ${broken} is unusable`);
     expect(thrown.hint).toBe("fix or remove it, then run `oled config --init`");
@@ -53,7 +53,7 @@ describe("requireConfig (unchanged by the assertUsable extraction)", () => {
   it("returns the resolved config when the named file exists and parses", () => {
     const good = join(dir, "good.json");
     writeFileSync(good, JSON.stringify({ displayCurrency: "USD" }));
-    const cfg = requireConfig(good);
+    const cfg = requireConfig(good, { cwd: dir, home: dir });
     expect(cfg.exists).toBe(true);
     expect(cfg.displayCurrency).toBe("USD");
   });
@@ -62,7 +62,7 @@ describe("requireConfig (unchanged by the assertUsable extraction)", () => {
 describe("inspectConfig: a named --config must still resolve", () => {
   it("fails NOT_READY when the named path does not exist", () => {
     const missing = join(dir, "nope.json");
-    const thrown = thrownBy(() => inspectConfig(missing, dir));
+    const thrown = thrownBy(() => inspectConfig(missing, { cwd: dir, home: dir }));
     expect(thrown.code).toBe("NOT_READY");
     expect(thrown.message).toBe(`no config file at ${missing}`);
   });
@@ -70,7 +70,7 @@ describe("inspectConfig: a named --config must still resolve", () => {
   it("fails NOT_READY when the named path exists but is unusable", () => {
     const broken = join(dir, "broken.json");
     writeFileSync(broken, "not json\n");
-    const thrown = thrownBy(() => inspectConfig(broken, dir));
+    const thrown = thrownBy(() => inspectConfig(broken, { cwd: dir, home: dir }));
     expect(thrown.code).toBe("NOT_READY");
     expect(thrown.message).toContain(`config file ${broken} is unusable`);
   });
@@ -78,7 +78,7 @@ describe("inspectConfig: a named --config must still resolve", () => {
   it("returns the resolved config when the named path exists and parses", () => {
     const good = join(dir, "good.json");
     writeFileSync(good, JSON.stringify({ displayCurrency: "USD" }));
-    const loaded = inspectConfig(good, dir);
+    const loaded = inspectConfig(good, { cwd: dir, home: dir });
     expect(loaded.problem).toBeNull();
     expect(loaded.config.exists).toBe(true);
     expect(loaded.config.displayCurrency).toBe("USD");
@@ -87,7 +87,7 @@ describe("inspectConfig: a named --config must still resolve", () => {
 
 describe("inspectConfig: no --config stays lenient about the default profile", () => {
   it("with no default file, reports exists:false instead of failing", () => {
-    const loaded = inspectConfig(undefined, dir);
+    const loaded = inspectConfig(undefined, { cwd: dir, home: dir });
     expect(loaded.config.exists).toBe(false);
     expect(loaded.problem).toBeNull();
   });
@@ -97,7 +97,7 @@ describe("inspectConfig: no --config stays lenient about the default profile", (
     mkdirSync(oledDir, { recursive: true });
     writeFileSync(join(oledDir, "config.json"), "not json\n");
 
-    const loaded = inspectConfig(undefined, dir);
+    const loaded = inspectConfig(undefined, { cwd: dir, home: dir });
     expect(loaded.config.exists).toBe(true);
     expect(loaded.problem).toBe("it is not valid JSON");
   });

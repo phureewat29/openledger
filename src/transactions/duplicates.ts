@@ -1,5 +1,5 @@
 import type Database from "libsql";
-import { groupBy, range, sortBy, sumBy } from "es-toolkit";
+import { groupBy, range, sortBy, sum } from "es-toolkit";
 import { inTransaction } from "../db/transaction.js";
 import {
   listDuplicateCandidateTransactions,
@@ -76,9 +76,10 @@ export function findDuplicateTransactions(db: Database.Database): DuplicateTrans
  * strict rule still holds for every row it voids.
  */
 export function autoMergeStrictDuplicateTransactions(db: Database.Database): { merged: number } {
-  return inTransaction(db, () => ({
-    merged: sumBy(findDuplicateTransactions(db), (group) => autoMergeStrictGroup(db, group)),
-  }));
+  return inTransaction(db, () => {
+    const voided = findDuplicateTransactions(db).map((group) => autoMergeStrictGroup(db, group));
+    return { merged: sum(voided) };
+  });
 }
 
 /** One cluster: how many of its rows were voided into the earliest. */
@@ -96,7 +97,8 @@ function autoMergeStrictGroup(db: Database.Database, group: DuplicateTransaction
   if (new Set(contenders.map((r) => r.source_file_id)).size !== contenders.length) return 0;
 
   const mirrors = contenders.slice(1).filter((r) => r.source_file_id);
-  return sumBy(mirrors, (mirror) => voidIntoHead(db, mirror.id, head.id));
+  const voided = mirrors.map((mirror) => voidIntoHead(db, mirror.id, head.id));
+  return sum(voided);
 }
 
 /** 1 when this call voided the mirror, 0 when it already was. */

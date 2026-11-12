@@ -1,12 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { Chalk } from "chalk";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { LoadedConfig } from "../../config/config.js";
 import { buildReport, renderTTY } from "./status.js";
+import { ANSI_RE } from "../format.js";
 import type { StatusReport } from "../../contract/status.js";
 import { CONTRACT_VERSION } from "../../contract/version.js";
 import { getVersion } from "../../lib/version.js";
+
+const PLAIN = new Chalk({ level: 0 });
 
 function report(over: Partial<StatusReport> = {}): StatusReport {
   return {
@@ -31,7 +35,7 @@ function report(over: Partial<StatusReport> = {}): StatusReport {
 
 describe("renderTTY (the only surface that formats money for humans)", () => {
   it("renders a negative net worth signed, in the currency's own fraction digits", () => {
-    const out = renderTTY(report({ locale: "ja-JP", currency: "JPY" }), false);
+    const out = renderTTY(report({ locale: "ja-JP", currency: "JPY" }), PLAIN);
 
     // JPY has no minor unit: 1,500 exactly, never 1,500.00.
     expect(out).toContain("1,500");
@@ -52,7 +56,7 @@ describe("renderTTY (the only surface that formats money for humans)", () => {
           net_worth: { JPY: 1500, THB: 20.5 },
         },
       }),
-      false,
+      PLAIN,
     );
 
     expect(out).toMatch(/JPY net worth\s+¥1,500\n/);
@@ -63,7 +67,7 @@ describe("renderTTY (the only surface that formats money for humans)", () => {
   });
 
   it("badges waiting statements beside the ingested count", () => {
-    const out = renderTTY(report({ files: { new: 2, ingested: 1, pending: 0, failed: 0 } }), false);
+    const out = renderTTY(report({ files: { new: 2, ingested: 1, pending: 0, failed: 0 } }), PLAIN);
     expect(out).toMatch(/Files\s+1\s+\(2 new\)/);
   });
 
@@ -74,21 +78,27 @@ describe("renderTTY (the only surface that formats money for humans)", () => {
       net_worth: null,
     });
 
-    const missing = renderTTY(unreachable, false, true);
+    const missing = renderTTY(unreachable, PLAIN, true);
     expect(missing).toContain("oled config --init");
 
     // An existing-but-unopenable db is a diagnosis job, not an init job.
-    const corrupt = renderTTY(unreachable, false, false);
+    const corrupt = renderTTY(unreachable, PLAIN, false);
     expect(corrupt).toContain("oled doctor");
   });
 
+  it("colours through the given paint without moving a column", () => {
+    const colored = renderTTY(report({ config_problem: "broken" }), new Chalk({ level: 1 }));
+    expect(colored).toMatch(ANSI_RE);
+    expect(colored.replace(ANSI_RE, "")).toBe(renderTTY(report({ config_problem: "broken" }), PLAIN));
+  });
+
   it("shows a dim unusable-config line only when the default profile's file is broken", () => {
-    const clean = renderTTY(report(), false);
+    const clean = renderTTY(report(), PLAIN);
     expect(clean).not.toContain("unusable");
 
     const broken = renderTTY(
       report({ config_problem: "it is not valid JSON at line 1, column 2" }),
-      false,
+      PLAIN,
     );
     expect(broken).toContain("unusable: it is not valid JSON at line 1, column 2");
   });

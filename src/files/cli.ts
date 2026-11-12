@@ -42,7 +42,7 @@ const LIST_FILES_SPEC = z.object({ status: z.enum(FILE_STATUSES).optional() });
 
 async function listFiles(ctx: Invocation, opts: Record<string, unknown>): Promise<void> {
   const { status } = parseInput(LIST_FILES_SPEC, opts);
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   const rows = queryFiles(db);
   const shown = status ? rows.filter((r) => r.status === status) : rows;
   ctx.out.emitList(shown, FILE_COLUMNS);
@@ -58,7 +58,7 @@ async function listFiles(ctx: Invocation, opts: Record<string, unknown>): Promis
 }
 
 async function showFile(ctx: Invocation, id: string): Promise<void> {
-  const { db } = await openLedger(ctx.configPath);
+  const { db } = await openLedger(ctx);
   const row = requireFile(db, id, "run `oled files list --json` for the ids");
 
   const detail: FileDetail = {
@@ -76,7 +76,7 @@ interface DropFileOpts {
 
 async function dropFile(ctx: Invocation, id: string, opts: DropFileOpts): Promise<void> {
   requireYes(opts, `dropping file ${id}`);
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   requireFile(db, id, "run `oled files list --json` for the ids");
   const deleted = deleteFile(db, id);
 

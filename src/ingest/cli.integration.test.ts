@@ -669,6 +669,22 @@ describe("ingest prepare (subprocess)", () => {
     expect(obj.ocr_model).toBeUndefined();
   }, 30000);
 
+  it("resolves a relative path outside the data dir against the caller's cwd", async () => {
+    const box = createSandbox("oled-prepare-cwd-it-");
+    try {
+      writeConfig(box, {});
+      const elsewhere = join(box.root, "elsewhere");
+      mkdirSync(elsewhere);
+      writeFileSync(join(elsewhere, "loose.pdf"), textPDF());
+
+      const prepare = await makeRunCLI(box)(["ingest", "prepare", "loose.pdf", "--json"], { cwd: elsewhere });
+      expect(prepare.code).toBe(0);
+      expect(parseOne(prepare.stdout)).toMatchObject({ kind: "text", source: "text-layer" });
+    } finally {
+      box.cleanup();
+    }
+  }, 30000);
+
   it("hands an image back by its own path, writing nothing to the cache", async () => {
     const path = stage("receipts/receipt.png", samplePng());
 
@@ -1219,4 +1235,39 @@ describe("ingest fail (subprocess)", () => {
     expect(result.cache_removed).toEqual([cacheSubdir]);
     expect(existsSync(cacheSubdir)).toBe(false);
   }, 30000);
+});
+
+describe("legacy sf: file ids (subprocess)", () => {
+  /** A pending row under the `sf:<uuid>` form older releases minted, with its extracted text cached. */
+  function seedLegacyFile(fileId: string): string {
+    const db = readDB();
+    try {
+      db.prepare(
+        `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
+      ).run(fileId, `/tmp/${fileId}.pdf`, `${fileId}-hash`, "application/pdf");
+    } finally {
+      db.close();
+    }
+    const cacheSubdir = join(sandbox.cacheDir, fileId);
+    mkdirSync(cacheSubdir, { recursive: true });
+    writeFileSync(join(cacheSubdir, "document.txt"), "--- page 1 ---\nstatement text\n");
+    return cacheSubdir;
+  }
+
+  it("files drop and ingest done both purge the cached text", async () => {
+    const dropped = "sf:3f1c2a9e-0b4d-4c7e-9a1f-5d6e7f809a1b";
+    const done = "sf:aaaa2a9e-0b4d-4c7e-9a1f-5d6e7f809a1b";
+    const droppedCache = seedLegacyFile(dropped);
+    const doneCache = seedLegacyFile(done);
+
+    const drop = await runCLI(["files", "drop", dropped, "--yes", "--json"]);
+    expect(drop.code).toBe(0);
+    expect(parseOne(drop.stdout)).toMatchObject({ file_id: dropped, cache_removed: [droppedCache] });
+    expect(existsSync(droppedCache)).toBe(false);
+
+    const closed = await runCLI(["ingest", "done", done, "--json"]);
+    expect(closed.code).toBe(0);
+    expect(parseOne(closed.stdout)).toMatchObject({ file_id: done, status: "ingested", cache_removed: [doneCache] });
+    expect(existsSync(doneCache)).toBe(false);
+  }, 60000);
 });

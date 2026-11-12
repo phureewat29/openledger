@@ -210,6 +210,12 @@ describe("validate: atLeastOne", () => {
   it("passes when at least one field is present", () => {
     expect(parseInput(spec, { name: "x" }, { atLeastOne: msg })).toEqual({ name: "x" });
   });
+
+  it("does not count a required key", () => {
+    const targeted = spec.extend({ id: str() });
+    expect(() => parseInput(targeted, { id: "m:1" }, { atLeastOne: msg })).toThrowError(msg);
+    expect(parseInput(targeted, { id: "m:1", due_day: "3" }, { atLeastOne: msg })).toEqual({ id: "m:1", due_day: 3 });
+  });
 });
 
 describe("validate: entry-point shapes", () => {

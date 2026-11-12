@@ -45,10 +45,10 @@ export function importsOf(text: string): ImportRef[] {
   return [...statics, ...sideEffects, ...dynamics];
 }
 
-export function listTsFiles(dir: string): string[] {
+export function listTSFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) return listTsFiles(full);
+    if (entry.isDirectory()) return listTSFiles(full);
     return entry.name.endsWith(".ts") ? [full] : [];
   });
 }
@@ -58,7 +58,7 @@ export function isTestFile(path: string): boolean {
 }
 
 export function readSources(dir: string): SourceFile[] {
-  return listTsFiles(dir).map((path) => {
+  return listTSFiles(dir).map((path) => {
     const text = readFileSync(path, "utf8");
     return { path, text, imports: importsOf(text) };
   });

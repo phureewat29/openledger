@@ -2,22 +2,19 @@ import { difference, dropRight } from "es-toolkit";
 import type Database from "libsql";
 import { copyFileSync, readdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { localStamp } from "../lib/date.js";
 import { chmod600 } from "../lib/perms.js";
+import { tryExecute } from "../lib/result.js";
 import { DBNotReadyError } from "./errors.js";
 import { MIGRATIONS, type Migration } from "./migrations/index.js";
 import { ISO_NOW_SQL } from "./timestamps.js";
 import { inTransaction } from "./transaction.js";
 
 // A migration may drop tables (0002 rebaselines v1); the file is copied aside first.
-export function migrate(db: Database.Database, dbPath?: string): void {
-  applyMigrations(db, MIGRATIONS, dbPath);
-}
-
-/** Migrations are a parameter, not a direct import, so tests can drive a synthetic manifest. */
-export function applyMigrations(
+export function migrate(
   db: Database.Database,
-  migrations: Migration[],
   dbPath?: string,
+  migrations: readonly Migration[] = MIGRATIONS,
 ): void {
   const current = currentVersion(db);
 
@@ -130,19 +127,10 @@ function hasUserTables(db: Database.Database): boolean {
  */
 function backupDatabase(db: Database.Database, dbPath: string): void {
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  const backupPath = `${dbPath}.${backupStamp()}.bak`;
+  const backupPath = `${dbPath}.${localStamp(new Date())}.bak`;
   copyFileSync(dbPath, backupPath);
   chmod600(backupPath);
   pruneBackups(dbPath);
-}
-
-function backupStamp(): string {
-  const d = new Date();
-  const p = (n: number): string => String(n).padStart(2, "0");
-  return (
-    `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
-    `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
-  );
 }
 
 /** Keeps the five newest `<dbPath>.<stamp>.bak` copies. */
@@ -154,10 +142,7 @@ function pruneBackups(dbPath: string): void {
     .filter((name) => name.startsWith(prefix) && name.endsWith(".bak"))
     .sort();
   for (const name of dropRight(backups, 5)) {
-    try {
-      unlinkSync(join(dir, name));
-    } catch {
-      // Housekeeping mid-migration: an undeletable stale copy must not fail an upgrade the new backup already covers.
-    }
+    // Housekeeping mid-migration: an undeletable stale copy must not fail an upgrade the new backup already covers.
+    tryExecute(() => unlinkSync(join(dir, name)));
   }
 }

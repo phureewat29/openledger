@@ -1,4 +1,4 @@
-import chalk from "chalk";
+import chalk, { type ChalkInstance } from "chalk";
 import { isPlainObject } from "es-toolkit";
 import { EXIT, type ExitCode } from "../contract/exit.js";
 
@@ -29,7 +29,7 @@ export function renderPlain<T>(rows: readonly T[], columns: Column<T>[]): string
   return lines.length ? lines.join("\n") + "\n" : "";
 }
 
-export function renderTable<T>(rows: readonly T[], columns: Column<T>[], color: boolean): string {
+export function renderTable<T>(rows: readonly T[], columns: Column<T>[], paint: ChalkInstance): string {
   const cells = rows.map((row) => columns.map((c) => c.value(row)));
   const widths = columns.map((c, i) =>
     Math.max(visibleLength(c.header), ...cells.map((r) => visibleLength(r[i]))),
@@ -39,7 +39,7 @@ export function renderTable<T>(rows: readonly T[], columns: Column<T>[], color: 
     return align === "right" ? gap + s : s + gap;
   };
   const header = columns
-    .map((c, i) => pad(color ? chalk.bold(c.header) : c.header, widths[i], c.align))
+    .map((c, i) => pad(paint.bold(c.header), widths[i], c.align))
     .join("  ")
     .trimEnd();
   const body = cells.map((r) =>
@@ -59,19 +59,18 @@ export function flattenRows(obj: Record<string, unknown>): [string, string][] {
 
 // Human output only (TTY: aligned two-column, piped: tab-separated); the caller owns --json.
 export function formatKeyValues(
-  rows: [string, string | number][],
-  opts: { tty: boolean; bold?: boolean },
+  rows: [string, string | number | boolean][],
+  opts: { tty: boolean; paintKey?: (key: string) => string },
 ): string {
   if (!opts.tty) return rows.map(([k, v]) => `${k}\t${v}`).join("\n") + "\n";
+  const { paintKey = (key: string) => key } = opts;
   const width = Math.max(...rows.map(([k]) => k.length));
-  // Pads before applying bold, so the ANSI codes don't count toward the width.
-  return rows
-    .map(([k, v]) => `${opts.bold ? chalk.bold(k.padEnd(width)) : k.padEnd(width)}  ${v}\n`)
-    .join("");
+  // Pads before painting, so the ANSI codes don't count toward the width.
+  return rows.map(([k, v]) => `${paintKey(k.padEnd(width))}  ${v}\n`).join("");
 }
 
-export function banner(): string {
-  return chalk.bold("OpenLedger") + chalk.dim(`  ·  ${TAGLINE}`);
+export function banner(paint: ChalkInstance): string {
+  return paint.bold("OpenLedger") + paint.dim(`  ·  ${TAGLINE}`);
 }
 
 const DISCLAIMER =
@@ -127,7 +126,7 @@ export function helpScreen(
 
   return [
     "",
-    banner(),
+    banner(chalk),
     "",
     section("About", SCENARIO),
     "",

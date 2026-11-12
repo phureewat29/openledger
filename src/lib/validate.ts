@@ -1,6 +1,6 @@
 import * as z from "zod";
 import { uniqBy } from "es-toolkit";
-import { ok, tryExecute, type Result } from "./result.js";
+import { err, ok, tryExecute, type Result } from "./result.js";
 import { ISO_DATE_RE } from "./date.js";
 
 /** Thrown by `parseInput`; `src/lib/` can't depend on `src/cli/`, so the CLI layer maps this to its own error/exit-code type. */
@@ -75,7 +75,7 @@ interface ParseOptions {
   aliases?: Record<string, string[]>;
   /** Override the default `--key-with-dashes` label per spec key. */
   labels?: Record<string, string>;
-  /** Fail with this message when the parse produces zero output keys. */
+  /** Fail with this message when the parse produces no optional key; a required key never counts. */
   atLeastOne?: string;
 }
 
@@ -175,6 +175,11 @@ function formatError(
   return failed.map((f) => f.clause).join("; ");
 }
 
+function hasOptionalKey(schema: z.ZodObject, parsed: object): boolean {
+  const shape = schema.shape as Record<string, z.ZodType>;
+  return Object.keys(parsed).some((key) => shape[key].safeParse(undefined).success);
+}
+
 /** Accumulates every missing-required and coercion error into one thrown `ValidationError`. */
 export function parseInput<S extends z.ZodObject>(
   schema: S,
@@ -183,7 +188,7 @@ export function parseInput<S extends z.ZodObject>(
 ): z.infer<S> {
   const result = safeParse(schema, raw, opts);
   if (!result.ok) throw new ValidationError(result.error);
-  if (opts?.atLeastOne && Object.keys(result.value as object).length === 0) {
+  if (opts?.atLeastOne && !hasOptionalKey(schema, result.value)) {
     throw new ValidationError(opts.atLeastOne);
   }
   return result.value;
@@ -198,9 +203,6 @@ export function safeParse<S extends z.ZodObject>(
   const shape = schema.shape as Record<string, z.ZodType>;
   const normalized = normalizeRaw(shape, raw as Record<string, unknown>, opts?.aliases);
   const parsed = schema.safeParse(normalized);
-  if (parsed.success) return { ok: true, value: parsed.data as z.infer<S> };
-  return {
-    ok: false,
-    error: formatError(shape, normalized, parsed.error.issues as unknown as Issue[], opts),
-  };
+  if (parsed.success) return ok(parsed.data as z.infer<S>);
+  return err(formatError(shape, normalized, parsed.error.issues as unknown as Issue[], opts));
 }

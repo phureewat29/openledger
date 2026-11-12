@@ -9,7 +9,7 @@ import type { ExitCode } from "../contract/exit.js";
 import { commitIngest } from "./commit-cli.js";
 import { markFileFailed, markFileIngested } from "../files/queries.js";
 import { getAccountBalanceMinor } from "../accounts/balances.js";
-import { DIRECTION_RULES } from "./commit.js";
+import { DIRECTION_RULES } from "../transactions/posting.js";
 import { currencyOf } from "../lib/ids.js";
 import { formatFixed, fromMinorUnits, toMinorUnits } from "../lib/money.js";
 import { tryExecute } from "../lib/result.js";
@@ -76,7 +76,7 @@ const NO_ENTRIES: Record<IngestEntry["status"], number> = {
 };
 
 async function listIngest(ctx: Invocation, opts: ListIngestOpts): Promise<void> {
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   const regex = opts.regex ? compileRegex(opts.regex) : undefined;
 
   const entries = await discoverFiles(db, config.dataDir, { regex });
@@ -84,19 +84,20 @@ async function listIngest(ctx: Invocation, opts: ListIngestOpts): Promise<void> 
   const total = entries.length;
 
   const { out } = ctx;
-  if (out.mode.json) {
-    for (const e of entries) out.emit(toIngestFile(e));
-    const summary: Omit<IngestListSummary, "type"> = { ...counts, total };
-    out.emitSummary(summary);
-    return;
-  }
-
-  out.emitList(entries, INGEST_COLUMNS);
-  if (out.mode.tty) {
-    out.write(
-      `\n${counts.new} new, ${counts.pending} pending, ${counts.ingested} ingested, ${counts.failed} failed, ${counts.unreadable} unreadable (${total} total)\n`,
-    );
-  }
+  out.render({
+    json: () => {
+      for (const e of entries) out.emit(toIngestFile(e));
+      const summary: Omit<IngestListSummary, "type"> = { ...counts, total };
+      out.emitSummary(summary);
+    },
+    tty: () => {
+      out.emitList(entries, INGEST_COLUMNS);
+      out.write(
+        `\n${counts.new} new, ${counts.pending} pending, ${counts.ingested} ingested, ${counts.failed} failed, ${counts.unreadable} unreadable (${total} total)\n`,
+      );
+    },
+    plain: () => out.emitList(entries, INGEST_COLUMNS),
+  });
 }
 
 interface PrepareIngestOpts {
@@ -168,9 +169,9 @@ async function prepareIngest(
   pathOrId: string,
   opts: PrepareIngestOpts,
 ): Promise<ExitCode | undefined> {
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
 
-  const result = await prepareFile(db, config, pathOrId, {
+  const result = await prepareFile(db, config, pathOrId, ctx.roots.cwd, {
     password: opts.password,
     force: !!opts.force,
     rescan: !!opts.rescan,
@@ -251,7 +252,7 @@ async function closeFile<T>(
   verb: "done" | "fail",
   mark: (db: Database.Database) => T,
 ): Promise<{ marked: T; removed: string[] }> {
-  const { config, db } = await openLedger(ctx.configPath);
+  const { config, db } = await openLedger(ctx);
   requireFile(
     db,
     id,

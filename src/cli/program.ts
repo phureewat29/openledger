@@ -65,8 +65,8 @@ function parseFailureHandler(cmd: Command, json: boolean): (err: CommanderError)
   return (err) => {
     if (err.exitCode === 0) return;
     // commander already printed help for a bare noun; --json needs one error line instead.
+    if (err.code === "commander.help" && !json) return;
     if (err.code === "commander.help") {
-      if (!json) return;
       fail("USAGE", `${commandPath(cmd)} needs a subcommand`, {
         hint: `one of: ${cmd.commands.map((sub) => sub.name()).join(", ")}`,
       });

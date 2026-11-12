@@ -7,9 +7,10 @@ import { STRUCTURAL_SUFFIX, currencyOf, newTransactionId } from "../lib/ids.js";
 import { clampLimit, clampOffset } from "../lib/limit.js";
 import { ISO_DATE_RE } from "../lib/date.js";
 import { inTransaction } from "../db/transaction.js";
+import { clause, whereSQL, type Clause, type Filter } from "../db/where.js";
 
 /** `noise_tokens` lives here, not on `TransactionInput`, so only rows claiming an alias carry one. */
-interface TransactionMerchantInput extends MerchantUpsertInput {
+export interface TransactionMerchantInput extends MerchantUpsertInput {
   noise_tokens: readonly string[];
 }
 
@@ -238,41 +239,25 @@ function escapeLike(text: string): string {
   return text.replace(/[\\%_]/g, "\\$&");
 }
 
+function queryClause(text: string): Clause {
+  const like = `%${escapeLike(text)}%`;
+  return clause(QUERY_SQL, ...QUERY_COLUMNS.map(() => like));
+}
+
 // Shared by listTransactions and countTransactions so a filtered count matches the list.
-function buildListWhere(opts: ListFilters): { whereSQL: string; params: unknown[] } {
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-
-  if (!opts.includeVoid) conditions.push("t.void_of IS NULL");
-  if (opts.account) {
-    conditions.push("(t.debit_account_id = ? OR t.credit_account_id = ?)");
-    params.push(opts.account, opts.account);
-  }
+const LIST_FILTERS: Filter<ListFilters>[] = [
+  (o) => (o.includeVoid ? null : clause("t.void_of IS NULL")),
+  (o) => (o.account ? clause("(t.debit_account_id = ? OR t.credit_account_id = ?)", o.account, o.account) : null),
   // Same expression the `currency` column is projected from, so filtering matches what's reported.
-  if (opts.ledger && !opts.account) {
-    conditions.push(`${accountCurrencySQL("da")} = upper(?)`);
-    params.push(opts.ledger);
-  }
-  if (opts.from) {
-    conditions.push("t.date >= ?");
-    params.push(opts.from);
-  }
-  if (opts.to) {
-    conditions.push("t.date <= ?");
-    params.push(opts.to);
-  }
-  if (opts.query) {
-    const like = `%${escapeLike(opts.query)}%`;
-    conditions.push(QUERY_SQL);
-    params.push(...QUERY_COLUMNS.map(() => like));
-  }
-  if (opts.amount !== undefined) {
-    conditions.push("t.amount = ?");
-    params.push(opts.amount);
-  }
+  (o) => (o.ledger && !o.account ? clause(`${accountCurrencySQL("da")} = upper(?)`, o.ledger) : null),
+  (o) => (o.from ? clause("t.date >= ?", o.from) : null),
+  (o) => (o.to ? clause("t.date <= ?", o.to) : null),
+  (o) => (o.query ? queryClause(o.query) : null),
+  (o) => (o.amount !== undefined ? clause("t.amount = ?", o.amount) : null),
+];
 
-  const whereSQL = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  return { whereSQL, params };
+function listWhere(opts: ListFilters): Clause {
+  return whereSQL(LIST_FILTERS.map((filter) => filter(opts)));
 }
 
 const DEFAULT_LIST_LIMIT = 50;
@@ -287,10 +272,10 @@ export function listTransactions(
   db: Database.Database,
   opts: ListTransactionsOptions = {},
 ): TransactionRow[] {
-  const { whereSQL, params } = buildListWhere(opts);
+  const where = listWhere(opts);
   return db
-    .prepare(`${ROW_SELECT} ${whereSQL} ORDER BY t.date DESC, t.rowid DESC LIMIT ? OFFSET ?`)
-    .all(...params, clampListLimit(opts.limit), clampOffset(opts.offset)) as TransactionRow[];
+    .prepare(`${ROW_SELECT} ${where.sql} ORDER BY t.date DESC, t.rowid DESC LIMIT ? OFFSET ?`)
+    .all(...where.params, clampListLimit(opts.limit), clampOffset(opts.offset)) as TransactionRow[];
 }
 
 /** Deleting a surviving twin un-voids its mirrors (`void_of` ON DELETE SET NULL). */
@@ -437,9 +422,9 @@ export function repointTransactions(
 
 /** Same filters as listTransactions, no limit; with no opts it counts every live row (voided mirrors excluded). */
 export function countTransactions(db: Database.Database, opts: ListFilters = {}): number {
-  const { whereSQL, params } = buildListWhere(opts);
+  const where = listWhere(opts);
   return (
-    db.prepare(`SELECT COUNT(*) AS n ${LIST_FROM} ${whereSQL}`).get(...params) as { n: number }
+    db.prepare(`SELECT COUNT(*) AS n ${LIST_FROM} ${where.sql}`).get(...where.params) as { n: number }
   ).n;
 }
 
@@ -485,19 +470,35 @@ const TRANSACTION_META_PATCH: Record<keyof UpdateTransactionMetaFields, PatchFie
   merchant_id: {},
 };
 
+type UpdateTransactionMetaOutcome =
+  | { ok: true; changes: number }
+  | Extract<ValidateTransactionResult, { ok: false }>;
+
 /** Amount and account columns aren't accepted here: moving accounts is `bulkRecategorize`'s job, and amount edits go through delete and re-add. */
 export function updateTransactionMeta(
   db: Database.Database,
   id: string,
   fields: UpdateTransactionMetaFields,
-): number {
+): UpdateTransactionMetaOutcome {
   const check = validateTransactionMeta(fields);
-  if (!check.ok) throw new Error(check.message);
+  if (!check.ok) return check;
   const { sets, params } = buildPatch(TRANSACTION_META_PATCH, {}, fields);
-  if (sets.length === 0) return 0;
-  return db
+  if (sets.length === 0) return { ok: true, changes: 0 };
+  const { changes } = db
     .prepare(`UPDATE transactions SET ${sets.join(", ")} WHERE id = ?`)
-    .run(...params, id).changes;
+    .run(...params, id);
+  return { ok: true, changes };
+}
+
+/** The transaction half of `mergeMerchants` (src/merchants/merchants.ts). */
+export function repointTransactionMerchant(
+  db: Database.Database,
+  fromMerchantId: string,
+  toMerchantId: string,
+): number {
+  return db
+    .prepare(`UPDATE transactions SET merchant_id = ? WHERE merchant_id = ?`)
+    .run(toMerchantId, fromMerchantId).changes;
 }
 
 interface VoidCandidate {
