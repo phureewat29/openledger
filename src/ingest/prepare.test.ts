@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   closeSync,
   existsSync,
@@ -30,7 +30,7 @@ import {
   textPDF,
 } from "../../fixtures/pdf.js";
 import { samplePng } from "../../fixtures/images.js";
-import { freshDB } from "../../fixtures/db.js";
+import { failingStatement, freshDB } from "../../fixtures/db.js";
 import {
   DEAD_OCR_BASE_URL,
   LIVE_PAGE_TIMEOUT_MS,
@@ -40,6 +40,12 @@ import {
 } from "../../fixtures/ocr.js";
 import { registerPendingFile } from "../files/files.js";
 import { discoverFiles, prepareFile, type PrepareConfig } from "./prepare.js";
+
+// Pass-through, so a single test can fail one artifact write the way a full disk would.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, writeFileSync: vi.fn(actual.writeFileSync) };
+});
 
 let dataDir: string;
 let cacheDir: string;
@@ -439,5 +445,39 @@ describe("prepareFile: --force", () => {
     expect(findFileById(db, first.fileId)?.status).toBe("pending");
     expect(countTransactionsBySourceFile(db, first.fileId)).toBe(1);
     expect(existsSync(resolve(cacheDir, first.fileId))).toBe(true);
+  });
+
+  it("purges the new artifacts and keeps the prior row when the swap fails", async () => {
+    const db = freshDB();
+    const path = write("scan.pdf", scanPDF());
+
+    const first = await prepareFile(db, cfg, path);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    commitRow(db, first.fileId);
+
+    const broken = failingStatement(db, "DELETE FROM files");
+    await expect(prepareFile(broken, cfg, path, { force: true })).rejects.toThrow("disk I/O error");
+    expect(readdirSync(cacheDir)).toEqual([first.fileId]);
+    expect(findFileById(db, first.fileId)?.status).toBe("pending");
+    expect(countTransactionsBySourceFile(db, first.fileId)).toBe(1);
+  });
+
+  it("purges the new artifacts and keeps the prior row when writing them fails", async () => {
+    const db = freshDB();
+    const path = write("statement.pdf", textPDF());
+
+    const first = await prepareFile(db, cfg, path);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    commitRow(db, first.fileId);
+
+    vi.mocked(writeFileSync).mockImplementationOnce(() => {
+      throw new Error("ENOSPC: no space left on device, write");
+    });
+    await expect(prepareFile(db, cfg, path, { force: true })).rejects.toThrow("ENOSPC");
+    expect(readdirSync(cacheDir)).toEqual([first.fileId]);
+    expect(findFileById(db, first.fileId)?.status).toBe("pending");
+    expect(countTransactionsBySourceFile(db, first.fileId)).toBe(1);
   });
 });

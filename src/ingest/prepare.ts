@@ -294,14 +294,17 @@ export async function prepareFile(
     dir: resolve(cfg.cacheDir, fileId),
     sourcePath: source.path,
   };
-  const written = WRITE_ARTIFACTS[extracted.value.kind](extracted.value as never, target);
-  if (!prior) return written;
+  const writeArtifacts = (): PrepareSuccess =>
+    WRITE_ARTIFACTS[extracted.value.kind](extracted.value as never, target);
+  if (!prior) return writeArtifacts();
 
-  // A failed swap leaves no row pointing at the new artifacts, so done/fail/drop could never purge them.
+  // No row points at the new id until the swap lands, so done/fail/drop could never purge what a failure leaves.
+  let written: PrepareSuccess;
   try {
+    written = writeArtifacts();
     replaceFile(db, prior.id, pendingRow(source, fileId));
   } catch (err) {
-    cleanCache(cfg.cacheDir, fileId);
+    tryExecute(() => cleanCache(cfg.cacheDir, fileId));
     throw err;
   }
   cleanCache(cfg.cacheDir, prior.id);
