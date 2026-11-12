@@ -117,7 +117,7 @@ if (status.contract_version !== CONTRACT_VERSION) {
 }
 ```
 
-`oled status --json` stamps `contract_version` (currently 1), and it bumps whenever any command's JSON shape changes, additive or not. Exit codes are data too: `EXIT.BUSY` (8) means another process held the ledger and the same command is safe to re-run.
+`oled status --json` stamps `contract_version` (currently 1), and it bumps whenever any command's JSON shape changes, additive or not. Exit codes are data too: `EXIT.BUSY` (8) means another process held the ledger, and the same command is safe to re-run unless the error carries `details.resume_from_index`. `ingest commit` sets it once rows have posted: re-run only the rows from that index, or rows without a stable id post twice.
 
 ## Security & Privacy
 

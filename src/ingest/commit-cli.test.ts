@@ -2,15 +2,16 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { countBy } from "es-toolkit";
+import Database from "libsql";
 import { commitRows, type BatchContext } from "./commit-cli.js";
 import { seedAccount, failingStatement, freshDB, ledgerLockedAtTransaction } from "../../fixtures/db.js";
 import { createOutput, describeFailure } from "../cli/output.js";
-import { countTransactions, findTransactionById } from "../transactions/queries.js";
+import { countTransactions, findTransactionById, listTransactions } from "../transactions/queries.js";
 import { findAccountById } from "../accounts/queries.js";
 import { EXIT } from "../contract/exit.js";
 import { deriveGroupId, deriveTransactionId, newBatchId } from "../lib/ids.js";
 import { insertPendingFile } from "../files/queries.js";
-import type Database from "libsql";
 
 function seedLedger(db: Database.Database): void {
   seedAccount(db, { id: "thb:asset:cash" });
@@ -89,6 +90,36 @@ describe("commitRows: a non-string field", () => {
   });
 });
 
+describe("commitRows: an inline merchant", () => {
+  it("reads a null optional field as absent, and posts", () => {
+    const db = freshDB(seedLedger);
+    const { out } = jsonOutput();
+
+    const results = commitRows(out, db, batch(), [
+      { ...row("Coffee"), merchant: { canonical_name: "Cafe X", alias: null, default_account_id: null } },
+    ]);
+
+    expect(results).toMatchObject([{ ok: true, merchant: { how: "linked" } }]);
+    expect(countTransactions(db)).toBe(1);
+  });
+
+  it("names every field it reads when the shape is wrong", () => {
+    const db = freshDB(seedLedger);
+    const { out } = jsonOutput();
+
+    const results = commitRows(out, db, batch(), [{ ...row("Coffee"), merchant: { alias: "CAFE X" } }]);
+
+    expect(results).toMatchObject([
+      {
+        ok: false,
+        reason: "dirty_input",
+        message:
+          "--merchant must be a merchant object {canonical_name, alias?, default_account_id?} with a non-empty canonical_name",
+      },
+    ]);
+  });
+});
+
 describe("commitRows: a row's own source_file_id", () => {
   it("overrides the batch's --file, and the row's ids derive from that file's hash", () => {
     const db = freshDB(seedLedger);
@@ -132,10 +163,23 @@ describe("commitRows: a locked ledger", () => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  it("stops the batch with BUSY (8), keeping the row that posted before the lock reported", () => {
+  function dbPath(): string {
     const dir = mkdtempSync(join(tmpdir(), "oled-commit-busy-"));
     dirs.push(dir);
-    const ledger = ledgerLockedAtTransaction(join(dir, "db.sqlite"), 2, seedLedger);
+    return join(dir, "db.sqlite");
+  }
+
+  function commitUntilThrown(db: Database.Database, items: unknown[]): unknown {
+    try {
+      commitRows(jsonOutput().out, db, batch(), items);
+    } catch (err) {
+      return err;
+    }
+    throw new Error("expected the batch to stop on the lock");
+  }
+
+  it("stops the batch with BUSY (8), keeping the row that posted before the lock reported", () => {
+    const ledger = ledgerLockedAtTransaction(dbPath(), 2, seedLedger);
     const { out, lines } = jsonOutput();
 
     let thrown: unknown;
@@ -150,5 +194,48 @@ describe("commitRows: a locked ledger", () => {
     expect(describeFailure(thrown, true).exitCode).toBe(EXIT.BUSY);
     expect(lines().map((r) => ({ index: r.index, ok: r.ok }))).toEqual([{ index: 0, ok: true }]);
     expect(posted).toBe(1);
+  });
+
+  it("names what posted and where to resume, and resuming there posts every row once", () => {
+    const path = dbPath();
+    const ledger = ledgerLockedAtTransaction(path, 3, seedLedger);
+    const items = [row("Coffee"), row("Lunch"), row("Dinner"), row("Snack")];
+
+    const thrown = commitUntilThrown(ledger.db, items);
+    ledger.release();
+
+    const failure = describeFailure(thrown, true);
+    expect(failure.exitCode).toBe(EXIT.BUSY);
+    expect(JSON.parse(failure.stderr).error).toEqual({
+      code: "E_BUSY",
+      message: "The ledger is in use by another process.",
+      hint:
+        "rows before index 2 already ran (2 posted, results above); re-run only the rows from index 2, " +
+        "since re-running them all would post rows without a stable id twice",
+      details: { posted: 2, resume_from_index: 2 },
+    });
+
+    const db = new Database(path);
+    db.pragma("foreign_keys = ON");
+    commitRows(jsonOutput().out, db, batch(), items.slice(2));
+    expect(countBy(listTransactions(db), (t) => t.description)).toEqual({
+      Coffee: 1,
+      Lunch: 1,
+      Dinner: 1,
+      Snack: 1,
+    });
+    db.close();
+  });
+
+  it("keeps the plain re-run hint while nothing has posted", () => {
+    const ledger = ledgerLockedAtTransaction(dbPath(), 1, seedLedger);
+
+    const thrown = commitUntilThrown(ledger.db, ["not an object", row("Coffee")]);
+    ledger.release();
+
+    const { error } = JSON.parse(describeFailure(thrown, true).stderr);
+    expect(error.code).toBe("E_BUSY");
+    expect(error.hint).toBe("another oled process is using the ledger; re-run the same command in a moment");
+    expect(error.details).toBeUndefined();
   });
 });

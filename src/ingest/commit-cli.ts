@@ -17,7 +17,7 @@ import type {
   CommitSummary,
 } from "../contract/ingest.js";
 import type { Invocation, Output } from "../cli/output.js";
-import { fail, tryBatchItem } from "../cli/errors.js";
+import { fail, toCLIError, tryBatchItem } from "../cli/errors.js";
 import { readStdinBatch } from "../cli/input.js";
 import { openLedger } from "../config/cli.js";
 import { noiseTokens } from "../datasets/datasets.js";
@@ -40,10 +40,13 @@ interface CommitIngestOpts {
 const MERCHANT_INPUT = json(
   z.object({
     canonical_name: z.string().trim().min(1),
-    alias: z.string().optional(),
-    default_account_id: z.string().nullable().optional(),
+    alias: z
+      .string()
+      .nullish()
+      .transform((alias) => alias ?? undefined),
+    default_account_id: z.string().nullish(),
   }) satisfies z.ZodType<MerchantUpsertInput>,
-  "a merchant object with a non-empty canonical_name",
+  "a merchant object {canonical_name, alias?, default_account_id?} with a non-empty canonical_name",
 )
   .nullable()
   .default(null);
@@ -206,10 +209,36 @@ function commitRow(
   return commitStandaloneRow(db, contextFor, item, index);
 }
 
+function commitItem(
+  db: Database.Database,
+  contextFor: ContextFor,
+  item: unknown,
+  index: number,
+): CommitResult {
+  const committed = tryBatchItem(() => commitRow(db, contextFor, item, index));
+  if (committed.ok) return committed.value;
+  // Reason stays `unexpected_error` (not `dirty_input`): unknown whether the row or the database was at fault.
+  return failOutcome(index, { reason: "unexpected_error", message: committed.error, raisedQuestions: 0 });
+}
+
+function rethrowMidBatch(thrown: unknown, results: CommitResult[]): never {
+  const { posted } = tallyRows(results);
+  const failure = toCLIError(thrown);
+  if (failure.code !== "BUSY" || posted === 0) throw thrown;
+
+  const resumeFrom = results.length;
+  fail("BUSY", failure.message, {
+    hint:
+      `rows before index ${resumeFrom} already ran (${posted} posted, results above); ` +
+      `re-run only the rows from index ${resumeFrom}, since re-running them all would post rows without a stable id twice`,
+    details: { posted, resume_from_index: resumeFrom },
+  });
+}
+
 /**
  * Writes each row's result as it lands. A row with no source address posts under a
- * random id, so when a ledger failure aborts the batch, the rows already written
- * are the caller's only record of what posted.
+ * random id, so once a lock aborts a batch that posted rows, a blind re-run would
+ * post them twice: the error names the index to resume from instead.
  */
 export function commitRows(
   out: Output,
@@ -225,15 +254,17 @@ export function commitRows(
     return { batchId: batch.batchId, fileId, fileHash, noise: batch.noise };
   };
 
-  return items.map((item, index) => {
-    const committed = tryBatchItem(() => commitRow(db, contextFor, item, index));
-    // Reason stays `unexpected_error` (not `dirty_input`): unknown whether the row or the database was at fault.
-    const result: CommitResult = committed.ok
-      ? committed.value
-      : failOutcome(index, { reason: "unexpected_error", message: committed.error, raisedQuestions: 0 });
-    out.emitObject(result);
-    return result;
-  });
+  const results: CommitResult[] = [];
+  try {
+    for (const [index, item] of items.entries()) {
+      const result = commitItem(db, contextFor, item, index);
+      out.emitObject(result);
+      results.push(result);
+    }
+  } catch (thrown) {
+    rethrowMidBatch(thrown, results);
+  }
+  return results;
 }
 
 type RowBucket = "posted" | "duplicates" | "failed";
