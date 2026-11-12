@@ -51,6 +51,23 @@ describe("inTransaction", () => {
     expect(values(db)).toEqual([]);
   });
 
+  it("refuses an async fn and rolls back what it wrote before its first await", () => {
+    expect(() => inTransaction(db, async () => { insert(db, 1); })).toThrow(/synchronous fn/);
+    expect(db.inTransaction).toBe(false);
+    expect(values(db)).toEqual([]);
+  });
+
+  it("refuses an async fn that would only join, taking the outer unit down with it", () => {
+    expect(() =>
+      inTransaction(db, () => {
+        insert(db, 1);
+        inTransaction(db, async () => { insert(db, 2); });
+      }),
+    ).toThrow(/synchronous fn/);
+    expect(db.inTransaction).toBe(false);
+    expect(values(db)).toEqual([]);
+  });
+
   it("surfaces the original error when SQLite has already rolled the transaction back", () => {
     db.exec(`CREATE TABLE big (b BLOB)`);
     db.pragma("max_page_count = 20");

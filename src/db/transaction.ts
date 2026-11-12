@@ -6,15 +6,22 @@ import type Database from "libsql";
  * read-then-write fails on the lock upgrade without waiting out busy_timeout.
  */
 export function inTransaction<T>(db: Database.Database, fn: () => T): T {
-  if (db.inTransaction) return fn();
+  if (db.inTransaction) return requireSync(fn());
   db.exec("BEGIN IMMEDIATE");
   try {
-    const value = fn();
+    const value = requireSync(fn());
     db.exec("COMMIT");
     return value;
   } catch (err) {
-    // SQLite has already rolled back on SQLITE_FULL; libsql's wrapper would ROLLBACK again and throw over `err`.
+    // SQLite may already have rolled back (SQLITE_FULL); a second ROLLBACK would throw over `err`.
     if (db.inTransaction) db.exec("ROLLBACK");
     throw err;
   }
+}
+
+function requireSync<T>(value: T): T {
+  if (typeof (value as PromiseLike<unknown> | null)?.then === "function") {
+    throw new Error("inTransaction needs a synchronous fn: the unit would end before its awaited writes");
+  }
+  return value;
 }
