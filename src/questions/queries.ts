@@ -158,6 +158,7 @@ export function clampQuestionsLimit(limit?: number): number {
   return clampLimit(limit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
 }
 
+/** Oldest first; same-millisecond rows in insertion order, since random ids can't break that tie stably. */
 export function listQuestions(
   db: Database.Database,
   opts: ListQuestionsOptions = {},
@@ -167,7 +168,7 @@ export function listQuestions(
     `SELECT ${ROW_COLUMNS}
      FROM questions
      ${whereSQL}
-     ORDER BY created_at ASC, id ASC
+     ORDER BY created_at ASC, rowid ASC
      LIMIT ? OFFSET ?`,
   ).all(...params, clampQuestionsLimit(opts.limit), clampOffset(opts.offset)) as QuestionRow[];
 }

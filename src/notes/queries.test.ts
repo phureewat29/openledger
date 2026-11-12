@@ -33,6 +33,15 @@ describe("addNote", () => {
   });
 });
 
+describe("listNotes", () => {
+  it("breaks a created_at tie newest insert first", () => {
+    const db = freshDB();
+    const ids = ["first", "second", "third"].map((content) => addNote(db, content, "fact").id);
+    db.prepare(`UPDATE notes SET created_at = '2026-01-01T00:00:00.000Z'`).run();
+    expect(listNotes(db).map((note) => note.id)).toEqual(ids.toReversed());
+  });
+});
+
 describe("deleteNote", () => {
   let db: Database.Database;
   beforeEach(() => {

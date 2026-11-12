@@ -15,7 +15,7 @@ const ROW_COLUMNS = "id, content, category, created_at";
 
 export function listNotes(db: Database.Database): NoteRow[] {
   return db.prepare(
-    `SELECT ${ROW_COLUMNS} FROM notes ORDER BY created_at DESC`,
+    `SELECT ${ROW_COLUMNS} FROM notes ORDER BY created_at DESC, id DESC`,
   ).all() as NoteRow[];
 }
 

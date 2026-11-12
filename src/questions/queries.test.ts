@@ -57,10 +57,7 @@ describe("questions table", () => {
     expect(listQuestions(db).map(r => r.prompt).sort()).toEqual(["a", "b", "c"]);
   });
 
-  it("orders by id when created_at ties, not by insertion/rowid order", () => {
-    // Insert out of lexicographic id order so an ORDER BY that dropped the
-    // `id ASC` tiebreak and fell back to rowid/insertion order would return
-    // e, c, a, d, b instead of the sorted a..e this asserts.
+  it("breaks a created_at tie on insertion order, not on the random ids", () => {
     const insertOrder = ["cn:e", "cn:c", "cn:a", "cn:d", "cn:b"];
     const tiedCreatedAt = "2026-01-01T00:00:00.000Z";
     for (const id of insertOrder) {
@@ -68,9 +65,7 @@ describe("questions table", () => {
         `INSERT INTO questions (id, account_id, prompt, created_at) VALUES (?, ?, ?, ?)`,
       ).run(id, "thb:expense:food", id, tiedCreatedAt);
     }
-    expect(listQuestions(db, { limit: 5 }).map((r) => r.id)).toEqual(
-      insertOrder.toSorted(),
-    );
+    expect(listQuestions(db, { limit: 5 }).map((r) => r.id)).toEqual(insertOrder);
   });
 
   it("pages tied created_at rows without skip or repeat", () => {
