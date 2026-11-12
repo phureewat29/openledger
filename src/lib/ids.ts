@@ -61,6 +61,18 @@ export function newGroupId(): string {
   return `tg:${randomUUID()}`;
 }
 
+export function newMerchantId(): string {
+  return `m:${randomUUID()}`;
+}
+
+export function newMerchantAliasId(): string {
+  return `ma:${randomUUID()}`;
+}
+
+export function newQuestionId(): string {
+  return `cn:${randomUUID()}`;
+}
+
 /** `<type>:<segment>` id suffix, after the currency head, of each ledger's system-owned accounts. */
 export const STRUCTURAL_SUFFIX = {
   uncategorized: "expense:uncategorized",

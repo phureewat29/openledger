@@ -1,9 +1,10 @@
 import type Database from "libsql";
-import { randomUUID } from "crypto";
+import { newQuestionId } from "../lib/ids.js";
 import { parseJSONOrNull } from "../lib/json.js";
 import { clampLimit, clampOffset } from "../lib/limit.js";
 import { ISO_NOW_SQL, ISO_SHIFTED_SQL } from "../db/timestamps.js";
 import { inTransaction } from "../db/transaction.js";
+import { clause, whereSQL, type Clause, type Filter } from "../db/where.js";
 
 interface RecordQuestionInput {
   transaction_id?: string | null;
@@ -40,9 +41,8 @@ interface ClosedQuestion {
   rule_key: string | null;
 }
 
-/** The `cn:` id prefix is opaque - nothing else parses it. */
 export function recordQuestion(db: Database.Database, input: RecordQuestionInput): string {
-  const id = `cn:${randomUUID()}`;
+  const id = newQuestionId();
   db.prepare(
     `INSERT INTO questions (id, batch_id, file_id, transaction_id, account_id, kind, prompt, context_json)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -120,29 +120,28 @@ interface QuestionScope {
   includeDeferred?: boolean;
 }
 
-const QUESTION_FILTERS = ["file_id", "transaction_id", "account_id", "kind", "batch_id"] as const;
+const SCOPE_COLUMNS = ["file_id", "transaction_id", "account_id", "kind", "batch_id"] as const;
 
-const ACTIVE_DEFERRED_CLAUSE =
-  `(deferred_until IS NULL OR deferred_until <= ${ISO_NOW_SQL})`;
+const ACTIVE_DEFERRED_CLAUSE = clause(`(deferred_until IS NULL OR deferred_until <= ${ISO_NOW_SQL})`);
+
+const QUESTION_FILTERS: Filter<QuestionScope>[] = [
+  ...SCOPE_COLUMNS.map(
+    (column): Filter<QuestionScope> =>
+      (scope) => (scope[column] ? clause(`${column} = ?`, scope[column]) : null),
+  ),
+  (scope) => (scope.includeDeferred ? null : ACTIVE_DEFERRED_CLAUSE),
+];
 
 // Shared by listQuestions/countQuestions so a filtered count matches the list.
-function buildQuestionWhere(scope: QuestionScope): { whereSQL: string; params: unknown[] } {
-  const filters = QUESTION_FILTERS.filter((column) => scope[column]);
-  const conditions = [
-    ...filters.map((column) => `${column} = ?`),
-    ...(scope.includeDeferred ? [] : [ACTIVE_DEFERRED_CLAUSE]),
-  ];
-  return {
-    whereSQL: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
-    params: filters.map((column) => scope[column]),
-  };
+function questionWhere(scope: QuestionScope): Clause {
+  return whereSQL(QUESTION_FILTERS.map((filter) => filter(scope)));
 }
 
 export function countQuestions(db: Database.Database, scope: QuestionScope = {}): number {
-  const { whereSQL, params } = buildQuestionWhere(scope);
+  const where = questionWhere(scope);
   const row = db
-    .prepare(`SELECT COUNT(*) AS n FROM questions ${whereSQL}`)
-    .get(...params) as { n: number };
+    .prepare(`SELECT COUNT(*) AS n FROM questions ${where.sql}`)
+    .get(...where.params) as { n: number };
   return row.n;
 }
 
@@ -163,14 +162,14 @@ export function listQuestions(
   db: Database.Database,
   opts: ListQuestionsOptions = {},
 ): QuestionRow[] {
-  const { whereSQL, params } = buildQuestionWhere(opts);
+  const where = questionWhere(opts);
   return db.prepare(
     `SELECT ${ROW_COLUMNS}
      FROM questions
-     ${whereSQL}
+     ${where.sql}
      ORDER BY created_at ASC, rowid ASC
      LIMIT ? OFFSET ?`,
-  ).all(...params, clampQuestionsLimit(opts.limit), clampOffset(opts.offset)) as QuestionRow[];
+  ).all(...where.params, clampQuestionsLimit(opts.limit), clampOffset(opts.offset)) as QuestionRow[];
 }
 
 /** Returns false when no row matched `id`. */

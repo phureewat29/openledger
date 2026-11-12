@@ -5,6 +5,7 @@ import {
   type AccountRow,
   type AccountType,
 } from "./queries.js";
+import { clause, whereSQL, type Filter } from "../db/where.js";
 
 // Leg expansion only: the normal-balance rule and decimal conversion are the caller's (src/accounts/balances.ts).
 
@@ -31,33 +32,27 @@ export interface AccountLegSumsOptions {
   idOrParent?: string;
 }
 
+const LEG_SUMS_FILTERS: Filter<AccountLegSumsOptions>[] = [
+  (o) => (o.type ? clause("a.type = ?", o.type) : null),
+  (o) => (o.idOrParent ? clause("(a.id = ? OR a.parent_id = ?)", o.idOrParent, o.idOrParent) : null),
+];
+
 /** Per-account leg sums, including accounts with no legs at all. */
 export function getAccountLegSums(
   db: Database.Database,
   opts: AccountLegSumsOptions = {},
 ): AccountLegSums[] {
-  const params: unknown[] = [];
-  const where: string[] = [];
-  if (opts.type) {
-    where.push("a.type = ?");
-    params.push(opts.type);
-  }
-  if (opts.idOrParent) {
-    where.push("(a.id = ? OR a.parent_id = ?)");
-    params.push(opts.idOrParent, opts.idOrParent);
-  }
-  const whereSQL = where.length ? `WHERE ${where.join(" AND ")}` : "";
-
+  const where = whereSQL(LEG_SUMS_FILTERS.map((filter) => filter(opts)));
   return db
     .prepare(
       `SELECT ${ACCOUNT_COLUMNS_SQL}, ${LEG_SUMS_SQL}
          FROM accounts a
          LEFT JOIN (${TRANSACTION_LEGS}) t ON t.acct = a.id
-         ${whereSQL}
+         ${where.sql}
          GROUP BY a.id
          ORDER BY a.type, a.id`,
     )
-    .all(...params) as AccountLegSums[];
+    .all(...where.params) as AccountLegSums[];
 }
 
 export interface TypeCurrencyLegSums {
