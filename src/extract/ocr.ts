@@ -1,8 +1,8 @@
 import * as z from "zod";
-import type { OpenLedgerConfig } from "../config/config.js";
+import { pick } from "es-toolkit";
 import { err, ok, tryExecute, type Result } from "../lib/result.js";
 import type { PageImage, RenderSpec } from "./pdf.js";
-import { modelCardFor, type ModelCard, type OCRParams } from "./cards/index.js";
+import { modelCardFor, type OCRParams } from "./cards/index.js";
 
 /** A small local model can spend minutes on a dense page; this is a stuck-server bound, not a target. */
 export const OCR_TIMEOUT_MS = 300_000;
@@ -28,11 +28,14 @@ export interface OCRSettings {
   render: RenderSpec;
 }
 
-export type OCRConfigSource = Pick<OpenLedgerConfig, "ocrBaseUrl" | "ocrModel" | "ocrApiKey">;
-
-function cardSettings({ prompt, params, render }: ModelCard): Pick<OCRSettings, "prompt" | "params" | "render"> {
-  return { prompt, params, render };
+/** Structural, not a Pick of the config type: extract must not import the config slice. */
+export interface OCRConfigSource {
+  ocrBaseUrl: string;
+  ocrModel: string;
+  ocrApiKey: string;
 }
+
+const CARD_SETTINGS = ["prompt", "params", "render"] as const;
 
 /** The endpoint URL alone decides whether OCR is configured; `null` means cleanly unset. */
 export function resolveOCR(source: OCRConfigSource): OCRSettings | null {
@@ -47,7 +50,7 @@ export function resolveOCR(source: OCRConfigSource): OCRSettings | null {
     model: configured || card.model,
     apiKey: source.ocrApiKey.trim(),
     timeoutMs: OCR_TIMEOUT_MS,
-    ...cardSettings(card),
+    ...pick(card, CARD_SETTINGS),
   };
 }
 
@@ -78,10 +81,11 @@ const RESPONSE = z.object({
 const MODELS = z.object({ data: z.array(z.object({ id: z.string() })) });
 
 function headersFor(settings: OCRSettings): Record<string, string> {
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  // Local servers reject an empty bearer token, so the header appears only when there is a key.
-  if (settings.apiKey) headers.authorization = `Bearer ${settings.apiKey}`;
-  return headers;
+  return {
+    "content-type": "application/json",
+    // Local servers reject an empty bearer token, so the header appears only when there is a key.
+    ...(settings.apiKey ? { authorization: `Bearer ${settings.apiKey}` } : {}),
+  };
 }
 
 function requestBody(image: PageImage, settings: OCRSettings): string {
@@ -207,5 +211,5 @@ export async function resolveServedModel(settings: OCRSettings): Promise<OCRSett
   if (!served.ok) return settings;
   const match = pickServedModel(settings.model, served.value);
   if (!match || match === settings.model) return settings;
-  return { ...settings, model: match, ...cardSettings(modelCardFor(match)) };
+  return { ...settings, model: match, ...pick(modelCardFor(match), CARD_SETTINGS) };
 }

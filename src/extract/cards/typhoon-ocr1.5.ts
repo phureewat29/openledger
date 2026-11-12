@@ -1,4 +1,4 @@
-import type { ModelCard } from "./index.js";
+import type { FamilyModelCard } from "./index.js";
 
 const PROMPT = `Extract all text from the image.
 
@@ -14,7 +14,7 @@ Formatting Rules:
 - Page Numbers: Wrap page numbers in <page_number>...</page_number>
 - Checkboxes: Use ☐ for unchecked and ☑ for checked boxes.`;
 
-export const typhoonModelCard: ModelCard = {
+export const typhoonModelCard: FamilyModelCard = {
   // Every release so far carries the family name, whatever the version suffix.
   family: /typhoon/i,
   // README's config-key table repeats this default; change both together.

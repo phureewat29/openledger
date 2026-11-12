@@ -5,13 +5,22 @@ import { tryExecute } from "../lib/result.js";
 
 export type SourceKind = "pdf" | "image";
 
-/** `mime` is what `files.mime` records. */
-export const SOURCES: Record<string, { kind: SourceKind; mime: string }> = {
-  ".pdf": { kind: "pdf", mime: "application/pdf" },
-  ".png": { kind: "image", mime: "image/png" },
-  ".jpg": { kind: "image", mime: "image/jpeg" },
-  ".jpeg": { kind: "image", mime: "image/jpeg" },
-  ".webp": { kind: "image", mime: "image/webp" },
+const KIND_BY_MIME = {
+  "application/pdf": "pdf",
+  "image/png": "image",
+  "image/jpeg": "image",
+  "image/webp": "image",
+} as const satisfies Record<string, SourceKind>;
+
+type SourceMime = keyof typeof KIND_BY_MIME;
+
+/** Accepted extensions, each with the mime `files.mime` records for it. */
+export const SOURCES: Record<string, SourceMime> = {
+  ".pdf": "application/pdf",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
 };
 
 export const SUPPORTED_EXTS = Object.keys(SOURCES);
@@ -24,26 +33,17 @@ const PDF_SNIFF_BYTES = 1024;
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff]);
 
-const SIGNATURES: { kind: SourceKind; mime: string; matches: (bytes: Buffer) => boolean }[] = [
-  {
-    kind: "pdf",
-    mime: "application/pdf",
-    matches: (bytes) => bytes.subarray(0, PDF_SNIFF_BYTES).toString("latin1").includes("%PDF-"),
-  },
-  { kind: "image", mime: "image/png", matches: (bytes) => bytes.subarray(0, 8).equals(PNG_MAGIC) },
-  { kind: "image", mime: "image/jpeg", matches: (bytes) => bytes.subarray(0, 3).equals(JPEG_MAGIC) },
-  {
-    kind: "image",
-    mime: "image/webp",
-    matches: (bytes) =>
-      bytes.subarray(0, 4).toString("latin1") === "RIFF" &&
-      bytes.subarray(8, 12).toString("latin1") === "WEBP",
-  },
-];
+const SIGNATURES: Record<SourceMime, (bytes: Buffer) => boolean> = {
+  "application/pdf": (bytes) => bytes.subarray(0, PDF_SNIFF_BYTES).toString("latin1").includes("%PDF-"),
+  "image/png": (bytes) => bytes.subarray(0, 8).equals(PNG_MAGIC),
+  "image/jpeg": (bytes) => bytes.subarray(0, 3).equals(JPEG_MAGIC),
+  "image/webp": (bytes) =>
+    bytes.subarray(0, 4).toString("latin1") === "RIFF" && bytes.subarray(8, 12).toString("latin1") === "WEBP",
+};
 
 export function sniffSource(bytes: Buffer): { kind: SourceKind; mime: string } | null {
-  const hit = SIGNATURES.find((signature) => signature.matches(bytes));
-  return hit ? { kind: hit.kind, mime: hit.mime } : null;
+  const mime = (Object.keys(SIGNATURES) as SourceMime[]).find((candidate) => SIGNATURES[candidate](bytes));
+  return mime ? { kind: KIND_BY_MIME[mime], mime } : null;
 }
 
 export interface LoadedSource {
@@ -91,7 +91,7 @@ export function loadSource(path: string): LoadOutcome {
   const bytes = read.value;
 
   const sniffed = sniffSource(bytes);
-  if (!sniffed || sniffed.mime !== declared.mime) {
+  if (!sniffed || sniffed.mime !== declared) {
     return {
       ok: false,
       reason: "kind_mismatch",
@@ -103,8 +103,8 @@ export function loadSource(path: string): LoadOutcome {
     ok: true,
     value: {
       path,
-      kind: declared.kind,
-      mime: declared.mime,
+      kind: KIND_BY_MIME[declared],
+      mime: declared,
       bytes,
       hash: createHash("sha256").update(bytes).digest("hex"),
     },
