@@ -1,12 +1,15 @@
 import { escapeRegExp, uniqBy } from "es-toolkit";
 import { readContext } from "../config/context.js";
 import { homeRelative, relativizeHomeIn } from "../lib/path.js";
+import { err, type Result } from "../lib/result.js";
 import { ContextUnreadableError } from "../db/errors.js";
 
 /** Where redaction terms come from: the configured user plus their context.md. */
 export interface RedactionSource {
   userName: string;
   contextPath: string;
+  /** Error messages name context.md relative to it. */
+  home: string;
 }
 
 interface RedactionEntry {
@@ -128,14 +131,11 @@ export function createRedactor(userName: string, context: string): (text: string
     patterns.reduce((result, [pattern, token]) => result.replace(pattern, token), text);
 }
 
-// Fails closed: running without context.md's terms would print the very names it lists.
-function requireContext(contextPath: string): string {
+export function readRedactionContext({ contextPath, home }: RedactionSource): Result<string> {
   const context = readContext(contextPath);
-  if (context.ok) return context.value;
-  const shown = homeRelative(contextPath);
-  throw new ContextUnreadableError(
-    `cannot read ${shown} (${relativizeHomeIn(context.error, contextPath)}), so redaction cannot run`,
-  );
+  if (context.ok) return context;
+  const cause = relativizeHomeIn(context.error, contextPath, home);
+  return err(`cannot read ${homeRelative(contextPath, home)} (${cause}), so redaction cannot run`);
 }
 
 /** Reads context.md once (when enabled); call it before any write so an unreadable file refuses before the ledger changes.
@@ -146,7 +146,10 @@ export function prepareRedaction(
   source: RedactionSource,
 ): <T>(data: T, fields: readonly string[]) => T {
   if (!enabled) return (data) => data;
-  const redact = createRedactor(source.userName, requireContext(source.contextPath));
+  const context = readRedactionContext(source);
+  // Fails closed: running without context.md's terms would print the very names it lists.
+  if (!context.ok) throw new ContextUnreadableError(context.error);
+  const redact = createRedactor(source.userName, context.value);
 
   return <T>(data: T, fields: readonly string[]): T => {
     const allow = new Set(fields);

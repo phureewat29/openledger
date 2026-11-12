@@ -10,11 +10,12 @@ import { inspectConfig, probeLedger, type LedgerProbe } from "../../config/cli.j
 import { getVersion } from "../../lib/version.js";
 import { homeRelative, relativizeHomeIn } from "../../lib/path.js";
 import { installedVersion, SKILL_DIRS } from "../../setup/install.js";
+import { readRedactionContext } from "../../privacy/redactor.js";
 import { loadMupdf } from "../../extract/pdf.js";
-import { runAction, type Invocation } from "../output.js";
+import { runAction, type Invocation, type Output } from "../output.js";
 import type { Column } from "../format.js";
 import type { ExitCode } from "../../contract/exit.js";
-import { err, flatMap, ok, tryExecute, type Result } from "../../lib/result.js";
+import { tryExecute, type Result } from "../../lib/result.js";
 import {
   pickServedModel,
   probeOCREndpoint,
@@ -43,7 +44,7 @@ function configCheck(cfg: ResolvedConfig): Check {
 function configReadableCheck(loaded: LoadedConfig): Check {
   const name = "config_readable";
   if (!loaded.problem) return { name, ok: true };
-  const shown = homeRelative(loaded.config.configPath);
+  const shown = homeRelative(loaded.config.configPath, loaded.config.home);
   return { name, ok: false, detail: `${shown} is unusable, so defaults are in use: ${loaded.problem}` };
 }
 
@@ -54,7 +55,7 @@ function dbOpenCheck(ledger: LedgerProbe): Check {
   return { name, ok: true };
 }
 
-function dataDirWritableCheck(dir: string): Check {
+function dataDirWritableCheck(dir: string, home: string): Check {
   const name = "data_dir_writable";
   if (!existsSync(dir)) return { name, ok: false, detail: `missing: ${INIT_HINT}` };
   const probed = tryExecute(() => {
@@ -62,7 +63,7 @@ function dataDirWritableCheck(dir: string): Check {
     writeFileSync(probe, "ok");
     rmSync(probe, { force: true });
   });
-  if (!probed.ok) return { name, ok: false, detail: relativizeHomeIn(probed.error, dir) };
+  if (!probed.ok) return { name, ok: false, detail: relativizeHomeIn(probed.error, dir, home) };
   return { name, ok: true };
 }
 
@@ -70,10 +71,9 @@ function schemaTablesCheck(ledger: LedgerProbe): Check {
   const name = "schema_tables_present";
   if (ledger.state !== "open") return { name, ok: false, detail: "database not open" };
   const missing = tryExecute(() => listMissingTables(ledger.db, REQUIRED_TABLES));
-  return checkFrom(
-    name,
-    flatMap(missing, (tables) => (tables.length ? err(`missing: ${tables.join(", ")}`) : ok(tables))),
-  );
+  if (!missing.ok) return { name, ok: false, detail: missing.error };
+  if (missing.value.length) return { name, ok: false, detail: `missing: ${missing.value.join(", ")}` };
+  return { name, ok: true };
 }
 
 export async function ocrEndpointCheck(source: OCRConfigSource): Promise<Check> {
@@ -123,12 +123,13 @@ function skillPackCheck({ cwd, home }: PathRoots): Check {
 
 async function runChecks(loaded: LoadedConfig, roots: PathRoots): Promise<Check[]> {
   const cfg = loaded.config;
-  const ledger = await probeLedger(cfg.dbPath);
+  const ledger = await probeLedger(cfg.dbPath, cfg.home);
   return [
     configCheck(cfg),
     configReadableCheck(loaded),
+    checkFrom("context_readable", readRedactionContext(cfg)),
     dbOpenCheck(ledger),
-    dataDirWritableCheck(cfg.dataDir),
+    dataDirWritableCheck(cfg.dataDir, cfg.home),
     checkFrom("mupdf_loads", await tryExecute(loadMupdf)),
     schemaTablesCheck(ledger),
     skillPackCheck(roots),
@@ -161,20 +162,22 @@ const CHECK_COLUMNS: Column<Check>[] = [
   { header: "Detail", value: (r) => r.detail ?? "" },
 ];
 
+function printReport(out: Output, checks: Check[], ready: boolean): void {
+  if (out.mode.json) {
+    const report: DoctorReport = { checks, ok: ready };
+    out.emit(report);
+    return;
+  }
+  out.emitList(checks, CHECK_COLUMNS);
+  const { line, paint } = VERDICT[verdictOf(ready, checks)];
+  out.write("\n" + (out.mode.color ? paint(line) : line) + "\n");
+}
+
 async function diagnoseEnvironment(ctx: Invocation): Promise<ExitCode | undefined> {
   const roots: PathRoots = { cwd: process.cwd(), home: homedir() };
   const checks = await runChecks(inspectConfig(ctx.configPath, roots.home), roots);
   const ready = checks.filter((c) => HARD_CHECKS.has(c.name)).every((c) => c.ok);
-
-  const { out } = ctx;
-  if (out.mode.json) {
-    const result: DoctorReport = { checks, ok: ready };
-    out.emit(result);
-  } else {
-    out.emitList(checks, CHECK_COLUMNS);
-    const { line, paint } = VERDICT[verdictOf(ready, checks)];
-    out.write("\n" + (out.mode.color ? paint(line) : line) + "\n");
-  }
+  printReport(ctx.out, checks, ready);
   return ready ? undefined : "NOT_READY";
 }
 

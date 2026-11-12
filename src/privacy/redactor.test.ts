@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRedactor, prepareRedaction, type RedactionSource } from "./redactor.js";
+import { createRedactor, prepareRedaction, readRedactionContext, type RedactionSource } from "./redactor.js";
 import { ContextUnreadableError } from "../db/errors.js";
 
 const CONTEXT = `## Family
@@ -17,7 +17,7 @@ const redact = createRedactor("Alpaca Beagle", CONTEXT);
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 
 // No context.md at this path: allowlisting is exercised with the user's name and numeric PII alone.
-const SOURCE: RedactionSource = { userName: "Alpaca Beagle", contextPath: join(HERE, "no-context.md") };
+const SOURCE: RedactionSource = { userName: "Alpaca Beagle", contextPath: join(HERE, "no-context.md"), home: HERE };
 
 describe("createRedactor (masking patterns)", () => {
   it("redacts user full name", () => {
@@ -124,12 +124,19 @@ describe("prepareRedaction (field allowlisting)", () => {
 
 describe("prepareRedaction (fail closed)", () => {
   // A directory at the path is the portable stand-in for EACCES: it fails even as root.
-  const unreadable: RedactionSource = { userName: "Alpaca Beagle", contextPath: HERE };
+  const unreadable: RedactionSource = { userName: "Alpaca Beagle", contextPath: HERE, home: resolve(HERE, "..") };
 
   it("refuses to run when context.md exists but cannot be read, with a type the exit contract maps", () => {
     const run = () => prepareRedaction(true, unreadable)({ text: "Corgi" }, ["text"]);
     expect(run).toThrow(ContextUnreadableError);
     expect(run).toThrow(/cannot read .*so redaction cannot run$/);
+  });
+
+  it("names the unreadable file relative to the given home", () => {
+    expect(readRedactionContext(unreadable)).toEqual({
+      ok: false,
+      error: expect.stringContaining(`cannot read ~${sep}privacy (`),
+    });
   });
 
   it("never reads context.md when redaction is off", () => {

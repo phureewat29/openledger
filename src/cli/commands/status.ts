@@ -37,14 +37,14 @@ export function buildReport(loaded: LoadedConfig, ledger: LedgerProbe): StatusRe
     configured: cfg.exists,
     // Home-relative so no output carries the OS account name; `--config` expands
     // `~` back, so what status prints is still usable as input.
-    config_path: homeRelative(cfg.configPath),
+    config_path: homeRelative(cfg.configPath, cfg.home),
     config_problem: loaded.problem,
-    data_dir: homeRelative(cfg.dataDir),
+    data_dir: homeRelative(cfg.dataDir, cfg.home),
     locale: cfg.displayLocale,
     currency: cfg.displayCurrency,
     user_name: cfg.userName,
     db: {
-      path: homeRelative(cfg.dbPath),
+      path: homeRelative(cfg.dbPath, cfg.home),
       reachable: false,
       error: null,
     },
@@ -98,7 +98,7 @@ interface ShowStatusOpts {
 // Redaction defaults on, so bare `oled` (no --no-redact flag) masks the same fields `status` does.
 export async function showStatus(ctx: Invocation, opts: ShowStatusOpts): Promise<void> {
   const loaded = inspectConfig(ctx.configPath, homedir());
-  const ledger = await probeLedger(loaded.config.dbPath);
+  const ledger = await probeLedger(loaded.config.dbPath, loaded.config.home);
   const redact = prepareRedaction(redactionEnabled(opts), loaded.config);
   const report = redact(buildReport(loaded, ledger), STATUS_REDACT_FIELDS);
   const { out } = ctx;
@@ -181,8 +181,6 @@ export function renderTTY(r: StatusReport, color: boolean, ledgerMissing = false
   );
   parts.push(section("System", system));
 
-  // Bare status always exits 0; a named --config that fails to resolve exits NOT_READY
-  // before a report is ever built. An unreachable db still needs its own pointer here.
   if (!r.db.reachable) {
     const next = ledgerMissing
       ? "run `oled config --init` to create one"

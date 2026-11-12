@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { existsSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import Database from "libsql";
 import { migrate } from "../../db/schema.js";
@@ -100,6 +100,51 @@ describe("system CLI integration (subprocess)", () => {
         expect(dbOpen.ok).toBe(false);
         expect(dbOpen.detail).toContain("~/.oled/db.sqlite");
         for (const { stdout } of [status, doctor]) expect(stdout).not.toContain(isolated.home);
+      } finally {
+        isolated.cleanup();
+      }
+    },
+    30000,
+  );
+
+  it(
+    "an unreadable context.md fails redacting reads closed (exit 3); --no-redact bypasses it, doctor names it",
+    async () => {
+      const isolated = createSandbox("oled-system-context-it-");
+      try {
+        const run = makeRunCLI(isolated);
+        expect((await run(["config", "--init", "--json"])).code).toBe(0);
+        const contextPath = join(isolated.oledDir, "context.md");
+        // A directory at the path is the portable stand-in for EACCES: it fails even as root.
+        rmSync(contextPath);
+        mkdirSync(contextPath);
+
+        const [status, notes, bare, statusRaw, notesRaw, doctor] = await Promise.all([
+          run(["status", "--json"]),
+          run(["notes", "list", "--json"]),
+          run(["--json"]),
+          run(["status", "--no-redact", "--json"]),
+          run(["notes", "list", "--no-redact", "--json"]),
+          run(["doctor", "--json"]),
+        ]);
+        for (const refused of [status, notes]) {
+          expect(refused.code, refused.stderr).toBe(3);
+          expect(refused.stdout).toBe("");
+          expect(parseOne(refused.stderr).error).toMatchObject({
+            code: "E_NOT_READY",
+            message: expect.stringContaining("~/.oled/context.md"),
+            hint: "fix the file, or pass --no-redact",
+          });
+          expect(refused.stderr).not.toContain(isolated.home);
+        }
+        expect(bare.code).toBe(3);
+        expect(parseOne(bare.stderr).error.hint).toBe("fix the file, or run `oled status --no-redact`");
+        expect(statusRaw.code, statusRaw.stderr).toBe(0);
+        expect(notesRaw.code, notesRaw.stderr).toBe(0);
+
+        const check = parseOne(doctor.stdout).checks.find((c: { name: string }) => c.name === "context_readable");
+        expect(check).toMatchObject({ ok: false, detail: expect.stringContaining("~/.oled/context.md") });
+        expect(doctor.stdout).not.toContain(isolated.home);
       } finally {
         isolated.cleanup();
       }

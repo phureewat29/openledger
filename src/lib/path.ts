@@ -1,4 +1,3 @@
-import { homedir } from "os";
 import { isAbsolute, resolve, sep } from "path";
 
 /** `/` separates everywhere; `\` also separates on Windows, where it is an
@@ -12,10 +11,10 @@ const fold =
 /** `~` is the shell's expansion, not Node's, so a quoted `~/x` would otherwise
  *  resolve under the cwd; Windows shells never expand it at all. Inverse of
  *  `homeRelative`, so what `status` prints stays usable as input. */
-export function expandHome(path: string): string {
-  if (path === "~") return homedir();
+export function expandHome(path: string, home: string): string {
+  if (path === "~") return home;
   return TILDE_PREFIXES.some((prefix) => path.startsWith(prefix))
-    ? resolve(homedir(), path.slice(2))
+    ? resolve(home, path.slice(2))
     : path;
 }
 
@@ -23,14 +22,14 @@ export function expandHome(path: string): string {
  *  name. Only absolute paths are touched, so error prose passes through
  *  unchanged; `resolve` irons the separators and the win32 compare is
  *  case-blind, so a hand-edited `c:/users/...` still relativizes. */
-export function homeRelative(p: string): string {
+export function homeRelative(p: string, home: string): string {
   if (!isAbsolute(p)) return p;
   const abs = resolve(p);
-  const prefix = homedir() + sep;
+  const prefix = home + sep;
   return fold(abs).startsWith(fold(prefix)) ? "~" + sep + abs.slice(prefix.length) : p;
 }
 
 /** Error prose names the paths it failed on; this swaps each occurrence of `path` for its `homeRelative` form. */
-export function relativizeHomeIn(text: string, path: string): string {
-  return text.replaceAll(path, homeRelative(path));
+export function relativizeHomeIn(text: string, path: string, home: string): string {
+  return text.replaceAll(path, homeRelative(path, home));
 }

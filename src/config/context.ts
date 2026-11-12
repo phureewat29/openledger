@@ -1,11 +1,16 @@
-import { readFileSync, writeFileSync, existsSync } from "fs";
-import { map, ok, tryExecute, type Result } from "../lib/result.js";
+import { lstatSync, readFileSync, writeFileSync } from "fs";
+import { map, ok, tryExecute, unwrapOr, type Result } from "../lib/result.js";
 import { decodeUserText } from "../lib/text.js";
 import { chmod600 } from "../lib/perms.js";
 
-/** A missing file is empty context; an unreadable one is an error, so redaction never runs without its terms. */
+// lstat, not existsSync: existsSync calls a dangling symlink absent, which would silently drop the file's terms.
+function isAbsent(path: string): boolean {
+  return unwrapOr(tryExecute(() => lstatSync(path, { throwIfNoEntry: false }) === undefined), false);
+}
+
+/** Only a path with no entry at all is empty context; anything else that cannot be read is an error, so redaction never runs without its terms. */
 export function readContext(contextPath: string): Result<string> {
-  if (!existsSync(contextPath)) return ok("");
+  if (isAbsent(contextPath)) return ok("");
   const read = tryExecute(() => decodeUserText(readFileSync(contextPath)));
   // A Windows editor's CRLF would break the redactor's `\n`-anchored sections and silently skip PII.
   return map(read, (text) => text.replace(/\r\n/g, "\n"));
@@ -13,7 +18,7 @@ export function readContext(contextPath: string): Result<string> {
 
 /** The config dir must already exist; `saveConfig` creates it. */
 export function createContextTemplate(contextPath: string, userName: string): void {
-  if (existsSync(contextPath)) return;
+  if (!isAbsent(contextPath)) return;
   // Family is for OTHER people; seeding it with the user's own name would let the
   // redactor promote it into a [PARTNER] term and rewrite unrelated text.
   writeFileSync(

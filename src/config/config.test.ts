@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadConfig, saveConfig } from "./config.js";
 
@@ -23,11 +23,13 @@ describe("loadConfig hardening", () => {
     expect(config.displayCurrency).toBe("USD");
   });
 
-  it("expands `~/` in persisted path fields instead of resolving them under the cwd", () => {
-    const path = resolve(dir, "tilde.json");
-    writeFileSync(path, JSON.stringify({ dataDir: "~/statements" }));
-    const { config } = loadConfig(path, dir);
-    expect(config.dataDir).toBe(resolve(homedir(), "statements"));
+  it("expands `~` against the given home, in the config path and in persisted path fields alike", () => {
+    mkdirSync(join(dir, "profile"));
+    writeFileSync(join(dir, "profile", "tilde.json"), JSON.stringify({ dataDir: "~/statements" }));
+    const { config } = loadConfig("~/profile/tilde.json", dir);
+    expect(config.configPath).toBe(join(dir, "profile", "tilde.json"));
+    expect(config.dataDir).toBe(resolve(dir, "statements"));
+    expect(config.home).toBe(dir);
   });
 
   it("resolves a hand-edited relative path against the config file's dir, not the cwd", () => {
@@ -76,6 +78,19 @@ describe("loadConfig: a malformed file never echoes its content", () => {
     ["a bare word", "sk-live-SECRET123", "it is not valid JSON"],
     ["a string instead of an object", `"${SECRET}"`, "it does not hold a JSON object"],
   ];
+
+  // EACCES is the error that names the path; root reads through mode 000, and win32 has no such mode.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "names an unreadable file home-relative, never by the account's own path",
+    () => {
+      const path = join(dir, ".oled", "config.json");
+      mkdirSync(join(dir, ".oled"));
+      writeFileSync(path, "{}", { mode: 0o000 });
+      const { problem } = loadConfig(undefined, dir);
+      expect(problem).toContain(join("~", ".oled", "config.json"));
+      expect(problem).not.toContain(dir);
+    },
+  );
 
   it.each(MALFORMED)("%s yields a fixed problem with at most a line and column", (_, text, expected) => {
     const path = join(dir, "config.json");

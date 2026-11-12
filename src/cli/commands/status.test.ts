@@ -122,6 +122,7 @@ describe("buildReport: the default profile's own problem", () => {
       configPath: join(dir, "config.json"),
       contextPath: join(dir, "context.md"),
       exists: true,
+      home: join(dir, "home"),
     };
   }
 

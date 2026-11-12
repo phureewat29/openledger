@@ -3,7 +3,7 @@ import { createHash } from "crypto";
 import { dirname, resolve } from "path";
 import { isPlainObject, mapValues, pick, pickBy } from "es-toolkit";
 import { DEFAULT_MODEL_ID } from "../extract/cards/index.js";
-import { expandHome } from "../lib/path.js";
+import { expandHome, relativizeHomeIn } from "../lib/path.js";
 import { decodeUserText } from "../lib/text.js";
 import { chmod600 } from "../lib/perms.js";
 import { tryExecute } from "../lib/result.js";
@@ -29,6 +29,8 @@ export interface ResolvedConfig extends OpenLedgerConfig {
   contextPath: string;
   /** Whether the config file was present at load; data commands refuse to run without it. */
   exists: boolean;
+  /** What `~` expanded to here, and what every path this invocation prints collapses back to. */
+  home: string;
 }
 
 export interface LoadedConfig {
@@ -104,10 +106,10 @@ function unusable(problem: string): FileValues {
   return { fileValues: {}, problem, exists: true };
 }
 
-function readFileValues(configPath: string): FileValues {
+function readFileValues(configPath: string, home: string): FileValues {
   if (!existsSync(configPath)) return { fileValues: {}, problem: null, exists: false };
   const text = tryExecute(() => decodeUserText(readFileSync(configPath)));
-  if (!text.ok) return unusable(text.error);
+  if (!text.ok) return unusable(relativizeHomeIn(text.error, configPath, home));
   const parsed = tryExecute((): unknown => JSON.parse(text.value));
   if (!parsed.ok) return unusable(jsonProblem(text.value, parsed.error));
   if (!isPlainObject(parsed.value)) return unusable("it does not hold a JSON object");
@@ -121,25 +123,27 @@ const PATH_FIELDS = ["dbPath", "dataDir", "cacheDir"] as const;
 function withDefaults(
   fileValues: Partial<OpenLedgerConfig>,
   configPath: string,
+  home: string,
 ): OpenLedgerConfig {
   // Defaults sit beside the config file, so each profile is its own ledger.
   const configDir = dirname(configPath);
   const values = mapValues(CONFIG_FIELDS, (field, key) => fileValues[key] || field.default(configDir));
   // A hand-edited relative path resolves against the config file's dir, so it names one place from every cwd.
-  const paths = mapValues(pick(values, PATH_FIELDS), (path) => resolve(configDir, expandHome(path)));
+  const paths = mapValues(pick(values, PATH_FIELDS), (path) => resolve(configDir, expandHome(path, home)));
   return { ...values, ...paths };
 }
 
 /** Reads the config file (default: `<home>/.oled/config.json`). A broken file degrades
  *  to defaults with `problem` set; the caller decides whether that is fatal. */
 export function loadConfig(configPath: string | undefined, home: string): LoadedConfig {
-  const resolved = resolve(expandHome(configPath ?? resolve(oledDir(home), "config.json")));
-  const { fileValues, problem, exists } = readFileValues(resolved);
+  const resolved = resolve(expandHome(configPath ?? resolve(oledDir(home), "config.json"), home));
+  const { fileValues, problem, exists } = readFileValues(resolved, home);
   const config: ResolvedConfig = {
-    ...withDefaults(fileValues, resolved),
+    ...withDefaults(fileValues, resolved, home),
     configPath: resolved,
     contextPath: resolve(dirname(resolved), "context.md"),
     exists,
+    home,
   };
   return { config, fileValues, problem };
 }
@@ -158,10 +162,10 @@ export function saveConfig(
   if (dir === oledDir(home) && process.platform !== "win32") chmodSync(dir, 0o700);
 
   // A broken file degrades to {} here; the write below repairs it.
-  const { fileValues } = readFileValues(configPath);
+  const { fileValues } = readFileValues(configPath, home);
   const merged = { ...fileValues, ...pickConfigFields(patch) };
   writeFileSync(configPath, JSON.stringify(merged, null, 2) + "\n", { mode: 0o600 });
   chmod600(configPath);
 
-  return withDefaults(merged, configPath);
+  return withDefaults(merged, configPath, home);
 }

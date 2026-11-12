@@ -7,7 +7,7 @@ export class DBNotReadyError extends Error {
   }
 }
 
-/** Another process holds the ledger's write lock; the same command is safe to re-run. */
+/** Another process held the ledger's write lock at open; nothing ran, so the same command is safe to re-run. */
 export class DBBusyError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);

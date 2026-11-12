@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { readContext } from "./context.js";
+import { createContextTemplate, readContext } from "./context.js";
 
 let dir: string;
 
@@ -30,4 +30,23 @@ describe("readContext", () => {
     const result = readContext(dir);
     expect(result.ok).toBe(false);
   });
+
+  it.skipIf(process.platform === "win32")("reports a dangling symlink as an error, never as empty", () => {
+    const path = join(dir, "dangling.md");
+    symlinkSync(join(dir, "moved-away.md"), path);
+    expect(readContext(path).ok).toBe(false);
+  });
+});
+
+describe("createContextTemplate", () => {
+  it.skipIf(process.platform === "win32")(
+    "never writes through a dangling symlink, where a fresh template would stand in for the moved file",
+    () => {
+      const target = join(dir, "template-target.md");
+      const path = join(dir, "template-link.md");
+      symlinkSync(target, path);
+      createContextTemplate(path, "Alpaca");
+      expect(existsSync(target)).toBe(false);
+    },
+  );
 });

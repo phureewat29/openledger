@@ -77,11 +77,11 @@ export type LedgerProbe =
   | { state: "open"; db: Database.Database };
 
 /** Opens the ledger only if it exists (`openDB` would create it); the error names the path home-relative. */
-export async function probeLedger(dbPath: string): Promise<LedgerProbe> {
+export async function probeLedger(dbPath: string, home: string): Promise<LedgerProbe> {
   if (!existsSync(dbPath)) return { state: "missing" };
   const opened = await tryExecute(() => openDB(dbPath));
   if (!opened.ok) {
-    return { state: "unreachable", error: relativizeHomeIn(opened.error, dbPath) };
+    return { state: "unreachable", error: relativizeHomeIn(opened.error, dbPath, home) };
   }
   return { state: "open", db: opened.value };
 }
@@ -99,9 +99,9 @@ function redactConfig(cfg: OpenLedgerConfig): RedactedConfig {
   return { ...cfg, ...mapValues(pick(cfg, CONFIG_SECRETS), secretStatus) };
 }
 
-/** Strips the resolution fields (config path, context path, exists); those render as their own rows. */
+/** Strips the resolution fields: the two paths render as their own rows, and `home` never renders (it names the OS account). */
 function configValues(cfg: ResolvedConfig): OpenLedgerConfig {
-  const { configPath, contextPath, exists, ...values } = cfg;
+  const { configPath, contextPath, exists, home, ...values } = cfg;
   return values;
 }
 
@@ -170,7 +170,11 @@ type ConvergedConfig = Omit<OpenLedgerConfig, "ocrApiKey"> & { ocrApiKey?: strin
 
 // Precedence: flag > file > default; country is validated first so an unknown
 // name never reaches the file.
-function resolveConvergedConfig(flags: SettingFlags, loaded: LoadedConfig, cwd: string): ConvergedConfig {
+function resolveConvergedConfig(
+  flags: SettingFlags,
+  loaded: LoadedConfig,
+  { cwd, home }: PathRoots,
+): ConvergedConfig {
   const current = loaded.config;
   const country = flags.country ?? current.country;
   const defaults = findCountryDefaults(country);
@@ -183,7 +187,7 @@ function resolveConvergedConfig(flags: SettingFlags, loaded: LoadedConfig, cwd: 
   // Persisted absolute so the path means the same from every later cwd; `~` is expanded
   // because Windows shells pass it through literally. "" stays "", which means unset.
   const pathFlag = (flag: string | undefined, fallback: string): string =>
-    flag === undefined ? fallback : flag && resolve(cwd, expandHome(flag));
+    flag === undefined ? fallback : flag && resolve(cwd, expandHome(flag, home));
 
   return {
     country: defaults.country,
@@ -207,7 +211,7 @@ async function convergeConfig(
   loaded: LoadedConfig,
   roots: PathRoots,
 ): Promise<void> {
-  const converged = resolveConvergedConfig(flags, loaded, roots.cwd);
+  const converged = resolveConvergedConfig(flags, loaded, roots);
   // 0700: the data dir holds the raw statements, the most sensitive files here.
   mkdirSync(converged.dataDir, { recursive: true, mode: 0o700 });
 

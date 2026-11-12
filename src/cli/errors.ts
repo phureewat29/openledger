@@ -65,7 +65,9 @@ export function toCLIError(err: unknown, cmd?: Command): CLIError {
     });
   }
   if (err instanceof ContextUnreadableError) {
-    return new CLIError("NOT_READY", err.message, { hint: "fix the file, or pass --no-redact" });
+    // Bare `oled` runs status but takes no --no-redact of its own.
+    const bypass = cmd && !cmd.parent ? "run `oled status --no-redact`" : "pass --no-redact";
+    return new CLIError("NOT_READY", err.message, { hint: `fix the file, or ${bypass}` });
   }
   if (err instanceof DBBusyError) return new CLIError("BUSY", err.message, { hint: BUSY_HINT });
   // A lock lost past the open (a write that waited out its busy timeout) says the same thing.
