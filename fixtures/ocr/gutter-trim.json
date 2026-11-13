@@ -1,0 +1,13 @@
+{
+"image":{"file":"gutter-trim.png","shape":[130,1130,3],"sha256":"212a0105b02350f770922a07f4a3d7c43aedc60e2900b83ade750d189dc1080d"},
+"env":{"backend":"onnxruntime","providers":{"det":["CPUExecutionProvider"],"rec":["CPUExecutionProvider"]},"onnxruntime":"1.32.0","opencv":"5.0.0","numpy":"2.5.5","threads":1,"source":"iapp/OpenThai2.0-OCR-Text @ 40e8e9ff","cfg":{"det":{"limit":1280,"thresh":0.2,"box_thresh":0.4,"unclip":1.4,"min_size":3,"max_candidates":3000,"v_pad":0.0,"split_gap":1.2},"rec":{"height":48,"max_w":3200,"batch":16,"drop_below":0.8,"min_chars":2,"junk_below":0.9,"junk_invalid":0.05,"color":"flatten"},"ori":{"enabled":true,"sample":8,"flip_below":0.8,"flip_margin":0.15,"deskew_above":2.5},"join":{"thai_no_space":false},"runtime":{"backend":"openvino","precision":"bf16"}}},
+"text":"รายการสินค้า จำนวนเงิน",
+"rotation":0,
+"text_angle":-0.6,
+"lines":[
+{"text":"รายการสินค้า","confidence":0.9989,"row":0,"box":[[52.6,45.2],[250.1,41.0],[251.0,83.9],[53.5,88.1]],"words":[{"text":"รายการสินค้า","confidence":0.9989,"box":[[52.6,45.2],[250.1,41.0],[251.0,83.9],[53.5,88.1]]}]},
+{"text":"จำนวนเงิน","confidence":0.9686,"row":0,"box":[[315.6,40.4],[468.3,40.4],[468.3,88.7],[315.6,88.7]],"words":[{"text":"จำนวนเงิน","confidence":0.9686,"box":[[315.6,40.4],[468.3,40.4],[468.3,88.7],[315.6,88.7]]}]}
+],
+"dropped":[],
+"coverage":{"detect_calls":1,"fallback_single_line":false,"sideways_k":0,"deskew_calls":0,"upside_down_checked":1,"upside_down_result":[false],"gutter_split_kept":0,"gutter_split_reverted_to_whole":0,"gutter_trim_kept":1,"prose_tests":[],"numbered_across":[],"columns_cut":false,"blocks":[1],"fragments_dropped":[0]}
+}

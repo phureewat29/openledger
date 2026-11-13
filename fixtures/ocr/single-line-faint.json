@@ -1,0 +1,12 @@
+{
+"image":{"file":"single-line-faint.png","shape":[60,300,3],"sha256":"00990d9671e3519b37b8dbd044cd0ef0e43b1a6dc23ad503b0810c09818fc79e"},
+"env":{"backend":"onnxruntime","providers":{"det":["CPUExecutionProvider"],"rec":["CPUExecutionProvider"]},"onnxruntime":"1.32.0","opencv":"5.0.0","numpy":"2.5.5","threads":1,"source":"iapp/OpenThai2.0-OCR-Text @ 40e8e9ff","cfg":{"det":{"limit":1280,"thresh":0.2,"box_thresh":0.4,"unclip":1.4,"min_size":3,"max_candidates":3000,"v_pad":0.0,"split_gap":1.2},"rec":{"height":48,"max_w":3200,"batch":16,"drop_below":0.8,"min_chars":2,"junk_below":0.9,"junk_invalid":0.05,"color":"flatten"},"ori":{"enabled":true,"sample":8,"flip_below":0.8,"flip_margin":0.15,"deskew_above":2.5},"join":{"thai_no_space":false},"runtime":{"backend":"openvino","precision":"bf16"}}},
+"text":"สวัสดี",
+"rotation":0,
+"text_angle":0.0,
+"lines":[
+{"text":"สวัสดี","confidence":0.9148,"row":0,"box":[[0.0,0.0],[299.0,0.0],[299.0,59.0],[0.0,59.0]],"words":[{"text":"สวัสดี","confidence":0.9148,"box":[[10.0,0.0],[104.6,0.0],[104.6,59.0],[10.0,59.0]]}]}
+],
+"dropped":[],
+"coverage":{"detect_calls":1,"fallback_single_line":true,"sideways_k":0,"deskew_calls":0,"upside_down_checked":1,"upside_down_result":[false],"gutter_split_kept":0,"gutter_split_reverted_to_whole":0,"gutter_trim_kept":0,"prose_tests":[],"numbered_across":[],"columns_cut":false,"blocks":[1],"fragments_dropped":[0]}
+}
