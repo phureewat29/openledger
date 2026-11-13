@@ -3,6 +3,7 @@ import Database from "libsql";
 import { migrate } from "../db/schema.js";
 import { createAccount } from "../accounts/accounts.js";
 import {
+  afterTest,
   createSandbox,
   makeRunCLI,
   parseNDJSON,
@@ -37,6 +38,9 @@ afterAll(() => {
 function readDB(): Database.Database {
   const db = new Database(dbPath);
   db.pragma("foreign_keys = ON");
+  afterTest(() => {
+    if (db.open) db.close();
+  });
   return db;
 }
 
@@ -57,15 +61,11 @@ async function raiseQuestion(): Promise<string> {
   expect(result.raised_questions).toBe(1);
 
   const db = readDB();
-  try {
-    const question = db
-      .prepare(`SELECT id FROM questions WHERE transaction_id = ?`)
-      .get(result.transaction_id) as { id: string } | undefined;
-    if (!question) throw new Error(`no question raised for transaction ${result.transaction_id}`);
-    return question.id;
-  } finally {
-    db.close();
-  }
+  const question = db
+    .prepare(`SELECT id FROM questions WHERE transaction_id = ?`)
+    .get(result.transaction_id) as { id: string } | undefined;
+  if (!question) throw new Error(`no question raised for transaction ${result.transaction_id}`);
+  return question.id;
 }
 
 describe("questions answer --also (subprocess)", () => {

@@ -11,8 +11,7 @@ import {
 
 // A --config that is missing, unusable, or a directory must gate status/doctor exactly like
 // every other command: exit NOT_READY, nothing on stdout. Bare status/doctor (no --config)
-// keep answering from the default profile even when it has no file at all. That split is
-// the whole fix, so both halves get pinned here.
+// keep answering from the default profile even when it has no file at all. Both halves are pinned here.
 describe("the config gate on status and doctor", () => {
   let sandbox: Sandbox;
   let runCLI: CLIRunner;
@@ -96,14 +95,10 @@ describe("bare status/doctor keep today's lenient behavior (no --config)", () =>
   it("bare status on a virgin setup exits 0 with configured:false and null counts", async () => {
     const isolated = createSandbox("oled-e2e-config-gate-bare-");
     const runIsolated = makeRunCLI(isolated, "dist");
-    try {
-      const { stdout, code } = await runIsolated(["status", "--json"]);
-      expect(code).toBe(0);
-      const report = parseOne(stdout);
-      expect(report.configured).toBe(false);
-      expect(report.counts).toBeNull();
-    } finally {
-      isolated.cleanup();
-    }
+    const { stdout, code } = await runIsolated(["status", "--json"]);
+    expect(code).toBe(0);
+    const report = parseOne(stdout);
+    expect(report.configured).toBe(false);
+    expect(report.counts).toBeNull();
   }, 20000);
 });

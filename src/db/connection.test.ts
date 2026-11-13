@@ -68,8 +68,8 @@ describe("openDB: unusable paths", () => {
     const dbPath = join(tempDir(), "notes.txt");
     writeFileSync(dbPath, "dear diary, this is not a database\n");
 
-    // The open pragma never sees page-body damage, so "corrupt" was always the wrong word
-    // here: it coached users into moving a healthy ledger aside.
+    // The open pragma never sees page-body damage, so "corrupt" is the wrong word
+    // here: it coaches users into moving a healthy ledger aside.
     await expect(open(dbPath)).rejects.toThrow(DBNotReadyError);
     await expect(open(dbPath)).rejects.toThrow(dbPath);
     await expect(open(dbPath)).rejects.not.toThrow(/corrupt/i);

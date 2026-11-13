@@ -144,8 +144,7 @@ describe("shouldPlaceAccount", () => {
   });
 
   it("refuses a malformed segment before the walk opens a type root for it", () => {
-    // thb:equity is unseeded on purpose: the ancestor walk used to open it on
-    // its way to the segment createAccount refuses, and keep it after refusing.
+    // thb:equity is unseeded on purpose: the walk must not open it on its way to a refused segment.
     const before = countAccounts(db);
     expect(shouldPlaceAccount(db, "thb:equity:_bad:leaf")).toBe(false);
     expect(resolveOnePosting(db, "thb:equity:_bad:leaf")).toEqual({ accountId: null, hint: null });

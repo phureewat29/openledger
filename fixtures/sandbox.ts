@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { onTestFinished } from "vitest";
 
 export interface Sandbox {
   root: string;
@@ -18,6 +19,22 @@ export interface Sandbox {
   cacheDir: string;
   env: NodeJS.ProcessEnv;
   cleanup(): void;
+}
+
+/** Runs `fn` when the current test ends. Outside a test (`beforeAll`, a describe body) it does nothing: the caller owns cleanup there. */
+export function afterTest(fn: () => void): void {
+  try {
+    onTestFinished(fn);
+  } catch {
+    // Not inside a test.
+  }
+}
+
+/** A throwaway directory under the OS tmpdir, removed when the current test ends. */
+export function tempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  afterTest(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
 }
 
 /** A throwaway `mkdtemp` root plus an `env` that redirects HOME into it, so the
@@ -40,6 +57,9 @@ export function createSandbox(prefix: string): Sandbox {
   delete env.FORCE_COLOR;
   delete env.CLICOLOR_FORCE;
 
+  const cleanup = () => rmSync(root, { recursive: true, force: true });
+  afterTest(cleanup);
+
   return {
     root,
     home,
@@ -49,7 +69,7 @@ export function createSandbox(prefix: string): Sandbox {
     dataDir,
     cacheDir: join(oledDir, "cache"),
     env,
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    cleanup,
   };
 }
 

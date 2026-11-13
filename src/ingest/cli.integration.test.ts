@@ -16,6 +16,7 @@ import { migrate } from "../db/schema.js";
 import { ACCOUNT_TYPES } from "../contract/enums.js";
 import { createAccount, ensureLedgerRoot } from "../accounts/accounts.js";
 import {
+  afterTest,
   createSandbox,
   makeRunCLI,
   parseNDJSON,
@@ -26,7 +27,7 @@ import {
 } from "../../fixtures/sandbox.js";
 import { MAX_SOURCE_BYTES, loadSource } from "../extract/source.js";
 import { encryptedPDF, pdfOf, textPDF } from "../../fixtures/pdf.js";
-import { samplePng } from "../../fixtures/images.js";
+import { samplePNG } from "../../fixtures/images.js";
 import {
   DEAD_OCR_BASE_URL,
   liveOCR,
@@ -68,6 +69,9 @@ function stage(relPath: string, bytes: Buffer): string {
 function readDB(): Database.Database {
   const db = new Database(dbPath);
   db.pragma("foreign_keys = ON");
+  afterTest(() => {
+    if (db.open) db.close();
+  });
   return db;
 }
 
@@ -210,18 +214,14 @@ describe("ingest commit v2 (subprocess)", () => {
     expect(rB.merchant).toEqual({ how: "unknown" });
 
     const db = readDB();
-    try {
-      const kinds = db
-        .prepare(`SELECT kind FROM questions WHERE batch_id = ? ORDER BY kind`)
-        .all(objs.find((o) => o.type === "summary").batch_id) as { kind: string }[];
-      expect(kinds.map((k) => k.kind)).toEqual(["similar_accounts", "unknown_merchant"]);
-      const row = db
-        .prepare(`SELECT merchant_id FROM transactions WHERE id = ?`)
-        .get(rB.transaction_id) as { merchant_id: string | null };
-      expect(row.merchant_id).toBeNull();
-    } finally {
-      db.close();
-    }
+    const kinds = db
+      .prepare(`SELECT kind FROM questions WHERE batch_id = ? ORDER BY kind`)
+      .all(objs.find((o) => o.type === "summary").batch_id) as { kind: string }[];
+    expect(kinds.map((k) => k.kind)).toEqual(["similar_accounts", "unknown_merchant"]);
+    const row = db
+      .prepare(`SELECT merchant_id FROM transactions WHERE id = ?`)
+      .get(rB.transaction_id) as { merchant_id: string | null };
+    expect(row.merchant_id).toBeNull();
   }, 30000);
 
   it("reads the batch from a file via --input (agent file-staging path)", async () => {
@@ -671,22 +671,18 @@ describe("ingest prepare (subprocess)", () => {
 
   it("resolves a relative path outside the data dir against the caller's cwd", async () => {
     const box = createSandbox("oled-prepare-cwd-it-");
-    try {
-      writeConfig(box, {});
-      const elsewhere = join(box.root, "elsewhere");
-      mkdirSync(elsewhere);
-      writeFileSync(join(elsewhere, "loose.pdf"), textPDF());
+    writeConfig(box, {});
+    const elsewhere = join(box.root, "elsewhere");
+    mkdirSync(elsewhere);
+    writeFileSync(join(elsewhere, "loose.pdf"), textPDF());
 
-      const prepare = await makeRunCLI(box)(["ingest", "prepare", "loose.pdf", "--json"], { cwd: elsewhere });
-      expect(prepare.code).toBe(0);
-      expect(parseOne(prepare.stdout)).toMatchObject({ kind: "text", source: "text-layer" });
-    } finally {
-      box.cleanup();
-    }
+    const prepare = await makeRunCLI(box)(["ingest", "prepare", "loose.pdf", "--json"], { cwd: elsewhere });
+    expect(prepare.code).toBe(0);
+    expect(parseOne(prepare.stdout)).toMatchObject({ kind: "text", source: "text-layer" });
   }, 30000);
 
   it("hands an image back by its own path, writing nothing to the cache", async () => {
-    const path = stage("receipts/receipt.png", samplePng());
+    const path = stage("receipts/receipt.png", samplePNG());
 
     const { stdout, code } = await runCLI(["ingest", "prepare", path, "--json"]);
     expect(code).toBe(0);
@@ -846,7 +842,7 @@ describe.skipIf(!liveOCR)("ingest prepare against an OCR server (live OCR endpoi
 
 describe("ingest list (subprocess)", () => {
   it("lists images, skips file types it cannot read, and reports an oversized file as unreadable", async () => {
-    stage("bucket/receipt.png", samplePng());
+    stage("bucket/receipt.png", samplePNG());
     stage("bucket/notes.docx", Buffer.from("PK"));
     const huge = join(sandbox.dataDir, "bucket", "huge.pdf");
     closeSync(openSync(huge, "w"));
@@ -868,50 +864,38 @@ describe("ingest list (subprocess)", () => {
 describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
   it("status counts waiting statements, and stops counting once prepare registers them", async () => {
     const isolated = createSandbox("oled-ingest-new-it-");
-    try {
-      writeConfig(isolated, {});
-      const run = makeRunCLI(isolated);
-      mkdirSync(join(isolated.dataDir, "bank"), { recursive: true });
-      writeFileSync(join(isolated.dataDir, "bank", "waiting.pdf"), textPDF());
+    writeConfig(isolated, {});
+    const run = makeRunCLI(isolated);
+    mkdirSync(join(isolated.dataDir, "bank"), { recursive: true });
+    writeFileSync(join(isolated.dataDir, "bank", "waiting.pdf"), textPDF());
 
-      const before = await run(["status", "--json"]);
-      expect(before.code).toBe(0);
-      expect(parseOne(before.stdout).files).toMatchObject({ new: 1, ingested: 0, pending: 0 });
+    const before = await run(["status", "--json"]);
+    expect(before.code).toBe(0);
+    expect(parseOne(before.stdout).files).toMatchObject({ new: 1, ingested: 0, pending: 0 });
 
-      const prepared = await run(["ingest", "prepare", "bank/waiting.pdf", "--json"]);
-      expect(prepared.code).toBe(0);
+    const prepared = await run(["ingest", "prepare", "bank/waiting.pdf", "--json"]);
+    expect(prepared.code).toBe(0);
 
-      const after = await run(["status", "--json"]);
-      expect(parseOne(after.stdout).files).toMatchObject({ new: 0, pending: 1 });
-    } finally {
-      isolated.cleanup();
-    }
+    const after = await run(["status", "--json"]);
+    expect(parseOne(after.stdout).files).toMatchObject({ new: 0, pending: 1 });
   }, 60000);
 
   it("an empty files list points at ingest list instead of reading as nothing to do", async () => {
     const isolated = createSandbox("oled-ingest-empty-it-");
-    try {
-      writeConfig(isolated, {});
-      const { stdout, code } = await makeRunCLI(isolated)(["files", "list", "--json"]);
-      expect(code).toBe(0);
-      const summary = parseOne(stdout);
-      expect(summary.total).toBe(0);
-      expect(summary.hint).toContain("oled ingest list");
-    } finally {
-      isolated.cleanup();
-    }
+    writeConfig(isolated, {});
+    const { stdout, code } = await makeRunCLI(isolated)(["files", "list", "--json"]);
+    expect(code).toBe(0);
+    const summary = parseOne(stdout);
+    expect(summary.total).toBe(0);
+    expect(summary.hint).toContain("oled ingest list");
   }, 30000);
 
   it("the commit summary names the file it left pending and the command that closes it", async () => {
     const fileId = "sf-pending-hint";
     const db = readDB();
-    try {
-      db.prepare(
-        `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
-      ).run(fileId, "/tmp/pending-hint.pdf", "pending-hint-hash", "application/pdf");
-    } finally {
-      db.close();
-    }
+    db.prepare(
+      `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
+    ).run(fileId, "/tmp/pending-hint.pdf", "pending-hint-hash", "application/pdf");
 
     const ndjson = JSON.stringify({
       date: "2026-03-01",
@@ -970,13 +954,9 @@ describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
   it("re-piping a batch of failed rows leaves the file's open question count where it was", async () => {
     const fileId = "sf-refusal-retry";
     const db = readDB();
-    try {
-      db.prepare(
-        `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'ingested')`,
-      ).run(fileId, "/tmp/refusal-retry.pdf", "refusal-retry-hash", "application/pdf");
-    } finally {
-      db.close();
-    }
+    db.prepare(
+      `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'ingested')`,
+    ).run(fileId, "/tmp/refusal-retry.pdf", "refusal-retry-hash", "application/pdf");
 
     // No eur ledger is open here, so every row is refused before it posts.
     const batch = (debitAccount: string) =>
@@ -1070,137 +1050,113 @@ describe("ingest done reconciliation (subprocess)", () => {
 
   it("closes a card statement when the ledger holds what the statement closes at", async () => {
     const box = createSandbox("oled-recon-card-it-");
-    try {
-      writeConfig(box, {});
-      const run = makeRunCLI(box);
-      await seedStatement(box, run, "sf-card", "thb", cardRows);
+    writeConfig(box, {});
+    const run = makeRunCLI(box);
+    await seedStatement(box, run, "sf-card", "thb", cardRows);
 
-      const { stdout, code } = await run([
-        "ingest", "done", "sf-card",
-        "--account", "thb:liability:card", "--closing-balance", "200", "--json",
-      ]);
-      expect(code).toBe(0);
-      expect(parseOne(stdout)).toMatchObject({
-        status: "ingested",
-        reconciliation: { account: "thb:liability:card", closing: 200, balance: 200 },
-      });
-    } finally {
-      box.cleanup();
-    }
+    const { stdout, code } = await run([
+      "ingest", "done", "sf-card",
+      "--account", "thb:liability:card", "--closing-balance", "200", "--json",
+    ]);
+    expect(code).toBe(0);
+    expect(parseOne(stdout)).toMatchObject({
+      status: "ingested",
+      reconciliation: { account: "thb:liability:card", closing: 200, balance: 200 },
+    });
   }, 60000);
 
   it("closes a bank statement too, reading a debit-normal balance the other way round", async () => {
     const box = createSandbox("oled-recon-bank-it-");
-    try {
-      writeConfig(box, {});
-      const run = makeRunCLI(box);
-      await seedStatement(box, run, "sf-bank", "thb", [
-        { debit_account: "thb:asset:bank", credit_account: "thb:income:salary", amount: 5000 },
-        { debit_account: "thb:expense:food", credit_account: "thb:asset:bank", amount: 1200 },
-      ]);
+    writeConfig(box, {});
+    const run = makeRunCLI(box);
+    await seedStatement(box, run, "sf-bank", "thb", [
+      { debit_account: "thb:asset:bank", credit_account: "thb:income:salary", amount: 5000 },
+      { debit_account: "thb:expense:food", credit_account: "thb:asset:bank", amount: 1200 },
+    ]);
 
-      const { stdout, code } = await run([
-        "ingest", "done", "sf-bank",
-        "--account", "thb:asset:bank", "--closing-balance", "3800", "--json",
-      ]);
-      expect(code).toBe(0);
-      expect(parseOne(stdout).reconciliation).toMatchObject({ closing: 3800, balance: 3800 });
-    } finally {
-      box.cleanup();
-    }
+    const { stdout, code } = await run([
+      "ingest", "done", "sf-bank",
+      "--account", "thb:asset:bank", "--closing-balance", "3800", "--json",
+    ]);
+    expect(code).toBe(0);
+    expect(parseOne(stdout).reconciliation).toMatchObject({ closing: 3800, balance: 3800 });
   }, 60000);
 
   it("compares in minor units, so sums no double can hold still tie", async () => {
     const box = createSandbox("oled-recon-exact-it-");
-    try {
-      writeConfig(box, {});
-      const run = makeRunCLI(box);
-      // 0.1 + 0.2 !== 0.3 as doubles; as satang, 10 + 20 === 30.
-      await seedStatement(box, run, "sf-exact", "thb", [
-        { debit_account: "thb:expense:food", credit_account: "thb:liability:card", amount: 0.1 },
-        { debit_account: "thb:expense:food", credit_account: "thb:liability:card", amount: 0.2 },
-      ]);
+    writeConfig(box, {});
+    const run = makeRunCLI(box);
+    // 0.1 + 0.2 !== 0.3 as doubles; as satang, 10 + 20 === 30.
+    await seedStatement(box, run, "sf-exact", "thb", [
+      { debit_account: "thb:expense:food", credit_account: "thb:liability:card", amount: 0.1 },
+      { debit_account: "thb:expense:food", credit_account: "thb:liability:card", amount: 0.2 },
+    ]);
 
-      const { stdout, code } = await run([
-        "ingest", "done", "sf-exact",
-        "--account", "thb:liability:card", "--closing-balance", "0.3", "--json",
-      ]);
-      expect(code).toBe(0);
-      expect(parseOne(stdout).reconciliation).toMatchObject({ closing: 0.3, balance: 0.3 });
-    } finally {
-      box.cleanup();
-    }
+    const { stdout, code } = await run([
+      "ingest", "done", "sf-exact",
+      "--account", "thb:liability:card", "--closing-balance", "0.3", "--json",
+    ]);
+    expect(code).toBe(0);
+    expect(parseOne(stdout).reconciliation).toMatchObject({ closing: 0.3, balance: 0.3 });
   }, 60000);
 
   it("refuses a closing balance the ledger disagrees with, and leaves the file pending", async () => {
     const box = createSandbox("oled-recon-bad-it-");
-    try {
-      writeConfig(box, {});
-      const run = makeRunCLI(box);
-      await seedStatement(box, run, "sf-bad", "thb", cardRows);
+    writeConfig(box, {});
+    const run = makeRunCLI(box);
+    await seedStatement(box, run, "sf-bad", "thb", cardRows);
 
-      // One satang out: a misread amount is exactly this shape.
-      const { stderr, code } = await run([
-        "ingest", "done", "sf-bad",
-        "--account", "thb:liability:card", "--closing-balance", "200.01", "--json",
-      ]);
-      expect(code).toBe(6);
-      const { error } = JSON.parse(stderr.trim());
-      expect(error.code).toBe("E_INVALID");
-      expect(error.message).toContain("off by 0.01");
-      expect(error.hint).toContain("opening balance");
+    // One satang out: a misread amount is exactly this shape.
+    const { stderr, code } = await run([
+      "ingest", "done", "sf-bad",
+      "--account", "thb:liability:card", "--closing-balance", "200.01", "--json",
+    ]);
+    expect(code).toBe(6);
+    const { error } = JSON.parse(stderr.trim());
+    expect(error.code).toBe("E_INVALID");
+    expect(error.message).toContain("off by 0.01");
+    expect(error.hint).toContain("opening balance");
 
-      const listed = await run(["files", "list", "--json"]);
-      expect(parseNDJSON(listed.stdout).find((o) => o.id === "sf-bad").status).toBe("pending");
-    } finally {
-      box.cleanup();
-    }
+    const listed = await run(["files", "list", "--json"]);
+    expect(parseNDJSON(listed.stdout).find((o) => o.id === "sf-bad").status).toBe("pending");
   }, 60000);
 
   it("counts a mismatch in the ledger's own units, not in hundredths", async () => {
     const box = createSandbox("oled-recon-jpy-it-");
-    try {
-      writeConfig(box, { displayCurrency: "JPY", displayLocale: "ja-JP" });
-      const run = makeRunCLI(box);
-      await seedStatement(box, run, "sf-jpy", "jpy", [
-        { debit_account: "jpy:expense:food", credit_account: "jpy:liability:card", amount: 1500 },
-      ]);
+    writeConfig(box, { displayCurrency: "JPY", displayLocale: "ja-JP" });
+    const run = makeRunCLI(box);
+    await seedStatement(box, run, "sf-jpy", "jpy", [
+      { debit_account: "jpy:expense:food", credit_account: "jpy:liability:card", amount: 1500 },
+    ]);
 
-      const { stderr, code } = await run([
-        "ingest", "done", "sf-jpy",
-        "--account", "jpy:liability:card", "--closing-balance", "1501", "--json",
-      ]);
-      expect(code).toBe(6);
-      // Yen carries no minor unit: one yen out reads as 1, never 1.00.
-      const { message } = JSON.parse(stderr.trim()).error;
-      expect(message).toContain("holds 1500");
-      expect(message).toContain("off by 1)");
-      expect(message).not.toMatch(/\d\.\d/);
-    } finally {
-      box.cleanup();
-    }
+    const { stderr, code } = await run([
+      "ingest", "done", "sf-jpy",
+      "--account", "jpy:liability:card", "--closing-balance", "1501", "--json",
+    ]);
+    expect(code).toBe(6);
+    // Yen carries no minor unit: one yen out reads as 1, never 1.00.
+    const { message } = JSON.parse(stderr.trim()).error;
+    expect(message).toContain("holds 1500");
+    expect(message).toContain("off by 1)");
+    expect(message).not.toMatch(/\d\.\d/);
   }, 60000);
 
   it("needs both reconciling flags, and closes plainly with neither", async () => {
     const box = createSandbox("oled-recon-flags-it-");
-    try {
-      writeConfig(box, {});
-      const run = makeRunCLI(box);
-      await seedStatement(box, run, "sf-flags", "thb", cardRows);
+    writeConfig(box, {});
+    const run = makeRunCLI(box);
+    await seedStatement(box, run, "sf-flags", "thb", cardRows);
 
-      // Arity is checked before the ledger opens, so a bogus id is not what fails.
-      const partial = await run(["ingest", "done", "sf-nope", "--closing-balance", "200", "--json"]);
-      expect(partial.code).toBe(2);
-      expect(JSON.parse(partial.stderr.trim()).error.code).toBe("E_USAGE");
+    // Arity is checked before the ledger opens, so a bogus id is not what fails.
+    const partial = await run(["ingest", "done", "sf-nope", "--closing-balance", "200", "--json"]);
+    expect(partial.code).toBe(2);
+    expect(JSON.parse(partial.stderr.trim()).error.code).toBe("E_USAGE");
 
-      const plain = await run(["ingest", "done", "sf-flags", "--json"]);
-      expect(plain.code).toBe(0);
-      const out = parseOne(plain.stdout);
-      expect(out.status).toBe("ingested");
-      expect(out).not.toHaveProperty("reconciliation");
-    } finally {
-      box.cleanup();
-    }
+    const plain = await run(["ingest", "done", "sf-flags", "--json"]);
+    expect(plain.code).toBe(0);
+    const out = parseOne(plain.stdout);
+    expect(out.status).toBe("ingested");
+    expect(out).not.toHaveProperty("reconciliation");
   }, 60000);
 });
 
@@ -1208,13 +1164,9 @@ describe("ingest fail (subprocess)", () => {
   it("purges the file's raster cache and reports cache_removed", async () => {
     const fileId = "sf-cache-test";
     const db = readDB();
-    try {
-      db.prepare(
-        `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
-      ).run(fileId, "/tmp/cache-test.pdf", "cache-test-hash", "application/pdf");
-    } finally {
-      db.close();
-    }
+    db.prepare(
+      `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
+    ).run(fileId, "/tmp/cache-test.pdf", "cache-test-hash", "application/pdf");
 
     const cacheSubdir = join(sandbox.cacheDir, fileId);
     mkdirSync(cacheSubdir, { recursive: true });
@@ -1241,13 +1193,9 @@ describe("legacy sf: file ids (subprocess)", () => {
   /** A pending row under the `sf:<uuid>` form older releases minted, with its extracted text cached. */
   function seedLegacyFile(fileId: string): string {
     const db = readDB();
-    try {
-      db.prepare(
-        `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
-      ).run(fileId, `/tmp/${fileId}.pdf`, `${fileId}-hash`, "application/pdf");
-    } finally {
-      db.close();
-    }
+    db.prepare(
+      `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
+    ).run(fileId, `/tmp/${fileId}.pdf`, `${fileId}-hash`, "application/pdf");
     const cacheSubdir = join(sandbox.cacheDir, fileId);
     mkdirSync(cacheSubdir, { recursive: true });
     writeFileSync(join(cacheSubdir, "document.txt"), "--- page 1 ---\nstatement text\n");

@@ -45,40 +45,36 @@ describe("system CLI integration (subprocess)", () => {
     "config --init on a fresh env creates the db and data dir, and bare config reflects them",
     async () => {
       const isolated = createSandbox("oled-system-setup-it-");
-      try {
-        const setupDataDir = isolated.dataDir;
-        const setupDBPath = isolated.dbPath;
+      const setupDataDir = isolated.dataDir;
+      const setupDBPath = isolated.dbPath;
 
-        const setup = await runCLI(
-          [
-            "config",
-            "--init",
-            "--data-dir",
-            setupDataDir,
-            "--db",
-            setupDBPath,
-            "--user-name",
-            "Fresh User",
-            "--currency",
-            "THB",
-            "--locale",
-            "th-TH",
-            "--json",
-          ],
-          { env: isolated.env, cwd: isolated.root },
-        );
-        expect(setup.code).toBe(0);
-        const setupResult = parseOne(setup.stdout);
-        expect(setupResult.created).toMatchObject({ db: setupDBPath, data_dir: setupDataDir });
+      const setup = await runCLI(
+        [
+          "config",
+          "--init",
+          "--data-dir",
+          setupDataDir,
+          "--db",
+          setupDBPath,
+          "--user-name",
+          "Fresh User",
+          "--currency",
+          "THB",
+          "--locale",
+          "th-TH",
+          "--json",
+        ],
+        { env: isolated.env, cwd: isolated.root },
+      );
+      expect(setup.code).toBe(0);
+      const setupResult = parseOne(setup.stdout);
+      expect(setupResult.created).toMatchObject({ db: setupDBPath, data_dir: setupDataDir });
 
-        const show = await runCLI(["config", "--json"], { env: isolated.env, cwd: isolated.root });
-        expect(show.code).toBe(0);
-        const cfg = parseOne(show.stdout);
-        expect(cfg.dataDir).toBe(setupDataDir);
-        expect(cfg.dbPath).toBe(setupDBPath);
-      } finally {
-        isolated.cleanup();
-      }
+      const show = await runCLI(["config", "--json"], { env: isolated.env, cwd: isolated.root });
+      expect(show.code).toBe(0);
+      const cfg = parseOne(show.stdout);
+      expect(cfg.dataDir).toBe(setupDataDir);
+      expect(cfg.dbPath).toBe(setupDBPath);
     },
     30000,
   );
@@ -87,22 +83,18 @@ describe("system CLI integration (subprocess)", () => {
     "status and doctor name an unopenable ledger home-relative, never by the account's own path",
     async () => {
       const isolated = createSandbox("oled-system-unopenable-it-");
-      try {
-        const run = makeRunCLI(isolated);
-        expect((await run(["config", "--init", "--json"])).code).toBe(0);
-        writeFileSync(isolated.dbPath, Buffer.from("not a sqlite file"));
+      const run = makeRunCLI(isolated);
+      expect((await run(["config", "--init", "--json"])).code).toBe(0);
+      writeFileSync(isolated.dbPath, Buffer.from("not a sqlite file"));
 
-        const [status, doctor] = await Promise.all([run(["status", "--json"]), run(["doctor", "--json"])]);
-        const report = parseOne(status.stdout);
-        expect(report.db.reachable).toBe(false);
-        expect(report.db.error).toContain("~/.oled/db.sqlite");
-        const dbOpen = parseOne(doctor.stdout).checks.find((c: { name: string }) => c.name === "db_open");
-        expect(dbOpen.ok).toBe(false);
-        expect(dbOpen.detail).toContain("~/.oled/db.sqlite");
-        for (const { stdout } of [status, doctor]) expect(stdout).not.toContain(isolated.home);
-      } finally {
-        isolated.cleanup();
-      }
+      const [status, doctor] = await Promise.all([run(["status", "--json"]), run(["doctor", "--json"])]);
+      const report = parseOne(status.stdout);
+      expect(report.db.reachable).toBe(false);
+      expect(report.db.error).toContain("~/.oled/db.sqlite");
+      const dbOpen = parseOne(doctor.stdout).checks.find((c: { name: string }) => c.name === "db_open");
+      expect(dbOpen.ok).toBe(false);
+      expect(dbOpen.detail).toContain("~/.oled/db.sqlite");
+      for (const { stdout } of [status, doctor]) expect(stdout).not.toContain(isolated.home);
     },
     30000,
   );
@@ -111,43 +103,39 @@ describe("system CLI integration (subprocess)", () => {
     "an unreadable context.md fails redacting reads closed (exit 3); --no-redact bypasses it, doctor names it",
     async () => {
       const isolated = createSandbox("oled-system-context-it-");
-      try {
-        const run = makeRunCLI(isolated);
-        expect((await run(["config", "--init", "--json"])).code).toBe(0);
-        const contextPath = join(isolated.oledDir, "context.md");
-        // A directory at the path is the portable stand-in for EACCES: it fails even as root.
-        rmSync(contextPath);
-        mkdirSync(contextPath);
+      const run = makeRunCLI(isolated);
+      expect((await run(["config", "--init", "--json"])).code).toBe(0);
+      const contextPath = join(isolated.oledDir, "context.md");
+      // A directory at the path is the portable stand-in for EACCES: it fails even as root.
+      rmSync(contextPath);
+      mkdirSync(contextPath);
 
-        const [status, notes, bare, statusRaw, notesRaw, doctor] = await Promise.all([
-          run(["status", "--json"]),
-          run(["notes", "list", "--json"]),
-          run(["--json"]),
-          run(["status", "--no-redact", "--json"]),
-          run(["notes", "list", "--no-redact", "--json"]),
-          run(["doctor", "--json"]),
-        ]);
-        for (const refused of [status, notes]) {
-          expect(refused.code, refused.stderr).toBe(3);
-          expect(refused.stdout).toBe("");
-          expect(parseOne(refused.stderr).error).toMatchObject({
-            code: "E_NOT_READY",
-            message: expect.stringContaining("~/.oled/context.md"),
-            hint: "fix the file, or pass --no-redact",
-          });
-          expect(refused.stderr).not.toContain(isolated.home);
-        }
-        expect(bare.code).toBe(3);
-        expect(parseOne(bare.stderr).error.hint).toBe("fix the file, or run `oled status --no-redact`");
-        expect(statusRaw.code, statusRaw.stderr).toBe(0);
-        expect(notesRaw.code, notesRaw.stderr).toBe(0);
-
-        const check = parseOne(doctor.stdout).checks.find((c: { name: string }) => c.name === "context_readable");
-        expect(check).toMatchObject({ ok: false, detail: expect.stringContaining("~/.oled/context.md") });
-        expect(doctor.stdout).not.toContain(isolated.home);
-      } finally {
-        isolated.cleanup();
+      const [status, notes, bare, statusRaw, notesRaw, doctor] = await Promise.all([
+        run(["status", "--json"]),
+        run(["notes", "list", "--json"]),
+        run(["--json"]),
+        run(["status", "--no-redact", "--json"]),
+        run(["notes", "list", "--no-redact", "--json"]),
+        run(["doctor", "--json"]),
+      ]);
+      for (const refused of [status, notes]) {
+        expect(refused.code, refused.stderr).toBe(3);
+        expect(refused.stdout).toBe("");
+        expect(parseOne(refused.stderr).error).toMatchObject({
+          code: "E_NOT_READY",
+          message: expect.stringContaining("~/.oled/context.md"),
+          hint: "fix the file, or pass --no-redact",
+        });
+        expect(refused.stderr).not.toContain(isolated.home);
       }
+      expect(bare.code).toBe(3);
+      expect(parseOne(bare.stderr).error.hint).toBe("fix the file, or run `oled status --no-redact`");
+      expect(statusRaw.code, statusRaw.stderr).toBe(0);
+      expect(notesRaw.code, notesRaw.stderr).toBe(0);
+
+      const check = parseOne(doctor.stdout).checks.find((c: { name: string }) => c.name === "context_readable");
+      expect(check).toMatchObject({ ok: false, detail: expect.stringContaining("~/.oled/context.md") });
+      expect(doctor.stdout).not.toContain(isolated.home);
     },
     30000,
   );
@@ -156,16 +144,12 @@ describe("system CLI integration (subprocess)", () => {
     "open recreates a missing data dir owner-only (0700), as config --init creates it",
     async () => {
       const isolated = createSandbox("oled-system-open-it-");
-      try {
-        const dataDir = join(isolated.root, "statements");
-        writeConfig(isolated, { dataDir });
-        const res = await makeRunCLI(isolated)(["open", "--json"], { env: stubOpenerEnv(isolated) });
-        expect(res.code, res.stderr).toBe(0);
-        expect(parseOne(res.stdout).path).toBe(dataDir);
-        expect(statSync(dataDir).mode & 0o777).toBe(0o700);
-      } finally {
-        isolated.cleanup();
-      }
+      const dataDir = join(isolated.root, "statements");
+      writeConfig(isolated, { dataDir });
+      const res = await makeRunCLI(isolated)(["open", "--json"], { env: stubOpenerEnv(isolated) });
+      expect(res.code, res.stderr).toBe(0);
+      expect(parseOne(res.stdout).path).toBe(dataDir);
+      expect(statSync(dataDir).mode & 0o777).toBe(0o700);
     },
     30000,
   );
@@ -174,19 +158,15 @@ describe("system CLI integration (subprocess)", () => {
     "config rejects an unknown --country with USAGE and names the ones it has",
     async () => {
       const isolated = createSandbox("oled-system-country-it-");
-      try {
-        const res = await runCLI(["config", "--country", "bogus", "--json"], {
-          env: isolated.env,
-          cwd: isolated.root,
-        });
-        expect(res.code).toBe(2);
-        const err = JSON.parse(res.stderr.trim());
-        expect(err.error.code).toBe("E_USAGE");
-        expect(err.error.message).toContain("bogus");
-        expect(err.error.hint).toContain("TH");
-      } finally {
-        isolated.cleanup();
-      }
+      const res = await runCLI(["config", "--country", "bogus", "--json"], {
+        env: isolated.env,
+        cwd: isolated.root,
+      });
+      expect(res.code).toBe(2);
+      const err = JSON.parse(res.stderr.trim());
+      expect(err.error.code).toBe("E_USAGE");
+      expect(err.error.message).toContain("bogus");
+      expect(err.error.hint).toContain("TH");
     },
     30000,
   );
@@ -195,54 +175,50 @@ describe("system CLI integration (subprocess)", () => {
     "status on a virgin env creates no ledger, and reports one after config --init",
     async () => {
       const isolated = createSandbox("oled-system-virgin-it-");
-      try {
-        const before = await runCLI(["status", "--json"], { env: isolated.env, cwd: isolated.root });
-        expect(before.code).toBe(0);
-        const blank = parseOne(before.stdout);
-        // The wire discriminator agents read the payload by; a rename breaks them.
-        expect(blank.type).toBe("status");
-        expect(blank.configured).toBe(false);
-        expect(blank.db.reachable).toBe(false);
-        expect(blank.db.error).toBe("no ledger yet");
-        // Orienting must not bring a ledger into existence.
-        expect(existsSync(isolated.dbPath)).toBe(false);
-        expect(existsSync(isolated.configPath)).toBe(false);
+      const before = await runCLI(["status", "--json"], { env: isolated.env, cwd: isolated.root });
+      expect(before.code).toBe(0);
+      const blank = parseOne(before.stdout);
+      // The wire discriminator agents read the payload by; a rename breaks them.
+      expect(blank.type).toBe("status");
+      expect(blank.configured).toBe(false);
+      expect(blank.db.reachable).toBe(false);
+      expect(blank.db.error).toBe("no ledger yet");
+      // Orienting must not bring a ledger into existence.
+      expect(existsSync(isolated.dbPath)).toBe(false);
+      expect(existsSync(isolated.configPath)).toBe(false);
 
-        // Doctor diagnoses the same state without provisioning it either.
-        const virginDoctor = await runCLI(["doctor", "--json"], { env: isolated.env, cwd: isolated.root });
-        expect(virginDoctor.code).toBe(3); // EXIT.NOT_READY
-        const dbOpen = parseOne(virginDoctor.stdout).checks.find(
-          (c: { name: string }) => c.name === "db_open",
-        );
-        expect(dbOpen.ok).toBe(false);
-        expect(dbOpen.detail).toContain("no ledger yet");
-        expect(existsSync(isolated.dbPath)).toBe(false);
+      // Doctor diagnoses the same state without provisioning it either.
+      const virginDoctor = await runCLI(["doctor", "--json"], { env: isolated.env, cwd: isolated.root });
+      expect(virginDoctor.code).toBe(3); // EXIT.NOT_READY
+      const dbOpen = parseOne(virginDoctor.stdout).checks.find(
+        (c: { name: string }) => c.name === "db_open",
+      );
+      expect(dbOpen.ok).toBe(false);
+      expect(dbOpen.detail).toContain("no ledger yet");
+      expect(existsSync(isolated.dbPath)).toBe(false);
 
-        // Bare --init, no companion flags: the env-resolved paths suffice.
-        const init = await runCLI(["config", "--init", "--json"], {
-          env: isolated.env,
-          cwd: isolated.root,
-        });
-        expect(init.code).toBe(0);
+      // Bare --init, no companion flags: the env-resolved paths suffice.
+      const init = await runCLI(["config", "--init", "--json"], {
+        env: isolated.env,
+        cwd: isolated.root,
+      });
+      expect(init.code).toBe(0);
 
-        const after = await runCLI(["status", "--json"], { env: isolated.env, cwd: isolated.root });
-        expect(after.code).toBe(0);
-        const report = parseOne(after.stdout);
-        expect(report.configured).toBe(true);
-        expect(report.db.reachable).toBe(true);
-        // Home-relative so no output carries the OS account name, and still usable as input.
-        expect(report.config_path.startsWith("~/")).toBe(true);
-        const roundTrip = await runCLI(["config", report.config_path, "--json"], {
-          env: isolated.env,
-          cwd: isolated.root,
-        });
-        expect(roundTrip.code).toBe(0);
-        expect(parseOne(roundTrip.stdout).config_path).toBe(isolated.configPath);
-        expect(JSON.stringify(report)).not.toContain("[USER");
-        expect(JSON.stringify(report)).not.toContain("[PARTNER");
-      } finally {
-        isolated.cleanup();
-      }
+      const after = await runCLI(["status", "--json"], { env: isolated.env, cwd: isolated.root });
+      expect(after.code).toBe(0);
+      const report = parseOne(after.stdout);
+      expect(report.configured).toBe(true);
+      expect(report.db.reachable).toBe(true);
+      // Home-relative so no output carries the OS account name, and still usable as input.
+      expect(report.config_path.startsWith("~/")).toBe(true);
+      const roundTrip = await runCLI(["config", report.config_path, "--json"], {
+        env: isolated.env,
+        cwd: isolated.root,
+      });
+      expect(roundTrip.code).toBe(0);
+      expect(parseOne(roundTrip.stdout).config_path).toBe(isolated.configPath);
+      expect(JSON.stringify(report)).not.toContain("[USER");
+      expect(JSON.stringify(report)).not.toContain("[PARTNER");
     },
     30000,
   );
@@ -291,7 +267,7 @@ describe("system CLI integration (subprocess)", () => {
           hint: "one of: list, show, drop",
         },
         {
-          // A ValidationError's hint now names the command that raised it, not a flat generic line.
+          // A ValidationError's hint names the command that raised it, not a flat generic line.
           args: ["questions", "answer", "q1"],
           message: "--answer required",
           hint: "run `oled questions answer --help` for its flags and usage",
@@ -347,26 +323,22 @@ describe("system CLI integration (subprocess)", () => {
     async () => {
       const isolated = createSandbox("oled-system-ocr-cfg-it-");
       const env = { env: isolated.env, cwd: isolated.root };
-      try {
-        const model = await runCLI(
-          ["config", "--db", isolated.dbPath, "--data-dir", isolated.dataDir, "--ocr-model", "test-ocr-model", "--json"],
-          env,
-        );
-        expect(model.code).toBe(0);
-        expect(parseOne(model.stdout)).toMatchObject({
-          ocrBaseUrl: "",
-          ocrModel: "test-ocr-model",
-        });
+      const model = await runCLI(
+        ["config", "--db", isolated.dbPath, "--data-dir", isolated.dataDir, "--ocr-model", "test-ocr-model", "--json"],
+        env,
+      );
+      expect(model.code).toBe(0);
+      expect(parseOne(model.stdout)).toMatchObject({
+        ocrBaseUrl: "",
+        ocrModel: "test-ocr-model",
+      });
 
-        const show = await runCLI(["config", "--json"], env);
-        expect(show.code).toBe(0);
-        const shown = parseOne(show.stdout);
-        expect(shown).toMatchObject({ ocrModel: "test-ocr-model" });
-        // The model is the only OCR knob; the model card it selects is internal.
-        expect(shown).not.toHaveProperty("ocrModelCard");
-      } finally {
-        isolated.cleanup();
-      }
+      const show = await runCLI(["config", "--json"], env);
+      expect(show.code).toBe(0);
+      const shown = parseOne(show.stdout);
+      expect(shown).toMatchObject({ ocrModel: "test-ocr-model" });
+      // The model is the only OCR knob; the model card it selects is internal.
+      expect(shown).not.toHaveProperty("ocrModelCard");
     },
     30000,
   );
@@ -549,35 +521,31 @@ describe("system CLI integration (subprocess)", () => {
     "accounts show: a prefix-less id on a seeded ledger is NOT_FOUND (5) with a ledger-enumerating hint",
     async () => {
       const isolated = createSandbox("oled-system-account-notfound-it-");
+      writeConfig(isolated, {});
+      const raw = new Database(isolated.dbPath);
+      raw.pragma("foreign_keys = ON");
+      migrate(raw);
       try {
-        writeConfig(isolated, {});
-        const raw = new Database(isolated.dbPath);
-        raw.pragma("foreign_keys = ON");
-        migrate(raw);
-        try {
-          createAccount(raw, { id: "thb:expense", name: "Expenses", type: "expense", parent_id: null });
-          createAccount(raw, {
-            id: "thb:expense:food",
-            name: "Food",
-            type: "expense",
-            parent_id: "thb:expense",
-          });
-        } finally {
-          raw.close();
-        }
-
-        const res = await runCLI(["accounts", "show", "expense:food", "--json"], {
-          env: isolated.env,
-          cwd: isolated.root,
+        createAccount(raw, { id: "thb:expense", name: "Expenses", type: "expense", parent_id: null });
+        createAccount(raw, {
+          id: "thb:expense:food",
+          name: "Food",
+          type: "expense",
+          parent_id: "thb:expense",
         });
-        expect(res.code).toBe(5);
-        const err = parseOne(res.stderr).error;
-        expect(err.code).toBe("E_NOT_FOUND");
-        expect(err.message).toBe('account "expense:food" not found');
-        expect(err.hint).toBe("account ids start with a currency — existing ledgers: thb");
       } finally {
-        isolated.cleanup();
+        raw.close();
       }
+
+      const res = await runCLI(["accounts", "show", "expense:food", "--json"], {
+        env: isolated.env,
+        cwd: isolated.root,
+      });
+      expect(res.code).toBe(5);
+      const err = parseOne(res.stderr).error;
+      expect(err.code).toBe("E_NOT_FOUND");
+      expect(err.message).toBe('account "expense:food" not found');
+      expect(err.hint).toBe("account ids start with a currency — existing ledgers: thb");
     },
     30000,
   );

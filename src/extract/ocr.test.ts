@@ -14,7 +14,7 @@ import { modelCardFor } from "./cards/index.js";
 import { fallbackModelCard } from "./cards/fallback.js";
 import { typhoonModelCard } from "./cards/typhoon-ocr1.5.js";
 import type { PageImage } from "./pdf.js";
-import { samplePng } from "../../fixtures/images.js";
+import { samplePNG } from "../../fixtures/images.js";
 import {
   LIVE_PAGE_TIMEOUT_MS,
   deadOCRSettings,
@@ -22,7 +22,7 @@ import {
   requireLiveOCR,
 } from "../../fixtures/ocr.js";
 
-const png = samplePng();
+const png = samplePNG();
 const page1: PageImage = { page: 1, mime: "image/png", bytes: png };
 const page2: PageImage = { page: 2, mime: "image/png", bytes: png };
 

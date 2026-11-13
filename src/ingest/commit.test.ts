@@ -751,8 +751,7 @@ describe("commitLinkedTransactions", () => {
   });
 
   it("a later leg under the currency's smallest unit is refused before the earlier leg builds anything", () => {
-    // 0.004 THB rounds to 0 satang, which only validateTransaction used to
-    // catch, after leg 0 and leg 1 had both written their placeholder trees.
+    // 0.004 THB rounds to 0 satang: refused up front, before leg 0 and leg 1 write placeholder trees.
     const before = countAccounts(db);
     const out = commitLinkedTransactions(
       db,

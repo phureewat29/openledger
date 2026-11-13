@@ -64,7 +64,7 @@ describe("six openers racing to create one ledger", () => {
 
     for (const [index, result] of results.entries()) {
       expect(result.code, `opener ${index} failed: ${result.stderr}`).toBe(0);
-      // Both refusals that used to win this race tell the user to move a healthy ledger aside.
+      // Losing the race must not surface a refusal that tells the user to move a healthy ledger aside.
       expect(result.stderr).not.toMatch(/not a database|not an OpenLedger database/i);
     }
 

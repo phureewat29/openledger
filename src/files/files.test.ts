@@ -15,7 +15,7 @@ import { resolve } from "node:path";
 import { findFileById, listFiles } from "./queries.js";
 import { MAX_SOURCE_BYTES, loadSource, type LoadedSource } from "../extract/source.js";
 import { pdfOf, textPDF } from "../../fixtures/pdf.js";
-import { samplePng } from "../../fixtures/images.js";
+import { samplePNG } from "../../fixtures/images.js";
 import { freshDB } from "../../fixtures/db.js";
 import {
   cleanCache,
@@ -28,7 +28,7 @@ import {
 let dataDir: string;
 let cacheDir: string;
 let outsideDir: string; // outside the data dir, for the cwd-relative resolution case
-const png = samplePng();
+const png = samplePNG();
 
 beforeEach(() => {
   dataDir = mkdtempSync(resolve(tmpdir(), "oled-files-data-"));

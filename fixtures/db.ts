@@ -89,6 +89,27 @@ export function failingStatement(db: Database.Database, sqlPrefix: string): Data
   return failingRun(db, sqlPrefix, () => true);
 }
 
+/** `hook` runs just before the `nth` top-level `BEGIN IMMEDIATE` `db` issues, as another process's write could. */
+export function onBegin(
+  db: Database.Database,
+  nth: number,
+  hook: () => void,
+): Database.Database {
+  let opened = 0;
+  return new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === "exec") {
+        return (sql: string) => {
+          if (sql === "BEGIN IMMEDIATE" && ++opened === nth) hook();
+          return target.exec(sql);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Database.Database;
+}
+
 interface ContendedLedger {
   /** Waits only CONTENDED_BUSY_TIMEOUT_MS for a lock before SQLITE_BUSY. */
   db: Database.Database;
@@ -114,19 +135,7 @@ export function ledgerLockedAtTransaction(
   seed?.(raw);
 
   const holder = new Database(dbPath);
-  let opened = 0;
-  const db = new Proxy(raw, {
-    get(target, prop, receiver) {
-      if (prop === "exec") {
-        return (sql: string) => {
-          if (sql === "BEGIN IMMEDIATE" && ++opened === nth) holder.exec("BEGIN IMMEDIATE");
-          return target.exec(sql);
-        };
-      }
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  }) as Database.Database;
+  const db = onBegin(raw, nth, () => holder.exec("BEGIN IMMEDIATE"));
 
   return {
     db,

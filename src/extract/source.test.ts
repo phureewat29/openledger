@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_SOURCE_BYTES, SUPPORTED_EXTS, loadSource, sniffSource } from "./source.js";
 import { textPDF } from "../../fixtures/pdf.js";
-import { samplePng } from "../../fixtures/images.js";
+import { samplePNG } from "../../fixtures/images.js";
 
 // Sniffing reads signatures only, so a header is a complete jpeg/webp here.
 const jpegBytes = () => Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
@@ -30,7 +30,7 @@ describe("SUPPORTED_EXTS", () => {
 describe("sniffSource", () => {
   it("recognizes each accepted format from the real thing", () => {
     expect(sniffSource(textPDF())).toEqual({ kind: "pdf", mime: "application/pdf" });
-    expect(sniffSource(samplePng())).toEqual({ kind: "image", mime: "image/png" });
+    expect(sniffSource(samplePNG())).toEqual({ kind: "image", mime: "image/png" });
     expect(sniffSource(jpegBytes())).toEqual({ kind: "image", mime: "image/jpeg" });
     expect(sniffSource(webpBytes())).toEqual({ kind: "image", mime: "image/webp" });
   });
@@ -64,11 +64,11 @@ describe("loadSource", () => {
   });
 
   it("loads each image extension as kind image with the extension's mime", () => {
-    const png = loadSource(write("receipt.png", samplePng()));
+    const png = loadSource(write("receipt.png", samplePNG()));
     expect(png.ok).toBe(true);
     if (!png.ok) return;
     expect(png.value).toMatchObject({ kind: "image", mime: "image/png" });
-    expect(png.value.bytes.equals(samplePng())).toBe(true);
+    expect(png.value.bytes.equals(samplePNG())).toBe(true);
 
     expect(loadSource(write("a.jpg", jpegBytes()))).toMatchObject({
       ok: true,
@@ -91,7 +91,7 @@ describe("loadSource", () => {
   });
 
   it("rejects bytes that disagree with the extension, naming what it found", () => {
-    const result = loadSource(write("mislabeled.pdf", samplePng()));
+    const result = loadSource(write("mislabeled.pdf", samplePNG()));
     expect(result).toMatchObject({ ok: false, reason: "kind_mismatch" });
     if (!result.ok) expect(result.message).toContain("image/png");
   });

@@ -19,7 +19,7 @@ import {
   findDuplicateTransactions,
   proximityComponents,
 } from "./duplicates.js";
-import { freshDB, seedAccount } from "../../fixtures/db.js";
+import { freshDB, onBegin, seedAccount } from "../../fixtures/db.js";
 
 function seedAccountsAndFile(db: Database.Database): void {
   createAccount(db, { id: "thb:expense", name: "Expenses (THB)", type: "expense", parent_id: null });
@@ -40,26 +40,6 @@ function seedAccountsAndFile(db: Database.Database): void {
        VALUES (?, ?, ?, 'application/pdf', 'ingested')`,
     ).run(id, `/${id}.pdf`, `hash-${id}`);
   }
-}
-
-/** `edit` commits just before `db` opens its first write transaction, as another process's could. */
-function editedAtFirstLock(db: Database.Database, edit: () => void): Database.Database {
-  let fired = false;
-  return new Proxy(db, {
-    get(target, prop, receiver) {
-      if (prop === "exec") {
-        return (sql: string) => {
-          if (sql === "BEGIN IMMEDIATE" && !fired) {
-            fired = true;
-            edit();
-          }
-          return target.exec(sql);
-        };
-      }
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  }) as Database.Database;
 }
 
 function tf(over: Partial<TransactionInput>): TransactionInput {
@@ -201,7 +181,7 @@ describe("autoMergeStrictDuplicateTransactions", () => {
     const other = upsertMerchant(db, { canonical_name: "Other" }, []);
     insertTransaction(db, tf({ id: "tx:head", merchant_id: starbucks.id, source_file_id: "sf-1" }));
     insertTransaction(db, tf({ id: "tx:real", merchant_id: starbucks.id, source_file_id: "sf-2" }));
-    const raced = editedAtFirstLock(db, () =>
+    const raced = onBegin(db, 1, () =>
       db.prepare(`UPDATE transactions SET merchant_id = ? WHERE id = 'tx:real'`).run(other.id),
     );
 

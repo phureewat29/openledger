@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { extractFile, type ExtractInput } from "./extract.js";
 import { DEFAULT_RENDER } from "./pdf.js";
 import { corruptPDF, mixedPDF, pdfOf, scanPDF, textPDF } from "../../fixtures/pdf.js";
-import { samplePng } from "../../fixtures/images.js";
+import { samplePNG } from "../../fixtures/images.js";
 import {
   LIVE_PAGE_TIMEOUT_MS,
   deadOCRSettings,
@@ -16,7 +16,7 @@ function pdfInput(bytes: Buffer): ExtractInput {
   return { kind: "pdf", mime: "application/pdf", bytes, path: "/data/statement.pdf" };
 }
 
-const png = samplePng();
+const png = samplePNG();
 
 function imageInput(): ExtractInput {
   return { kind: "image", mime: "image/png", bytes: png, path: "/data/receipt.png" };

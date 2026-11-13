@@ -29,7 +29,7 @@ import {
   scanPDF,
   textPDF,
 } from "../../fixtures/pdf.js";
-import { samplePng } from "../../fixtures/images.js";
+import { samplePNG } from "../../fixtures/images.js";
 import { failingStatement, freshDB } from "../../fixtures/db.js";
 import {
   DEAD_OCR_BASE_URL,
@@ -51,7 +51,7 @@ let dataDir: string;
 let cacheDir: string;
 let cfg: PrepareConfig;
 const cwd = process.cwd();
-const png = samplePng();
+const png = samplePNG();
 
 beforeEach(() => {
   dataDir = mkdtempSync(resolve(tmpdir(), "oled-ingest-data-"));
