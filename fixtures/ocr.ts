@@ -33,16 +33,19 @@ export function requireLiveOCRSource(): OCRConfigSource {
   return liveOCRSource;
 }
 
-/** Binding port 1 needs root, so a connect there is reliably refused. */
+/** Binding port 1 needs root, so a connect there is reliably refused: at once on POSIX, after about 2s on Windows. */
 export const DEAD_OCR_BASE_URL = "http://127.0.0.1:1/v1";
 
-/** Short timeout so a test pointed at the dead endpoint fails fast. */
+/** Vitest timeout for a test that dials the dead endpoint twice (probe, then a page). */
+export const DEAD_OCR_TEST_TIMEOUT_MS = 15_000;
+
+/** The timeout outlasts Windows' slow refusal, so a refused connect never reads as a timeout. */
 export function deadOCRSettings(over: Partial<OCRSettings> = {}): OCRSettings {
   return {
     baseURL: DEAD_OCR_BASE_URL,
     model: "test-ocr-model",
     apiKey: "",
-    timeoutMs: 2_000,
+    timeoutMs: 10_000,
     prompt: "read the page",
     params: { temperature: 0, top_p: 1, max_tokens: 256, seed: 7 },
     render: { dpi: 72, maxLongestDimPx: 1024 },

@@ -33,9 +33,7 @@ beforeAll(() => {
   db.close();
 });
 
-afterAll(() => {
-  sandbox.cleanup();
-});
+afterAll(() => sandbox.cleanup());
 
 interface LedgerSnapshot {
   currencies: string[];

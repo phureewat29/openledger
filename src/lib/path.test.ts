@@ -32,6 +32,15 @@ describe("expandHome / homeRelative", () => {
     },
   );
 
+  it.runIf(process.platform === "win32")(
+    "collapses a Windows home spelled in another case or with forward slashes",
+    () => {
+      const abs = resolve(HOME, "statements", "a.pdf");
+      expect(homeRelative(abs.toUpperCase(), HOME)).toBe(`~${sep}STATEMENTS${sep}A.PDF`);
+      expect(homeRelative(abs.replaceAll(sep, "/"), HOME)).toBe(`~${sep}statements${sep}a.pdf`);
+    },
+  );
+
   it("relativizes every occurrence of the path inside prose", () => {
     const abs = resolve(HOME, "ledger", "db.sqlite");
     const shown = homeRelative(abs, HOME);

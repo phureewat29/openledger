@@ -1,11 +1,10 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, it, expect, vi } from "vitest";
 import { join } from "node:path";
 import { countBy } from "es-toolkit";
 import Database from "libsql";
 import { commitRows, type BatchContext } from "./commit-cli.js";
 import { seedAccount, failingStatement, freshDB, ledgerLockedAtTransaction } from "../../fixtures/db.js";
+import { tempDir } from "../../fixtures/test-cleanup.js";
 import { createOutput, describeFailure } from "../cli/output.js";
 import {
   countTransactions,
@@ -172,15 +171,8 @@ function commitUntilThrown(db: Database.Database, items: unknown[]): unknown {
 }
 
 describe("commitRows: a locked ledger", () => {
-  const dirs: string[] = [];
-  afterEach(() => {
-    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-  });
-
   function dbPath(): string {
-    const dir = mkdtempSync(join(tmpdir(), "oled-commit-busy-"));
-    dirs.push(dir);
-    return join(dir, "db.sqlite");
+    return join(tempDir("oled-commit-busy-"), "db.sqlite");
   }
 
   it("stops the batch with BUSY (8), keeping the row that posted before the lock reported", () => {

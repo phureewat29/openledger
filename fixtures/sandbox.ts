@@ -2,7 +2,8 @@
  *  Stays free of vitest so plain scripts can import it; test-scoped cleanup is in test-cleanup.ts. */
 
 import { execFile, type ExecFileException } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
@@ -18,7 +19,7 @@ export interface Sandbox {
   dataDir: string;
   cacheDir: string;
   env: NodeJS.ProcessEnv;
-  cleanup(): void;
+  cleanup(): Promise<void>;
 }
 
 /** A throwaway `mkdtemp` root plus an `env` that redirects HOME into it, so the
@@ -50,8 +51,17 @@ export function createSandbox(prefix: string): Sandbox {
     dataDir,
     cacheDir: join(oledDir, "cache"),
     env,
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    cleanup: () => removeTree(root),
   };
+}
+
+/**
+ * libsql keeps a closed database's file open until GC finalizes its statements, a tick later,
+ * and Windows refuses to delete an open file. Both vitest configs pass --expose-gc for this.
+ */
+export async function removeTree(path: string): Promise<void> {
+  globalThis.gc?.();
+  await rm(path, { recursive: true, force: true, maxRetries: 5 });
 }
 
 /** Seeds the sandbox's config.json so gated commands run without a prior `config --init`. */

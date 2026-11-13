@@ -15,9 +15,7 @@ beforeAll(() => {
   writeConfig(sandbox, {});
 });
 
-afterAll(() => {
-  sandbox.cleanup();
-});
+afterAll(() => sandbox.cleanup());
 
 describe("cli integration (subprocess)", () => {
   it("a guarded command without confirmation exits non-zero with a JSON error on stderr", async () => {

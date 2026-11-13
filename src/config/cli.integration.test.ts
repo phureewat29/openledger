@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createSandbox,
@@ -10,6 +10,7 @@ import {
   type Sandbox,
 } from "../../fixtures/sandbox.js";
 import { createTestSandbox } from "../../fixtures/test-cleanup.js";
+import { expectMode } from "../../fixtures/modes.js";
 import { keyFingerprint } from "./config.js";
 
 let sandbox: Sandbox;
@@ -21,9 +22,7 @@ beforeAll(() => {
   runCLI = makeRunCLI(sandbox);
 });
 
-afterAll(() => {
-  sandbox.cleanup();
-});
+afterAll(() => sandbox.cleanup());
 
 describe("bare config shows (subprocess)", () => {
   it("answers on a virgin setup with the defaults, typhoon among them", async () => {
@@ -113,21 +112,22 @@ describe("the config-file gate (subprocess)", () => {
   }, 30000);
 
   it("--config pointing at a missing file gates the same before and after the subcommand", async () => {
+    const missing = join(sandbox.root, "nonexistent", "profile.json");
     // Both spellings in one run: they only read, so nothing serializes them.
     const [after, before] = await Promise.all([
-      runCLI(["notes", "list", "--config", "/nonexistent/profile.json", "--json"]),
-      runCLI(["--config", "/nonexistent/profile.json", "notes", "list", "--json"]),
+      runCLI(["notes", "list", "--config", missing, "--json"]),
+      runCLI(["--config", missing, "notes", "list", "--json"]),
     ]);
     for (const { stderr, code } of [after, before]) {
       expect(code).toBe(3);
       const { error } = JSON.parse(stderr.trim());
       expect(error.code).toBe("E_NOT_READY");
-      expect(error.message).toContain("/nonexistent/profile.json");
+      expect(error.message).toContain(missing);
     }
   }, 30000);
 
   it("the config command refuses the --config flag in every spelling: positional only", async () => {
-    const named = `${sandbox.root}/flagged.json`;
+    const named = join(sandbox.root, "flagged.json");
     const forms = await Promise.all([
       runCLI(["config", "--config", named, "--json"]),
       runCLI(["--config", named, "config", "--json"]),
@@ -156,7 +156,7 @@ describe("the config-file gate (subprocess)", () => {
 
   it("a positional path runs an independent profile beside the default one", async () => {
     const isolated = createTestSandbox("oled-config-profile-it-");
-    const profile = `${isolated.root}/profile.json`;
+    const profile = join(isolated.root, "profile.json");
     const run = makeRunCLI(isolated);
     const init = await run(["config", profile, "--init", "--currency", "USD", "--json"]);
     expect(init.code).toBe(0);
@@ -265,7 +265,7 @@ describe("a malformed config file never echoes its content (subprocess)", () => 
     );
     // Home-relative, like every other path status and doctor print.
     expect(readable.detail).toBe(
-      "~/.oled/config.json is unusable, so defaults are in use: it is not valid JSON",
+      `${join("~", ".oled", "config.json")} is unusable, so defaults are in use: it is not valid JSON`,
     );
   }, 30000);
 });
@@ -283,7 +283,7 @@ describe("config --ocr-api-key (subprocess)", () => {
     expect(parseOne(res.stdout).ocrApiKey).toEqual(fingerprinted);
     expect(res.stdout).not.toContain("sk-flag-secret");
     expect(readConfigFile(isolated).ocrApiKey).toBe("sk-flag-secret");
-    expect(statSync(isolated.configPath).mode & 0o777).toBe(0o600);
+    expectMode(isolated.configPath, 0o600);
 
     // Reading it back is the other half: the show path fingerprints a persisted key too.
     const show = await run(["config", "--json"]);

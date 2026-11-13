@@ -8,6 +8,7 @@ import { inspectConfig, NO_LEDGER, probeLedger, type LedgerProbe } from "../../c
 import { getVersion } from "../../lib/version.js";
 import { homeRelative, relativizeHomeIn, type PathRoots } from "../../lib/path.js";
 import { installedVersion, SKILL_DIRS } from "../../setup/install.js";
+import { RM_OPTS } from "../../files/files.js";
 import { readRedactionContext } from "../../privacy/redactor.js";
 import { loadMupdf } from "../../extract/pdf.js";
 import { runAction, type Invocation, type Output } from "../output.js";
@@ -58,7 +59,7 @@ function dataDirWritableCheck(dir: string, home: string): Check {
   const probed = tryExecute(() => {
     const probe = join(dir, `.doctor-probe-${randomUUID()}`);
     writeFileSync(probe, "ok");
-    rmSync(probe, { force: true });
+    rmSync(probe, RM_OPTS);
   });
   if (!probed.ok) return { name, ok: false, detail: relativizeHomeIn(probed.error, dir, home) };
   return { name, ok: true };

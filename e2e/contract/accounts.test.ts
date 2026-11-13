@@ -38,9 +38,7 @@ beforeAll(() => {
   runCLI = makeRunCLI(sandbox, "dist");
 });
 
-afterAll(() => {
-  sandbox.cleanup();
-});
+afterAll(() => sandbox.cleanup());
 
 // One ledger, one chain: a mid-chain failure would cascade into unrelated steps.
 let stepFailed = false;

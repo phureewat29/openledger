@@ -98,9 +98,7 @@ describe("contract-core: live --json output matches the published contract", () 
     if (commit.code !== 0) throw new Error(`ingest commit failed: ${commit.stderr}`);
   }, 30000);
 
-  afterAll(() => {
-    sandbox.cleanup();
-  });
+  afterAll(() => sandbox.cleanup());
 
   it("status --json matches STATUS_CONTRACTS", async () => {
     const res = await runCLI(["status", "--json"]);
@@ -127,7 +125,8 @@ describe("contract-core: live --json output matches the published contract", () 
     assertOneLineMatches(res.stdout, SETUP_CONTRACTS.setup);
   });
 
-  it("open --json matches OPEN_CONTRACTS", async () => {
+  // The opener stub is a shell script on PATH; Windows would launch a real Explorer window.
+  it.skipIf(process.platform === "win32")("open --json matches OPEN_CONTRACTS", async () => {
     const res = await runCLI(["open", "--json"], { env: stubOpenerEnv(sandbox) });
     expect(res.code, res.stderr).toBe(0);
     assertOneLineMatches(res.stdout, OPEN_CONTRACTS.open);

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import Database from "libsql";
 import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { createRequire } from "node:module";
 import { rmSync } from "node:fs";
 import {
@@ -125,6 +126,8 @@ describe("a write against a ledger another process holds", () => {
     const result = await runCLI(["notes", "add", "--content", "contended", "--category", "fact", "--json"]);
     const elapsed = Date.now() - startedAt;
     holder.kill();
+    // Windows will not delete the ledger in cleanup while the holder still has it open.
+    if (holder.exitCode === null && holder.signalCode === null) await once(holder, "exit");
 
     expect(result.code, `expected BUSY, got: ${result.stderr}`).toBe(8);
     const payload = JSON.parse(result.stderr.trim()) as { error: { code: string; hint?: string } };

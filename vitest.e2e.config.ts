@@ -14,5 +14,7 @@ export default defineConfig({
     hookTimeout: 60_000,
     // A release gate reads better as one ordered log than as two interleaved ones.
     fileParallelism: false,
+    // removeTree (fixtures/sandbox.ts) collects garbage so Windows can delete a closed ledger.
+    execArgv: ["--expose-gc"],
   },
 });

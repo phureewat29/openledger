@@ -30,9 +30,7 @@ describe("the config gate on status and doctor", () => {
     if (init.code !== 0) throw new Error(`config --init failed: ${init.stderr}`);
   }, 30000);
 
-  afterAll(() => {
-    sandbox.cleanup();
-  });
+  afterAll(() => sandbox.cleanup());
 
   it.each(["status", "doctor"])(
     "%s --config <missing path> exits NOT_READY with nothing on stdout",

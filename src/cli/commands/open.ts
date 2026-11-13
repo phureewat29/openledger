@@ -5,14 +5,14 @@ import { requireConfig } from "../../config/cli.js";
 import { runAction, type Invocation } from "../output.js";
 import type { OpenResult } from "../../contract/open.js";
 
-const OPENERS: Partial<Record<NodeJS.Platform, string>> = {
+export const OPENERS: Partial<Record<NodeJS.Platform, string>> = {
   darwin: "open",
   win32: "explorer",
   linux: "xdg-open",
 };
 
 /** Never rejects: resolves with an error message on spawn failure, else undefined. */
-function spawnOpener(cmd: string, dataDir: string): Promise<string | undefined> {
+export function spawnOpener(cmd: string, dataDir: string): Promise<string | undefined> {
   return new Promise((resolvePromise) => {
     const child = spawn(cmd, [dataDir], { stdio: "ignore", detached: true });
     child.once("error", (err: Error) => resolvePromise(err.message));

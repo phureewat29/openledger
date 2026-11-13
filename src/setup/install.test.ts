@@ -143,9 +143,7 @@ beforeAll(() => {
   runCLI = makeRunCLI(sandbox);
 });
 
-afterAll(() => {
-  sandbox.cleanup();
-});
+afterAll(() => sandbox.cleanup());
 
 describe("setup CLI (subprocess)", () => {
   it(

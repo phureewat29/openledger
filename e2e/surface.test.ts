@@ -19,9 +19,7 @@ beforeAll(async () => {
   if (init.code !== 0) throw new Error(`config --init failed: ${init.stderr}`);
 }, 30000);
 
-afterAll(() => {
-  sandbox.cleanup();
-});
+afterAll(() => sandbox.cleanup());
 
 const ESC = /\x1b/;
 
@@ -219,9 +217,7 @@ describe("row-streaming writes end with a summary too (dist subprocess)", () => 
     }
   }, 60000);
 
-  afterAll(() => {
-    writeSandbox.cleanup();
-  });
+  afterAll(() => writeSandbox.cleanup());
 
   it("oled questions defer exits 0 with NDJSON-only, ANSI-free output on both streams", async () => {
     expectListShape(

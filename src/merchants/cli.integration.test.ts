@@ -30,9 +30,7 @@ beforeAll(() => {
   db.close();
 });
 
-afterAll(() => {
-  sandbox.cleanup();
-});
+afterAll(() => sandbox.cleanup());
 
 function stderrError(stderr: string): { code: string; message: string } {
   return JSON.parse(stderr.trim()).error;

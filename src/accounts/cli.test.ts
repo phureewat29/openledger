@@ -1,7 +1,5 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import type Database from "libsql";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ACCOUNT_FAILURE_EXIT,
@@ -14,6 +12,7 @@ import {
 } from "./cli.js";
 import { findAccountById, insertAccount } from "./queries.js";
 import { failingAccountInsert, freshDB, ledgerLockedAtTransaction } from "../../fixtures/db.js";
+import { tempDir } from "../../fixtures/test-cleanup.js";
 import { createOutput, describeFailure } from "../cli/output.js";
 import { EXIT } from "../contract/exit.js";
 import { describeReasonTable } from "../../fixtures/reason-table.js";
@@ -61,15 +60,8 @@ describe("createAccountsBatch: a mid-batch throw stays that item's failure", () 
 });
 
 describe("createAccountsBatch: a locked ledger stops the batch", () => {
-  const dirs: string[] = [];
-  afterEach(() => {
-    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-  });
-
   it("exits BUSY (8), not PARTIAL, and keeps the rows that landed before the lock", () => {
-    const dir = mkdtempSync(join(tmpdir(), "oled-accounts-busy-"));
-    dirs.push(dir);
-    const ledger = ledgerLockedAtTransaction(join(dir, "db.sqlite"), 2);
+    const ledger = ledgerLockedAtTransaction(join(tempDir("oled-accounts-busy-"), "db.sqlite"), 2);
     const { out, lines } = jsonOutput();
 
     let thrown: unknown;

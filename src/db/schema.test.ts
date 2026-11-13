@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest";
 import Database from "libsql";
-import { chmodSync, mkdtempSync, rmSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { migrate, listMissingTables } from "./schema.js";
 import { DBNotReadyError } from "./errors.js";
 import * as baseline from "./migrations/0001_baseline.js";
 import { MIGRATIONS, type Migration } from "./migrations/index.js";
 import { ACCOUNT_TYPES, FILE_STATUSES, NOTE_CATEGORIES } from "../contract/enums.js";
+import { tempDir } from "../../fixtures/test-cleanup.js";
 
 function freshDB() {
   const db = new Database(":memory:");
@@ -54,15 +54,6 @@ function userSchema(db: Database.Database): string[] {
       )
       .all() as { entry: string }[]
   ).map((r) => r.entry);
-}
-
-function withTempDir(run: (dir: string) => void): void {
-  const dir = mkdtempSync(join(tmpdir(), "oled-migrate-"));
-  try {
-    run(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 describe("listMissingTables", () => {
@@ -517,125 +508,119 @@ describe("version-1 databases are rebaselined, not adopted", () => {
   }
 
   it("prunes to the five newest backups, the fresh one included", () => {
-    withTempDir((dir) => {
-      const dbPath = join(dir, "db.sqlite");
-      const stale = Array.from({ length: 7 }, (_, i) => `db.sqlite.20200101-00000${i}.bak`);
-      for (const name of stale) writeFileSync(join(dir, name), "old");
-      const db = oldShapeDB(dbPath);
+    const dir = tempDir("oled-migrate-");
+    const dbPath = join(dir, "db.sqlite");
+    const stale = Array.from({ length: 7 }, (_, i) => `db.sqlite.20200101-00000${i}.bak`);
+    for (const name of stale) writeFileSync(join(dir, name), "old");
+    const db = oldShapeDB(dbPath);
 
-      migrate(db, dbPath);
-      db.close();
+    migrate(db, dbPath);
+    db.close();
 
-      const kept = backups(dir).sort();
-      expect(kept).toHaveLength(5);
-      // 7 fakes + 1 fresh copy, capped at 5: the three oldest go.
-      expect(kept.slice(0, 4)).toEqual(stale.slice(3));
-      expect(kept[4]).not.toBe(stale[6]);
-    });
+    const kept = backups(dir).sort();
+    expect(kept).toHaveLength(5);
+    // 7 fakes + 1 fresh copy, capped at 5: the three oldest go.
+    expect(kept.slice(0, 4)).toEqual(stale.slice(3));
+    expect(kept[4]).not.toBe(stale[6]);
   });
 
   it("carries an old-shape database to the latest version and drops what only it had", () => {
-    withTempDir((dir) => {
-      const dbPath = join(dir, "db.sqlite");
-      const db = oldShapeDB(dbPath);
+    const dir = tempDir("oled-migrate-");
+    const dbPath = join(dir, "db.sqlite");
+    const db = oldShapeDB(dbPath);
 
-      migrate(db, dbPath);
+    migrate(db, dbPath);
 
-      expect(versions(db)).toEqual([1, 2, 3]);
-      expect(tableNames(db).sort()).toEqual(TABLES);
-      expect(columns(db, "transactions")).not.toContain("currency");
-      expect(columns(db, "transactions")).not.toContain("has_question");
-      expect(columns(db, "accounts")).not.toContain("currency");
-      // Nothing of the old ledger is adopted: its ids can't satisfy the new CHECKs.
-      expect(rowCount(db, "accounts")).toBe(0);
-      expect(rowCount(db, "transactions")).toBe(0);
-      db.close();
-    });
+    expect(versions(db)).toEqual([1, 2, 3]);
+    expect(tableNames(db).sort()).toEqual(TABLES);
+    expect(columns(db, "transactions")).not.toContain("currency");
+    expect(columns(db, "transactions")).not.toContain("has_question");
+    expect(columns(db, "accounts")).not.toContain("currency");
+    // Nothing of the old ledger is adopted: its ids can't satisfy the new CHECKs.
+    expect(rowCount(db, "accounts")).toBe(0);
+    expect(rowCount(db, "transactions")).toBe(0);
+    db.close();
   });
 
   it("leaves the rebaselined database identical to a fresh install", () => {
-    withTempDir((dir) => {
-      const dbPath = join(dir, "db.sqlite");
-      const db = oldShapeDB(dbPath);
-      migrate(db, dbPath);
+    const dir = tempDir("oled-migrate-");
+    const dbPath = join(dir, "db.sqlite");
+    const db = oldShapeDB(dbPath);
+    migrate(db, dbPath);
 
-      const fresh = freshDB();
-      migrate(fresh);
+    const fresh = freshDB();
+    migrate(fresh);
 
-      // Rebaselined and fresh must match: baseline is the one authority for the shape.
-      expect(userSchema(db)).toEqual(userSchema(fresh));
-      expect(userSchema(db)).toEqual(
-        expect.arrayContaining([
-          expect.stringContaining("trigger transactions_cross_ledger_insert"),
-          expect.stringContaining("trigger transactions_cross_ledger_update"),
-        ]),
-      );
-      db.close();
-    });
+    // Rebaselined and fresh must match: baseline is the one authority for the shape.
+    expect(userSchema(db)).toEqual(userSchema(fresh));
+    expect(userSchema(db)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("trigger transactions_cross_ledger_insert"),
+        expect.stringContaining("trigger transactions_cross_ledger_update"),
+      ]),
+    );
+    db.close();
   });
 
   it("backs the file up before dropping anything, so the old rows survive beside it", () => {
-    withTempDir((dir) => {
-      const dbPath = join(dir, "db.sqlite");
-      const db = oldShapeDB(dbPath);
+    const dir = tempDir("oled-migrate-");
+    const dbPath = join(dir, "db.sqlite");
+    const db = oldShapeDB(dbPath);
 
-      migrate(db, dbPath);
-      db.close();
+    migrate(db, dbPath);
+    db.close();
 
-      expect(backups(dir).length).toBe(1);
+    expect(backups(dir).length).toBe(1);
 
-      // A backup taken after the drop would hold the new, empty shape instead.
-      const saved = new Database(join(dir, backups(dir)[0]));
-      expect(columns(saved, "transactions")).toContain("currency");
-      expect(rowCount(saved, "transactions")).toBe(1);
-      expect(
-        (saved.prepare(`SELECT id FROM accounts ORDER BY id`).all() as { id: string }[]).map(
-          (r) => r.id,
-        ),
-      ).toEqual(["assets-kbank", "expenses-food"]);
-      expect(rowCount(saved, "settings")).toBe(1);
-      saved.close();
-    });
+    // A backup taken after the drop would hold the new, empty shape instead.
+    const saved = new Database(join(dir, backups(dir)[0]));
+    expect(columns(saved, "transactions")).toContain("currency");
+    expect(rowCount(saved, "transactions")).toBe(1);
+    expect(
+      (saved.prepare(`SELECT id FROM accounts ORDER BY id`).all() as { id: string }[]).map(
+        (r) => r.id,
+      ),
+    ).toEqual(["assets-kbank", "expenses-food"]);
+    expect(rowCount(saved, "settings")).toBe(1);
+    saved.close();
   });
 
   it.skipIf(process.platform === "win32")("writes the backup owner-only (0600): it is a full copy of the ledger", () => {
-    withTempDir((dir) => {
-      const dbPath = join(dir, "db.sqlite");
-      const db = oldShapeDB(dbPath);
-      // copyFileSync carries the source's mode over, so this proves the backup is tightened, not inherited.
-      chmodSync(dbPath, 0o644);
+    const dir = tempDir("oled-migrate-");
+    const dbPath = join(dir, "db.sqlite");
+    const db = oldShapeDB(dbPath);
+    // copyFileSync carries the source's mode over, so this proves the backup is tightened, not inherited.
+    chmodSync(dbPath, 0o644);
 
-      migrate(db, dbPath);
-      db.close();
+    migrate(db, dbPath);
+    db.close();
 
-      expect(statSync(join(dir, backups(dir)[0])).mode & 0o777).toBe(0o600);
-    });
+    expect(statSync(join(dir, backups(dir)[0])).mode & 0o777).toBe(0o600);
   });
 
   it("rebaselines a version-1 database that already holds the current shape", () => {
-    withTempDir((dir) => {
-      const dbPath = join(dir, "db.sqlite");
-      const db = new Database(dbPath);
-      db.pragma("foreign_keys = ON");
-      // Already the current shape, at the same version-1 stamp.
-      baseline.up(db);
-      db.exec(`
-        CREATE TABLE schema_migrations (
-          version INTEGER PRIMARY KEY,
-          applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        INSERT INTO schema_migrations (version) VALUES (1);
-        INSERT INTO accounts (id, name, type) VALUES ('thb:asset:a', 'A', 'asset');
-      `);
+    const dir = tempDir("oled-migrate-");
+    const dbPath = join(dir, "db.sqlite");
+    const db = new Database(dbPath);
+    db.pragma("foreign_keys = ON");
+    // Already the current shape, at the same version-1 stamp.
+    baseline.up(db);
+    db.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO schema_migrations (version) VALUES (1);
+      INSERT INTO accounts (id, name, type) VALUES ('thb:asset:a', 'A', 'asset');
+    `);
 
-      migrate(db, dbPath);
+    migrate(db, dbPath);
 
-      // Nothing at rest separates the two version-1 shapes, so neither is adopted.
-      expect(versions(db)).toEqual([1, 2, 3]);
-      expect(rowCount(db, "accounts")).toBe(0);
-      expect(backups(dir).length).toBe(1);
-      db.close();
-    });
+    // Nothing at rest separates the two version-1 shapes, so neither is adopted.
+    expect(versions(db)).toEqual([1, 2, 3]);
+    expect(rowCount(db, "accounts")).toBe(0);
+    expect(backups(dir).length).toBe(1);
+    db.close();
   });
 });
 
@@ -736,35 +721,33 @@ describe("migrate runner", () => {
   });
 
   it("refuses an on-disk DB that holds tables but no version ledger", () => {
-    withTempDir((dir) => {
-      const dbPath = join(dir, "db.sqlite");
-      const db = new Database(dbPath);
-      db.exec(`CREATE TABLE preexisting (id INTEGER PRIMARY KEY)`);
+    const dir = tempDir("oled-migrate-");
+    const dbPath = join(dir, "db.sqlite");
+    const db = new Database(dbPath);
+    db.exec(`CREATE TABLE preexisting (id INTEGER PRIMARY KEY)`);
 
-      expect(() => migrate(db, dbPath, [m1, m2])).toThrow(/not an OpenLedger database/i);
+    expect(() => migrate(db, dbPath, [m1, m2])).toThrow(/not an OpenLedger database/i);
 
-      // Refusal comes before any write, so there is nothing to back up.
-      expect(backups(dir)).toEqual([]);
-      db.close();
-    });
+    // Refusal comes before any write, so there is nothing to back up.
+    expect(backups(dir)).toEqual([]);
+    db.close();
   });
 
   it("backs up an on-disk DB before upgrading it to a newer version", () => {
-    withTempDir((dir) => {
-      const dbPath = join(dir, "db.sqlite");
-      const db = new Database(dbPath);
+    const dir = tempDir("oled-migrate-");
+    const dbPath = join(dir, "db.sqlite");
+    const db = new Database(dbPath);
 
-      // An empty file at version 0 has nothing worth copying.
-      migrate(db, dbPath, [m1]);
-      db.prepare(`INSERT INTO t1 (id) VALUES (1)`).run();
-      expect(backups(dir)).toEqual([]);
+    // An empty file at version 0 has nothing worth copying.
+    migrate(db, dbPath, [m1]);
+    db.prepare(`INSERT INTO t1 (id) VALUES (1)`).run();
+    expect(backups(dir)).toEqual([]);
 
-      migrate(db, dbPath, [m1, m2]);
+    migrate(db, dbPath, [m1, m2]);
 
-      expect(backups(dir).length).toBe(1);
-      expect(versions(db)).toEqual([1, 2]);
-      expect(rowCount(db, "t1")).toBe(1);
-      db.close();
-    });
+    expect(backups(dir).length).toBe(1);
+    expect(versions(db)).toEqual([1, 2]);
+    expect(rowCount(db, "t1")).toBe(1);
+    db.close();
   });
 });

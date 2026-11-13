@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadConfig, saveConfig } from "./config.js";
+import { removeTree } from "../../fixtures/sandbox.js";
 
 let dir: string;
 
@@ -10,9 +11,7 @@ beforeEach(() => {
   dir = mkdtempSync(resolve(tmpdir(), "oled-config-"));
 });
 
-afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
-});
+afterEach(() => removeTree(dir));
 
 describe("loadConfig hardening", () => {
   it("parses a config.json carrying a UTF-8 BOM (Windows editors and redirects)", () => {
@@ -107,7 +106,8 @@ describe("loadConfig: a malformed file never echoes its content", () => {
   });
 });
 
-describe("saveConfig", () => {
+// Every case asserts POSIX mode bits, which Windows does not keep.
+describe.skipIf(process.platform === "win32")("saveConfig", () => {
   it("tightens a pre-existing default config dir to 0700", () => {
     const oledDir = join(dir, ".oled");
     mkdirSync(oledDir);

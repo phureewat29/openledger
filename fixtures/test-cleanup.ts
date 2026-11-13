@@ -1,13 +1,13 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { onTestFinished } from "vitest";
-import { createSandbox, type Sandbox } from "./sandbox.js";
+import { createSandbox, removeTree, type Sandbox } from "./sandbox.js";
 
 /** A throwaway directory under the OS tmpdir, removed when the current test ends. */
 export function tempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
-  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+  onTestFinished(() => removeTree(dir));
   return dir;
 }
 

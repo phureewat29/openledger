@@ -4,6 +4,7 @@ import { DEFAULT_RENDER } from "./pdf.js";
 import { corruptPDF, mixedPDF, pdfOf, scanPDF, textPDF } from "../../fixtures/pdf.js";
 import { samplePNG } from "../../fixtures/images.js";
 import {
+  DEAD_OCR_TEST_TIMEOUT_MS,
   LIVE_PAGE_TIMEOUT_MS,
   deadOCRSettings,
   liveOCR,
@@ -86,7 +87,7 @@ describe("extractFile: ocr route", () => {
   it("fails the run when nothing is listening, rather than degrading to images", async () => {
     const outcome = await extractFile(pdfInput(scanPDF()), { ocr: deadOCRSettings() });
     expect(outcome).toMatchObject({ ok: false, reason: "ocr_unreachable" });
-  });
+  }, DEAD_OCR_TEST_TIMEOUT_MS);
 });
 
 describe.skipIf(!liveOCR)("extractFile: ocr route (live OCR endpoint)", () => {

@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createContextTemplate, readContext } from "./context.js";
+import { removeTree } from "../../fixtures/sandbox.js";
 
 let dir: string;
 
@@ -10,9 +11,7 @@ beforeAll(() => {
   dir = mkdtempSync(resolve(tmpdir(), "oled-context-"));
 });
 
-afterAll(() => {
-  rmSync(dir, { recursive: true, force: true });
-});
+afterAll(() => removeTree(dir));
 
 describe("readContext", () => {
   it("reads a missing file as empty context", () => {

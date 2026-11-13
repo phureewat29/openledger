@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { EXIT } from "../contract/exit.js";
 import { inspectConfig, requireConfig } from "./cli.js";
+import { removeTree } from "../../fixtures/sandbox.js";
 
 interface ThrownCLIError {
   code: keyof typeof EXIT;
@@ -27,9 +28,7 @@ beforeEach(() => {
   dir = mkdtempSync(resolve(tmpdir(), "oled-config-cmd-"));
 });
 
-afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
-});
+afterEach(() => removeTree(dir));
 
 describe("requireConfig (unchanged by the assertUsable extraction)", () => {
   it("fails NOT_READY when the named file does not exist", () => {

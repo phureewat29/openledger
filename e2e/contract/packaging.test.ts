@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { repoRoot } from "../../fixtures/sandbox.js";
 
 // globalSetup (build.setup.ts) builds dist/ (including the contract's
@@ -14,7 +15,7 @@ describe("packaged @aquartier/openledger/contract (dist)", () => {
   });
 
   it("the built module exposes CONTRACT_VERSION and the full EXIT table", async () => {
-    const mod = await import(contractEntry);
+    const mod = await import(pathToFileURL(contractEntry).href);
     expect(mod.CONTRACT_VERSION).toBe(1);
     expect(mod.EXIT.BUSY).toBe(8);
   });

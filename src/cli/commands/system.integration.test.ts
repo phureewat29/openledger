@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import Database from "libsql";
 import { migrate } from "../../db/schema.js";
 import { createAccount } from "../../accounts/accounts.js";
@@ -37,9 +37,7 @@ beforeAll(() => {
   raw.close();
 });
 
-afterAll(() => {
-  sandbox.cleanup();
-});
+afterAll(() => sandbox.cleanup());
 
 describe("system CLI integration (subprocess)", () => {
   it(
@@ -91,10 +89,11 @@ describe("system CLI integration (subprocess)", () => {
       const [status, doctor] = await Promise.all([run(["status", "--json"]), run(["doctor", "--json"])]);
       const report = parseOne(status.stdout);
       expect(report.db.reachable).toBe(false);
-      expect(report.db.error).toContain("~/.oled/db.sqlite");
+      const shownDB = join("~", ".oled", "db.sqlite");
+      expect(report.db.error).toContain(shownDB);
       const dbOpen = parseOne(doctor.stdout).checks.find((c: { name: string }) => c.name === "db_open");
       expect(dbOpen.ok).toBe(false);
-      expect(dbOpen.detail).toContain("~/.oled/db.sqlite");
+      expect(dbOpen.detail).toContain(shownDB);
       for (const { stdout } of [status, doctor]) expect(stdout).not.toContain(isolated.home);
     },
     30000,
@@ -107,6 +106,7 @@ describe("system CLI integration (subprocess)", () => {
       const run = makeRunCLI(isolated);
       expect((await run(["config", "--init", "--json"])).code).toBe(0);
       const contextPath = join(isolated.oledDir, "context.md");
+      const shownContext = join("~", ".oled", "context.md");
       // A directory at the path is the portable stand-in for EACCES: it fails even as root.
       rmSync(contextPath);
       mkdirSync(contextPath);
@@ -124,7 +124,7 @@ describe("system CLI integration (subprocess)", () => {
         expect(refused.stdout).toBe("");
         expect(parseOne(refused.stderr).error).toMatchObject({
           code: "E_NOT_READY",
-          message: expect.stringContaining("~/.oled/context.md"),
+          message: expect.stringContaining(shownContext),
           hint: "fix the file, or pass --no-redact",
         });
         expect(refused.stderr).not.toContain(isolated.home);
@@ -135,13 +135,14 @@ describe("system CLI integration (subprocess)", () => {
       expect(notesRaw.code, notesRaw.stderr).toBe(0);
 
       const check = parseOne(doctor.stdout).checks.find((c: { name: string }) => c.name === "context_readable");
-      expect(check).toMatchObject({ ok: false, detail: expect.stringContaining("~/.oled/context.md") });
+      expect(check).toMatchObject({ ok: false, detail: expect.stringContaining(shownContext) });
       expect(doctor.stdout).not.toContain(isolated.home);
     },
     30000,
   );
 
-  it(
+  // The opener stub is a shell script on PATH, and the 0700 check needs POSIX mode bits.
+  it.skipIf(process.platform === "win32")(
     "open recreates a missing data dir owner-only (0700), as config --init creates it",
     async () => {
       const isolated = createTestSandbox("oled-system-open-it-");
@@ -211,7 +212,7 @@ describe("system CLI integration (subprocess)", () => {
       expect(report.configured).toBe(true);
       expect(report.db.reachable).toBe(true);
       // Home-relative so no output carries the OS account name, and still usable as input.
-      expect(report.config_path.startsWith("~/")).toBe(true);
+      expect(report.config_path.startsWith(`~${sep}`)).toBe(true);
       const roundTrip = await runCLI(["config", report.config_path, "--json"], {
         env: isolated.env,
         cwd: isolated.root,

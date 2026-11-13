@@ -2,9 +2,12 @@
 import { buildProgram } from "./program.js";
 import { reportParseError } from "./output.js";
 
+/** Windows can report the closed reader as EOF rather than EPIPE. */
+const CLOSED_PIPE_CODES = new Set(["EPIPE", "EOF"]);
+
 /** Exit quietly when a downstream pipe closes early (e.g. `oled transactions list --json | head`). */
 const exitOnEpipe = (err: NodeJS.ErrnoException): void => {
-  if (err.code === "EPIPE") process.exit(0);
+  if (CLOSED_PIPE_CODES.has(err.code ?? "")) process.exit(0);
   throw err;
 };
 process.stdout.on("error", exitOnEpipe);

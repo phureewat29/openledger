@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, statSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chmod600 } from "./perms.js";
+import { removeTree } from "../../fixtures/sandbox.js";
 
 const dirs: string[] = [];
 
@@ -12,15 +13,16 @@ function scratchDir(): string {
   return dir;
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const dir of dirs.splice(0)) {
     chmodSync(dir, 0o700);
-    rmSync(dir, { recursive: true, force: true });
+    await removeTree(dir);
   }
 });
 
 describe("chmod600", () => {
-  it("narrows an existing file to owner-only", () => {
+  // chmod600 is a no-op on Windows, which keeps no POSIX mode bits.
+  it.skipIf(process.platform === "win32")("narrows an existing file to owner-only", () => {
     const path = join(scratchDir(), "secret.json");
     writeFileSync(path, "{}", { mode: 0o644 });
     chmod600(path);

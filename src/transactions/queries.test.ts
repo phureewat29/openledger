@@ -1,7 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { migrate } from "../db/schema.js";
 import { isBusyError } from "../db/errors.js";
@@ -30,6 +28,7 @@ import {
 } from "./queries.js";
 import { findMerchantByName } from "../merchants/queries.js";
 import { freshDB, seedAccount } from "../../fixtures/db.js";
+import { tempDir } from "../../fixtures/test-cleanup.js";
 
 function seedChartOfAccounts(db: Database.Database): void {
   seedAccount(db, { id: "thb:asset:cash" });
@@ -544,16 +543,9 @@ describe("voidTransactionAsMirror", () => {
 });
 
 describe("voidTransactionAsMirror: crossed merges from two processes", () => {
-  const dirs: string[] = [];
-  afterEach(() => {
-    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-  });
-
   /** Two connections to one file, the second waiting only 50 ms for a lock. */
   function twoConnections(): [Database.Database, Database.Database] {
-    const dir = mkdtempSync(join(tmpdir(), "oled-void-race-"));
-    dirs.push(dir);
-    const path = join(dir, "db.sqlite");
+    const path = join(tempDir("oled-void-race-"), "db.sqlite");
     const first = new Database(path);
     first.pragma("journal_mode = WAL");
     first.pragma("foreign_keys = ON");

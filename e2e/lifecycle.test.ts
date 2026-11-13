@@ -28,9 +28,7 @@ beforeAll(() => {
   runCLI = makeRunCLI(sandbox, "dist");
 });
 
-afterAll(() => {
-  sandbox.cleanup();
-});
+afterAll(() => sandbox.cleanup());
 
 // One ledger, one chain: a mid-chain failure would cascade into unrelated steps.
 // `it.skipIf` reads its condition at collection time, so it can't see this runtime flag.

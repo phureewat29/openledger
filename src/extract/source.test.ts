@@ -1,18 +1,19 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { createHash } from "node:crypto";
-import { closeSync, mkdtempSync, openSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_SOURCE_BYTES, SUPPORTED_EXTS, loadSource, sniffSource } from "./source.js";
 import { textPDF } from "../../fixtures/pdf.js";
 import { samplePNG } from "../../fixtures/images.js";
+import { removeTree } from "../../fixtures/sandbox.js";
 
 // Sniffing reads signatures only, so a header is a complete jpeg/webp here.
 const jpegBytes = () => Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
 const webpBytes = () => Buffer.from("RIFF\0\0\0\0WEBP", "latin1");
 
 const dir = mkdtempSync(join(tmpdir(), "oled-source-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(() => removeTree(dir));
 
 function write(name: string, bytes: Buffer): string {
   const path = join(dir, name);

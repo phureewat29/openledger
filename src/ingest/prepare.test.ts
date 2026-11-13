@@ -7,8 +7,6 @@ import {
   openSync,
   readFileSync,
   readdirSync,
-  rmSync,
-  statSync,
   truncateSync,
   writeFileSync,
 } from "node:fs";
@@ -33,6 +31,7 @@ import { samplePNG } from "../../fixtures/images.js";
 import { failingStatement, freshDB } from "../../fixtures/db.js";
 import {
   DEAD_OCR_BASE_URL,
+  DEAD_OCR_TEST_TIMEOUT_MS,
   LIVE_PAGE_TIMEOUT_MS,
   liveOCR,
   requireLiveOCR,
@@ -40,6 +39,8 @@ import {
 } from "../../fixtures/ocr.js";
 import { registerPendingFile } from "../files/files.js";
 import { discoverFiles, prepareFile, type PrepareConfig } from "./prepare.js";
+import { removeTree } from "../../fixtures/sandbox.js";
+import { expectMode } from "../../fixtures/modes.js";
 
 // Pass-through, so a single test can fail one artifact write the way a full disk would.
 vi.mock("node:fs", async (importOriginal) => {
@@ -59,11 +60,7 @@ beforeEach(() => {
   cfg = { dataDir, cacheDir, ocrBaseUrl: "", ocrModel: "", ocrApiKey: "" };
 });
 
-afterEach(() => {
-  for (const dir of [dataDir, cacheDir]) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+afterEach(() => Promise.all([dataDir, cacheDir].map(removeTree)));
 
 function write(name: string, bytes: Buffer): string {
   const path = resolve(dataDir, name);
@@ -172,8 +169,8 @@ describe("prepareFile: text route", () => {
       failedPages: [],
     });
     expect(outcome.document).toBe(resolve(cacheDir, outcome.fileId, "document.txt"));
-    expect(statSync(outcome.document).mode & 0o777).toBe(0o600);
-    expect(statSync(resolve(cacheDir, outcome.fileId)).mode & 0o777).toBe(0o700);
+    expectMode(outcome.document, 0o600);
+    expectMode(resolve(cacheDir, outcome.fileId), 0o700);
 
     const text = readFileSync(outcome.document, "utf8");
     expect(text).toContain("--- page 1 ---");
@@ -254,7 +251,7 @@ describe("prepareFile: image route", () => {
 
     const bytes = readFileSync(outcome.pages[0].path);
     expect(bytes.subarray(1, 4).toString("latin1")).toBe("PNG");
-    expect(statSync(outcome.pages[0].path).mode & 0o777).toBe(0o600);
+    expectMode(outcome.pages[0].path, 0o600);
   });
 
   it("routes a partial text layer to the agent as page images, cache modes intact", async () => {
@@ -268,9 +265,9 @@ describe("prepareFile: image route", () => {
     expect(outcome).toMatchObject({ source: "raster", textLayer: "partial", pageCount: 3 });
     expect(outcome.pages.map((p) => p.page)).toEqual([1, 2, 3]);
     for (const page of outcome.pages) {
-      expect(statSync(page.path).mode & 0o777).toBe(0o600);
+      expectMode(page.path, 0o600);
     }
-    expect(statSync(resolve(cacheDir, outcome.fileId)).mode & 0o777).toBe(0o700);
+    expectMode(resolve(cacheDir, outcome.fileId), 0o700);
   });
 
   it("--rescan ignores a good text layer and rasterizes instead", async () => {
@@ -446,7 +443,7 @@ describe("prepareFile: --force", () => {
     expect(findFileById(db, first.fileId)?.status).toBe("pending");
     expect(countTransactionsBySourceFile(db, first.fileId)).toBe(1);
     expect(existsSync(resolve(cacheDir, first.fileId))).toBe(true);
-  });
+  }, DEAD_OCR_TEST_TIMEOUT_MS);
 
   it("purges the new artifacts and keeps the prior row when the swap fails", async () => {
     const db = freshDB();

@@ -53,9 +53,7 @@ beforeAll(() => {
   db.close();
 });
 
-afterAll(() => {
-  sandbox.cleanup();
-});
+afterAll(() => sandbox.cleanup());
 
 function stage(relPath: string, bytes: Buffer): string {
   const path = join(sandbox.dataDir, relPath);
@@ -1190,7 +1188,8 @@ describe("ingest fail (subprocess)", () => {
   }, 30000);
 });
 
-describe("legacy sf: file ids (subprocess)", () => {
+// A colon is illegal in a Windows file name, so no Windows cache ever held a legacy id's subdir.
+describe.skipIf(process.platform === "win32")("legacy sf: file ids (subprocess)", () => {
   /** A pending row under the `sf:<uuid>` form older releases minted, with its extracted text cached. */
   function seedLegacyFile(fileId: string): string {
     const db = readDB();

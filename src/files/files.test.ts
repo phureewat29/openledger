@@ -5,7 +5,6 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
-  rmSync,
   symlinkSync,
   truncateSync,
   writeFileSync,
@@ -24,6 +23,7 @@ import {
   resolveEntryPath,
   walkFiles,
 } from "./files.js";
+import { removeTree } from "../../fixtures/sandbox.js";
 
 let dataDir: string;
 let cacheDir: string;
@@ -36,11 +36,7 @@ beforeEach(() => {
   outsideDir = mkdtempSync(resolve(tmpdir(), "oled-files-outside-"));
 });
 
-afterEach(() => {
-  for (const dir of [dataDir, cacheDir, outsideDir]) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+afterEach(() => Promise.all([dataDir, cacheDir, outsideDir].map(removeTree)));
 
 function write(name: string, bytes: Buffer): string {
   const path = resolve(dataDir, name);
@@ -150,7 +146,8 @@ describe("cleanCache", () => {
     expect(cleanCache(cacheDir, "sf-nothing").removed).toEqual([]);
   });
 
-  it("purges a legacy `sf:` id's subdir too", () => {
+  // A colon is illegal in a Windows file name, so no Windows cache ever held a legacy id's subdir.
+  it.skipIf(process.platform === "win32")("purges a legacy `sf:` id's subdir too", () => {
     const id = "sf:3f1c2a9e-0b4d-4c7e-9a1f-5d6e7f809a1b";
     const dir = resolve(cacheDir, id);
     mkdirSync(dir, { recursive: true });
@@ -175,18 +172,19 @@ describe("cleanCache", () => {
   });
 });
 
+// "junction" is ignored off Windows; there it needs no symlink privilege.
 describe("walkFiles", () => {
   it("cuts a symlink back into an ancestor, listing each file once", () => {
     mkdirSync(resolve(dataDir, "sub"));
     write("sub/a.pdf", textPDF());
-    symlinkSync(dataDir, resolve(dataDir, "sub", "loop"), "dir");
+    symlinkSync(dataDir, resolve(dataDir, "sub", "loop"), "junction");
 
     expect(walkFiles(dataDir).map((f) => f.relPath)).toEqual(["sub/a.pdf"]);
   });
 
   it("still follows a symlinked directory that closes no cycle", () => {
     writeFileSync(resolve(outsideDir, "b.pdf"), textPDF());
-    symlinkSync(outsideDir, resolve(dataDir, "linked"), "dir");
+    symlinkSync(outsideDir, resolve(dataDir, "linked"), "junction");
 
     expect(walkFiles(dataDir).map((f) => f.relPath)).toEqual(["linked/b.pdf"]);
   });

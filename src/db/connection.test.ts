@@ -1,10 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
 import Database from "libsql";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDB } from "./connection.js";
 import { DBBusyError, DBNotReadyError, isBusyError, sqliteErrorCode } from "./errors.js";
+import { removeTree } from "../../fixtures/sandbox.js";
 
 // Sandboxed temp dirs only: openDB migrates and chmods whatever path it is handed.
 const dirs: string[] = [];
@@ -22,9 +23,9 @@ async function open(dbPath: string): Promise<Database.Database> {
   return db;
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const db of opened.splice(0)) db.close();
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  await Promise.all(dirs.splice(0).map(removeTree));
 });
 
 function journalMode(db: Database.Database): string {

@@ -26,9 +26,7 @@ beforeAll(() => {
   writeConfig(sandbox, {});
 });
 
-afterAll(() => {
-  sandbox.cleanup();
-});
+afterAll(() => sandbox.cleanup());
 
 describe("transactions CLI integration (subprocess)", () => {
   it(
@@ -1334,9 +1332,7 @@ describe("transactions with unreadable context.md (subprocess)", () => {
     mkdirSync(join(sb.oledDir, "context.md"));
   });
 
-  afterAll(() => {
-    sb.cleanup();
-  });
+  afterAll(() => sb.cleanup());
 
   const liveCount = (): number => {
     const db = new Database(sb.dbPath);

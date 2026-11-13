@@ -1,10 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "libsql";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inTransaction } from "./transaction.js";
 import { isBusyError, sqliteErrorCode } from "./errors.js";
+import { tempDir } from "../../fixtures/test-cleanup.js";
 
 function values(db: Database.Database): number[] {
   return (db.prepare(`SELECT x FROM t ORDER BY x`).all() as { x: number }[]).map((r) => r.x);
@@ -88,17 +87,10 @@ describe("inTransaction", () => {
 });
 
 describe("inTransaction: lock contention", () => {
-  const dirs: string[] = [];
-  afterEach(() => {
-    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-  });
-
   // IMMEDIATE takes the write lock at BEGIN, where SQLite's busy handler applies; a deferred
   // transaction that reads first would fail its lock upgrade without waiting at all.
   it("waits out busy_timeout at BEGIN, then throws SQLITE_BUSY before running fn", () => {
-    const dir = mkdtempSync(join(tmpdir(), "oled-tx-busy-"));
-    dirs.push(dir);
-    const path = join(dir, "db.sqlite");
+    const path = join(tempDir("oled-tx-busy-"), "db.sqlite");
     const db = new Database(path, { timeout: 100 });
     db.pragma("journal_mode = WAL");
     db.exec(`CREATE TABLE t (x INTEGER)`);

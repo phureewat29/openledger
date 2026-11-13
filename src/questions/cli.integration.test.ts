@@ -30,9 +30,7 @@ beforeAll(() => {
   db.close();
 });
 
-afterAll(() => {
-  sandbox.cleanup();
-});
+afterAll(() => sandbox.cleanup());
 
 function readDB(): Database.Database {
   const db = new Database(dbPath);

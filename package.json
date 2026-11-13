@@ -39,7 +39,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc && tsc -p tsconfig.contract.json && chmod +x dist/cli/index.js",
+    "build": "node scripts/build.mjs",
     "test": "vitest run --typecheck --typecheck.tsconfig ./tsconfig.typecheck.json",
     "dev": "tsx src/cli/index.ts",
     "release": "tsx scripts/release.ts",

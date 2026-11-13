@@ -44,6 +44,8 @@ This repo supports [Agent Plugins](https://agent-plugins.org) package, so compli
    npm install -g @aquartier/openledger
    ```
 
+   It runs on macOS, Linux and Windows (x64); on Windows on ARM, use the x64 build of Node.js.
+
 2. Run OCR locally (optional). Download [Typhoon-OCR-1.5-2B](https://huggingface.co/typhoon-ai/typhoon-ocr1.5-2b) in [LM Studio](https://lmstudio.ai) and start its local server, then hand this to your agent:
 
    ```

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Chalk } from "chalk";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { LoadedConfig } from "../../config/config.js";
@@ -9,6 +9,7 @@ import { ANSI_RE } from "../format.js";
 import type { StatusReport } from "../../contract/status.js";
 import { CONTRACT_VERSION } from "../../contract/version.js";
 import { getVersion } from "../../lib/version.js";
+import { removeTree } from "../../../fixtures/sandbox.js";
 
 const PLAIN = new Chalk({ level: 0 });
 
@@ -111,9 +112,7 @@ describe("buildReport: the default profile's own problem", () => {
     dir = mkdtempSync(resolve(tmpdir(), "oled-status-report-"));
   });
 
-  afterAll(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
+  afterAll(() => removeTree(dir));
 
   // Paths deliberately point at nothing under `dir`: buildReport must thread `problem`
   // through on its no-ledger-yet path without needing a reachable db.
