@@ -259,6 +259,6 @@ export function repointMerchantAliases(
 }
 
 /** Deletes the row alone; re-pointing what references it is the caller's (`mergeMerchants`). */
-export function deleteMerchant(db: Database.Database, id: string): boolean {
-  return db.prepare(`DELETE FROM merchants WHERE id = ?`).run(id).changes > 0;
+export function deleteMerchant(db: Database.Database, id: string): void {
+  db.prepare(`DELETE FROM merchants WHERE id = ?`).run(id);
 }

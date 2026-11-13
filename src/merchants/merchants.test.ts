@@ -3,7 +3,7 @@ import type Database from "libsql";
 import { findMerchantById, upsertMerchant } from "./queries.js";
 import { mergeMerchants } from "./merchants.js";
 import { insertTransaction, type TransactionInput } from "../transactions/queries.js";
-import { freshDB, seedAccount } from "../../fixtures/db.js";
+import { failingStatement, freshDB, seedAccount } from "../../fixtures/db.js";
 
 function seedChartOfAccounts(db: Database.Database): void {
   seedAccount(db, { id: "thb:expense:food" });
@@ -59,6 +59,25 @@ describe("mergeMerchants", () => {
 
     expect(mergeMerchants(db, from.id, to.id)).toEqual({ ok: true, moved_transactions: 0, moved_aliases: 0 });
     expect(findMerchantById(db, to.id)!.default_account_id).toBe("thb:expense:food");
+  });
+
+  it("rolls the whole merge back when its last statement fails", () => {
+    const from = upsertMerchant(
+      db,
+      { canonical_name: "Starbux", alias: "STARBUX #1", default_account_id: "thb:expense:food:dining" },
+      NOISE,
+    );
+    const to = upsertMerchant(db, { canonical_name: "Starbucks" }, NOISE);
+    insertTransaction(db, tf({ merchant_id: from.id }));
+    const snapshot = () =>
+      ["transactions", "merchant_aliases", "merchants"].map((table) =>
+        db.prepare(`SELECT * FROM ${table} ORDER BY id`).all(),
+      );
+    const before = snapshot();
+
+    const failing = failingStatement(db, "DELETE FROM merchants");
+    expect(() => mergeMerchants(failing, from.id, to.id)).toThrow("disk I/O error");
+    expect(snapshot()).toEqual(before);
   });
 
   it("refuses a self-merge", () => {

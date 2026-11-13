@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { Command } from "commander";
+import chalk from "chalk";
 import { createOutput, describeFailure, readGlobals, type OutputMode } from "./output.js";
 import { fail } from "./errors.js";
 import { EXIT } from "../contract/exit.js";
@@ -114,9 +115,16 @@ describe("createOutput", () => {
     expect(tty.text()).toBe("from     2026-01-01\nnet.THB  1.5\nnet.USD  -2\n");
   });
 
-  it("paints nothing once colour is off, so NO_COLOR reaches every renderer", () => {
-    const { out } = captured({ kind: "tty", tty: true, color: false });
-    expect(out.paint.bold.yellow("x")).toBe("x");
+  it("paints only while colour is on, so NO_COLOR reaches every renderer", () => {
+    // A vitest worker's stdout is no TTY, so chalk starts at level 0 and would paint nothing either way.
+    const level = chalk.level;
+    onTestFinished(() => {
+      chalk.level = level;
+    });
+    chalk.level = 1;
+    const paint = (color: boolean) => captured({ kind: "tty", tty: true, color }).out.paint;
+    expect(paint(true).bold.yellow("x")).toBe("\u001b[1m\u001b[33mx\u001b[39m\u001b[22m");
+    expect(paint(false).bold.yellow("x")).toBe("x");
   });
 });
 
