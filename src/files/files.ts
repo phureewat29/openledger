@@ -10,6 +10,7 @@ import {
 import { SOURCES, loadSource, type LoadedSource } from "../extract/source.js";
 import { newFileId } from "../lib/ids.js";
 import { tryExecute } from "../lib/result.js";
+import { resolveFromCwd, type PathRoots } from "../lib/path.js";
 
 export interface WalkedFile {
   path: string;
@@ -70,14 +71,14 @@ export function resolveEntryPath(
   db: Database.Database,
   dataDir: string,
   entryOrId: string,
-  cwd: string,
+  roots: Pick<PathRoots, "cwd">,
 ): string | null {
   if (isAbsolute(entryOrId) && existsSync(entryOrId)) return entryOrId;
 
   const viaDataDir = resolve(dataDir, entryOrId);
   if (existsSync(viaDataDir)) return viaDataDir;
 
-  const viaCwd = resolve(cwd, entryOrId);
+  const viaCwd = resolveFromCwd(entryOrId, roots);
   if (existsSync(viaCwd)) return viaCwd;
 
   return findFileById(db, entryOrId)?.path ?? null;

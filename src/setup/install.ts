@@ -2,7 +2,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
-import type { PathRoots } from "../lib/path.js";
+import { resolveFromCwd, type PathRoots } from "../lib/path.js";
 import { getVersion } from "../lib/version.js";
 
 /** Default skills dir `setup` writes to when no `--dir` is given; callers name their own dir rather than picking a host id from a registry. */
@@ -45,9 +45,9 @@ export function installedVersion(skillsDir: string): string | null {
   return readFileSync(versionPath, "utf8").trim();
 }
 
-function skillsDirFor(opts: InstallOptions, { cwd, home }: PathRoots): string {
-  if (opts.dir) return resolve(cwd, opts.dir);
-  return resolve(opts.global ? home : cwd, DEFAULT_SKILLS_DIR);
+function skillsDirFor(opts: InstallOptions, roots: PathRoots): string {
+  if (opts.dir) return resolveFromCwd(opts.dir, roots);
+  return resolve(opts.global ? roots.home : roots.cwd, DEFAULT_SKILLS_DIR);
 }
 
 /** Idempotent at the same version; a pack at a different version stays untouched unless `force`. */

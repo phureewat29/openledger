@@ -171,7 +171,7 @@ async function prepareIngest(
 ): Promise<ExitCode | undefined> {
   const { config, db } = await openLedger(ctx);
 
-  const result = await prepareFile(db, config, pathOrId, ctx.roots.cwd, {
+  const result = await prepareFile(db, config, pathOrId, ctx.roots, {
     password: opts.password,
     force: !!opts.force,
     rescan: !!opts.rescan,

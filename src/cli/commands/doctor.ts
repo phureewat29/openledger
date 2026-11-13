@@ -4,7 +4,7 @@ import { existsSync, rmSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import type { LoadedConfig, ResolvedConfig } from "../../config/config.js";
 import { listMissingTables } from "../../db/schema.js";
-import { inspectConfig, ledgerProblem, probeLedger, type LedgerProbe } from "../../config/cli.js";
+import { inspectConfig, NO_LEDGER, probeLedger, type LedgerProbe } from "../../config/cli.js";
 import { getVersion } from "../../lib/version.js";
 import { homeRelative, relativizeHomeIn, type PathRoots } from "../../lib/path.js";
 import { installedVersion, SKILL_DIRS } from "../../setup/install.js";
@@ -47,9 +47,9 @@ function configReadableCheck(loaded: LoadedConfig): Check {
 
 function dbOpenCheck(ledger: LedgerProbe): Check {
   const name = "db_open";
-  const problem = ledgerProblem(ledger);
-  if (problem === null) return { name, ok: true };
-  return { name, ok: false, detail: ledger.state === "missing" ? `${problem}: ${INIT_HINT}` : problem };
+  if (ledger.state === "missing") return { name, ok: false, detail: `${NO_LEDGER}: ${INIT_HINT}` };
+  if (ledger.state === "unreachable") return { name, ok: false, detail: ledger.error };
+  return { name, ok: true };
 }
 
 function dataDirWritableCheck(dir: string, home: string): Check {

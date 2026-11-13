@@ -1,9 +1,14 @@
 import { isAbsolute, resolve, sep } from "path";
 
-/** Where `~` and relative paths resolve; read once per invocation, at the CLI boundary. */
+/** Where `~` and relative paths resolve. Reading `cwd` throws once that directory is deleted,
+ *  so read it only to resolve a relative path. */
 export interface PathRoots {
   cwd: string;
   home: string;
+}
+
+export function resolveFromCwd(path: string, roots: Pick<PathRoots, "cwd">): string {
+  return isAbsolute(path) ? resolve(path) : resolve(roots.cwd, path);
 }
 
 /** `/` separates everywhere; `\` also separates on Windows, where it is an

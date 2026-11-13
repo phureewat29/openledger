@@ -9,6 +9,7 @@ import { isEncryptedPDF, unlockPDF, type UnlockFailureReason } from "../extract/
 import { loadSource, type LoadedSource } from "../extract/source.js";
 import { newFileId } from "../lib/ids.js";
 import { ok, tryExecute, type Result } from "../lib/result.js";
+import type { PathRoots } from "../lib/path.js";
 import {
   RM_OPTS,
   cleanCache,
@@ -265,10 +266,10 @@ export async function prepareFile(
   db: Database.Database,
   cfg: PrepareConfig,
   entryOrId: string,
-  cwd: string,
+  roots: Pick<PathRoots, "cwd">,
   opts: PrepareOptions = {},
 ): Promise<PrepareOutcome> {
-  const absPath = resolveEntryPath(db, cfg.dataDir, entryOrId, cwd);
+  const absPath = resolveEntryPath(db, cfg.dataDir, entryOrId, roots);
   if (absPath === null) {
     return { ok: false, reason: "not_found", message: `no ingest entry or file at "${entryOrId}"` };
   }

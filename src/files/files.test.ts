@@ -106,32 +106,32 @@ describe("resolveEntryPath", () => {
     const db = freshDB();
     mkdirSync(resolve(dataDir, "sub"), { recursive: true });
     const path = write("sub/b.pdf", textPDF());
-    expect(resolveEntryPath(db, dataDir, "sub/b.pdf", outsideDir)).toBe(path);
+    expect(resolveEntryPath(db, dataDir, "sub/b.pdf", { cwd: outsideDir })).toBe(path);
   });
 
   it("still resolves an absolute path", () => {
     const db = freshDB();
     const path = write("a.pdf", textPDF());
-    expect(resolveEntryPath(db, dataDir, path, outsideDir)).toBe(path);
+    expect(resolveEntryPath(db, dataDir, path, { cwd: outsideDir })).toBe(path);
   });
 
   it("resolves a relative path against the given cwd when it isn't rooted under the data dir", () => {
     const db = freshDB();
     writeFileSync(resolve(outsideDir, "c.pdf"), textPDF());
-    expect(resolveEntryPath(db, dataDir, "c.pdf", outsideDir)).toBe(resolve(outsideDir, "c.pdf"));
+    expect(resolveEntryPath(db, dataDir, "c.pdf", { cwd: outsideDir })).toBe(resolve(outsideDir, "c.pdf"));
   });
 
   it("still resolves a file id", () => {
     const db = freshDB();
     const path = write("a.pdf", textPDF());
     const fileId = registerPendingFile(db, loaded(path));
-    expect(resolveEntryPath(db, dataDir, fileId, outsideDir)).toBe(path);
+    expect(resolveEntryPath(db, dataDir, fileId, { cwd: outsideDir })).toBe(path);
   });
 
   it("returns null for a path or id that matches nothing", () => {
     const db = freshDB();
-    expect(resolveEntryPath(db, dataDir, "sf-does-not-exist", outsideDir)).toBeNull();
-    expect(resolveEntryPath(db, dataDir, "no/such/file.pdf", outsideDir)).toBeNull();
+    expect(resolveEntryPath(db, dataDir, "sf-does-not-exist", { cwd: outsideDir })).toBeNull();
+    expect(resolveEntryPath(db, dataDir, "no/such/file.pdf", { cwd: outsideDir })).toBeNull();
   });
 });
 

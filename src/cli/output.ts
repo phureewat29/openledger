@@ -173,7 +173,12 @@ export function runAction<A extends unknown[]>(
     });
     const out = createOutput(mode, (chunk) => process.stdout.write(chunk));
     try {
-      const roots: PathRoots = { cwd: process.cwd(), home: homedir() };
+      const roots: PathRoots = {
+        home: homedir(),
+        get cwd() {
+          return process.cwd();
+        },
+      };
       const exit = await handler({ out, configPath: globals.config, roots }, ...(args.slice(0, -1) as A));
       if (exit) process.exitCode = EXIT[exit];
     } catch (err) {

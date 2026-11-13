@@ -1,13 +1,18 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import {
   createSandbox,
+  distEntry,
   makeRunCLI,
+  parseNDJSON,
   parseOne,
   type CLIRunner,
   type Sandbox,
 } from "../fixtures/sandbox.js";
+import { createTestSandbox } from "../fixtures/test-cleanup.js";
 
 // A --config that is missing, unusable, or a directory must gate status/doctor exactly like
 // every other command: exit NOT_READY, nothing on stdout. Bare status/doctor (no --config)
@@ -87,13 +92,32 @@ describe("the config gate on status and doctor", () => {
     expect(leaked.stdout).toBe("");
   }, 20000);
 
+  it.skipIf(process.platform === "win32")(
+    "status and a data command still run from a deleted cwd when --config is absolute",
+    async () => {
+      // A spawn into a missing cwd fails, so the shell removes the dir after entering it.
+      const fromDeletedCwd = async (args: string[]): Promise<string> => {
+        const gone = mkdtempSync(join(sandbox.root, "gone-"));
+        const script = 'cd "$1" && rmdir "$1" && shift && exec "$@"';
+        const argv = ["-c", script, "sh", gone, process.execPath, distEntry, ...args];
+        const { stdout } = await promisify(execFile)("/bin/sh", argv, { env: sandbox.env });
+        return stdout;
+      };
+      const config = ["--config", sandbox.configPath, "--json"];
+      expect(parseOne(await fromDeletedCwd(["status", ...config])).db.reachable).toBe(true);
+      const accounts = parseNDJSON(await fromDeletedCwd(["accounts", "list", ...config]));
+      expect(accounts.length).toBeGreaterThan(0);
+    },
+    20000,
+  );
+
   // Doctor's probe file is not asserted absent: dataDirWritableCheck self-cleans it inside one
   // tryExecute, so absence proves nothing; the missing-path case above already pins this exit.
 });
 
 describe("bare status/doctor keep today's lenient behavior (no --config)", () => {
   it("bare status on a virgin setup exits 0 with configured:false and null counts", async () => {
-    const isolated = createSandbox("oled-e2e-config-gate-bare-");
+    const isolated = createTestSandbox("oled-e2e-config-gate-bare-");
     const runIsolated = makeRunCLI(isolated, "dist");
     const { stdout, code } = await runIsolated(["status", "--json"]);
     expect(code).toBe(0);

@@ -16,7 +16,7 @@ import { formatAmount, toDecimalTotals } from "../../lib/money.js";
 import { banner, visibleLength, formatInt, flattenRows, formatKeyValues } from "../format.js";
 import { runAction, type Invocation } from "../output.js";
 import { redactionEnabled } from "../input.js";
-import { inspectConfig, ledgerProblem, probeLedger, type LedgerProbe } from "../../config/cli.js";
+import { inspectConfig, NO_LEDGER, probeLedger, type LedgerProbe } from "../../config/cli.js";
 import { getVersion } from "../../lib/version.js";
 import { CONTRACT_VERSION } from "../../contract/version.js";
 import type { StatusReport } from "../../contract/status.js";
@@ -48,12 +48,16 @@ export function buildReport(loaded: LoadedConfig, ledger: LedgerProbe): StatusRe
     net_worth: null,
   };
 
-  // Opening the db is the only reachability check; a failing count query must not read as not-ready.
-  if (ledger.state !== "open") {
+  if (ledger.state === "missing") {
     // Nothing is registered without a ledger, so every readable file is new.
-    const fresh = ledger.state === "missing" ? countNewFiles(null, cfg.dataDir) : 0;
-    return { ...base, db: { ...base.db, error: ledgerProblem(ledger) }, files: { ...base.files, new: fresh } };
+    return {
+      ...base,
+      db: { ...base.db, error: NO_LEDGER },
+      files: { ...base.files, new: countNewFiles(null, cfg.dataDir) },
+    };
   }
+  // Opening the db is the only reachability check; a failing count query must not read as not-ready.
+  if (ledger.state === "unreachable") return { ...base, db: { ...base.db, error: ledger.error } };
 
   const { db } = ledger;
   const open = countQuestions(db);

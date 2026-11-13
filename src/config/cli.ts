@@ -1,7 +1,6 @@
 import type { Command } from "commander";
 import type Database from "libsql";
 import { existsSync, mkdirSync } from "fs";
-import { resolve } from "path";
 import { mapValues, pick } from "es-toolkit";
 import { openDB } from "../db/connection.js";
 import { ensureStructuralAccounts } from "../accounts/accounts.js";
@@ -14,7 +13,7 @@ import {
   type OpenLedgerConfig,
   type ResolvedConfig,
 } from "./config.js";
-import { expandHome, relativizeHomeIn, type PathRoots } from "../lib/path.js";
+import { expandHome, relativizeHomeIn, resolveFromCwd, type PathRoots } from "../lib/path.js";
 import { tryExecute } from "../lib/result.js";
 import { findCountryDefaults, availableCountries } from "../datasets/datasets.js";
 import { createContextTemplate } from "./context.js";
@@ -68,13 +67,7 @@ export type LedgerProbe =
   | { state: "unreachable"; error: string }
   | { state: "open"; db: Database.Database };
 
-const NO_LEDGER = "no ledger yet";
-
-/** Why the ledger can't be read, or null once it is open. */
-export function ledgerProblem(ledger: LedgerProbe): string | null {
-  if (ledger.state === "missing") return NO_LEDGER;
-  return ledger.state === "unreachable" ? ledger.error : null;
-}
+export const NO_LEDGER = "no ledger yet";
 
 /** Opens the ledger only if it exists (`openDB` would create it); the error names the path home-relative. */
 export async function probeLedger(dbPath: string, home: string): Promise<LedgerProbe> {
@@ -169,7 +162,7 @@ type ConvergedConfig = Omit<OpenLedgerConfig, "ocrApiKey"> & { ocrApiKey?: strin
 function resolveConvergedConfig(
   flags: SettingFlags,
   loaded: LoadedConfig,
-  { cwd, home }: PathRoots,
+  roots: PathRoots,
 ): ConvergedConfig {
   const current = loaded.config;
   const country = flags.country ?? current.country;
@@ -183,7 +176,7 @@ function resolveConvergedConfig(
   // Persisted absolute so the path means the same from every later cwd; `~` is expanded
   // because Windows shells pass it through literally. "" stays "", which means unset.
   const pathFlag = (flag: string | undefined, fallback: string): string =>
-    flag === undefined ? fallback : flag && resolve(cwd, expandHome(flag, home));
+    flag === undefined ? fallback : flag && resolveFromCwd(expandHome(flag, roots.home), roots);
 
   return {
     country: defaults.country,

@@ -50,7 +50,7 @@ vi.mock("node:fs", async (importOriginal) => {
 let dataDir: string;
 let cacheDir: string;
 let cfg: PrepareConfig;
-const cwd = process.cwd();
+const roots = { cwd: process.cwd() };
 const png = samplePNG();
 
 beforeEach(() => {
@@ -160,7 +160,7 @@ describe("prepareFile: text route", () => {
     // with no endpoint configured; a scanned page instead would route to raster.
     const path = write("a.pdf", pdfOf(["text", "blank", "text"]));
 
-    const outcome = await prepareFile(db, cfg, path, cwd);
+    const outcome = await prepareFile(db, cfg, path, roots);
     // Named before the narrowing guard, so a silent fallback to the raster route can't pass this vacuously.
     expect(outcome.ok && outcome.kind).toBe("text");
     if (!outcome.ok || outcome.kind !== "text") return;
@@ -188,7 +188,7 @@ describe("prepareFile: text route", () => {
     const path = write("a.pdf", textPDF());
     const fileId = registerPendingFile(db, loaded(path));
 
-    const outcome = await prepareFile(db, cfg, fileId, cwd);
+    const outcome = await prepareFile(db, cfg, fileId, roots);
     expect(outcome.ok && outcome.fileId).toBe(fileId);
   });
 
@@ -196,7 +196,7 @@ describe("prepareFile: text route", () => {
     const db = freshDB();
     const path = write("kbank.pdf", await encryptedPDF("secret"));
 
-    const outcome = await prepareFile(db, cfg, path, cwd, { password: "secret" });
+    const outcome = await prepareFile(db, cfg, path, roots, { password: "secret" });
     // Named before the narrowing guard, so a fallback to the raster route can't pass this vacuously.
     expect(outcome.ok && outcome.kind).toBe("text");
     if (!outcome.ok || outcome.kind !== "text") return;
@@ -209,13 +209,13 @@ describe("prepareFile: text route", () => {
     const db = freshDB();
     const path = write("a.pdf", textPDF());
 
-    const first = await prepareFile(db, cfg, path, cwd);
+    const first = await prepareFile(db, cfg, path, roots);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     const dir = resolve(cacheDir, first.fileId);
     writeFileSync(resolve(dir, "p9.png"), "stale");
 
-    const second = await prepareFile(db, cfg, path, cwd);
+    const second = await prepareFile(db, cfg, path, roots);
     expect(second.ok && second.fileId).toBe(first.fileId);
     expect(readdirSync(dir)).toEqual(["document.txt"]);
   });
@@ -227,7 +227,7 @@ describe("prepareFile: image route", () => {
     const db = freshDB();
     const path = write("receipt.png", png);
 
-    const outcome = await prepareFile(db, cfg, path, cwd);
+    const outcome = await prepareFile(db, cfg, path, roots);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome).toMatchObject({
@@ -245,7 +245,7 @@ describe("prepareFile: image route", () => {
     const db = freshDB();
     const path = write("scan.pdf", scanPDF());
 
-    const outcome = await prepareFile(db, cfg, path, cwd);
+    const outcome = await prepareFile(db, cfg, path, roots);
     // Named before the narrowing guard, so a silent fallback to the text route can't pass this vacuously.
     expect(outcome.ok && outcome.kind).toBe("images");
     if (!outcome.ok || outcome.kind !== "images") return;
@@ -261,7 +261,7 @@ describe("prepareFile: image route", () => {
     const db = freshDB();
     const path = write("mixed.pdf", mixedPDF());
 
-    const outcome = await prepareFile(db, cfg, path, cwd);
+    const outcome = await prepareFile(db, cfg, path, roots);
     // Named before the narrowing guard, so a silent fallback to the text route can't pass this vacuously.
     expect(outcome.ok && outcome.kind).toBe("images");
     if (!outcome.ok || outcome.kind !== "images") return;
@@ -277,7 +277,7 @@ describe("prepareFile: image route", () => {
     const db = freshDB();
     const path = write("a.pdf", textPDF());
 
-    const outcome = await prepareFile(db, cfg, path, cwd, { rescan: true });
+    const outcome = await prepareFile(db, cfg, path, roots, { rescan: true });
     expect(outcome.ok && outcome.kind).toBe("images");
     expect(outcome.ok && outcome.textLayer).toBe("none");
   });
@@ -290,7 +290,7 @@ describe("prepareFile: ocr route", () => {
     const path = write("scan.pdf", scanPDF());
     cfg.ocrModel = "test-ocr-model";
 
-    const outcome = await prepareFile(db, cfg, path, cwd);
+    const outcome = await prepareFile(db, cfg, path, roots);
     expect(outcome).toMatchObject({ ok: true, kind: "images", source: "raster" });
   });
 });
@@ -303,7 +303,7 @@ describe.skipIf(!liveOCR)("prepareFile: ocr route (live OCR endpoint)", () => {
       const path = write("scan.pdf", scanPDF());
       Object.assign(cfg, requireLiveOCRSource());
 
-      const outcome = await prepareFile(db, cfg, path, cwd);
+      const outcome = await prepareFile(db, cfg, path, roots);
       // Named before the narrowing guard, so a silent fallback to the raster route can't pass this vacuously.
       expect(outcome.ok && outcome.kind).toBe("text");
       if (!outcome.ok || outcome.kind !== "text") return;
@@ -324,12 +324,12 @@ describe.skipIf(!liveOCR)("prepareFile: ocr route (live OCR endpoint)", () => {
       const path = write("receipt.png", png);
       Object.assign(cfg, requireLiveOCRSource());
 
-      const first = await prepareFile(db, cfg, path, cwd);
+      const first = await prepareFile(db, cfg, path, roots);
       expect(first.ok && first.kind).toBe("text");
       if (!first.ok) return;
       expect(existsSync(resolve(cacheDir, first.fileId, "document.txt"))).toBe(true);
 
-      const second = await prepareFile(db, cfg, path, cwd, { noOCR: true });
+      const second = await prepareFile(db, cfg, path, roots, { noOCR: true });
       expect(second.ok && second.source).toBe("original");
       expect(existsSync(resolve(cacheDir, first.fileId))).toBe(false);
     },
@@ -340,38 +340,38 @@ describe.skipIf(!liveOCR)("prepareFile: ocr route (live OCR endpoint)", () => {
 describe("prepareFile: refusals", () => {
   it("reports a missing path or id as not_found", async () => {
     const db = freshDB();
-    const outcome = await prepareFile(db, cfg, "no/such/statement.pdf", cwd);
+    const outcome = await prepareFile(db, cfg, "no/such/statement.pdf", roots);
     expect(outcome).toMatchObject({ ok: false, reason: "not_found" });
   });
 
   it("reports an extension it cannot read", async () => {
     const db = freshDB();
-    const outcome = await prepareFile(db, cfg, write("notes.docx", Buffer.from("PK")), cwd);
+    const outcome = await prepareFile(db, cfg, write("notes.docx", Buffer.from("PK")), roots);
     expect(outcome).toMatchObject({ ok: false, reason: "unsupported_extension" });
   });
 
   it("reports bytes that disagree with the extension", async () => {
     const db = freshDB();
-    const outcome = await prepareFile(db, cfg, write("mislabeled.pdf", png), cwd);
+    const outcome = await prepareFile(db, cfg, write("mislabeled.pdf", png), roots);
     expect(outcome).toMatchObject({ ok: false, reason: "kind_mismatch" });
   });
 
   it("reports a PDF mupdf cannot open", async () => {
     const db = freshDB();
-    const outcome = await prepareFile(db, cfg, write("broken.pdf", corruptPDF()), cwd);
+    const outcome = await prepareFile(db, cfg, write("broken.pdf", corruptPDF()), roots);
     expect(outcome).toMatchObject({ ok: false, reason: "pdf_unreadable" });
   });
 
   it("reports password_required for a locked PDF with no password to try", async () => {
     const db = freshDB();
-    const outcome = await prepareFile(db, cfg, write("kbank.pdf", await encryptedPDF("secret")), cwd);
+    const outcome = await prepareFile(db, cfg, write("kbank.pdf", await encryptedPDF("secret")), roots);
     expect(outcome).toMatchObject({ ok: false, reason: "password_required" });
   });
 
   it("reports wrong_password for a password that does not open it", async () => {
     const db = freshDB();
     const path = write("kbank.pdf", await encryptedPDF("secret"));
-    const outcome = await prepareFile(db, cfg, path, cwd, { password: "nope" });
+    const outcome = await prepareFile(db, cfg, path, roots, { password: "nope" });
     expect(outcome).toMatchObject({ ok: false, reason: "wrong_password" });
   });
 });
@@ -398,14 +398,14 @@ describe("prepareFile: --force", () => {
     const db = freshDB();
     const path = write("scan.pdf", scanPDF());
 
-    const first = await prepareFile(db, cfg, path, cwd);
+    const first = await prepareFile(db, cfg, path, roots);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     const oldDir = resolve(cacheDir, first.fileId);
     expect(existsSync(oldDir)).toBe(true);
     commitRow(db, first.fileId);
 
-    const second = await prepareFile(db, cfg, path, cwd, { force: true });
+    const second = await prepareFile(db, cfg, path, roots, { force: true });
     // Named before the narrowing guard: a route change must not skip the cascade proof below.
     expect(second.ok && second.kind).toBe("images");
     if (!second.ok || second.kind !== "images") return;
@@ -424,7 +424,7 @@ describe("prepareFile: --force", () => {
     const fileId = registerPendingFile(db, loaded(path));
     commitRow(db, fileId);
 
-    const forced = await prepareFile(db, cfg, path, cwd, { force: true, password: "nope" });
+    const forced = await prepareFile(db, cfg, path, roots, { force: true, password: "nope" });
     expect(forced).toMatchObject({ ok: false, reason: "wrong_password" });
     expect(findFileById(db, fileId)?.status).toBe("pending");
     expect(countTransactionsBySourceFile(db, fileId)).toBe(1);
@@ -434,14 +434,14 @@ describe("prepareFile: --force", () => {
     const db = freshDB();
     const path = write("scan.pdf", scanPDF());
 
-    const first = await prepareFile(db, cfg, path, cwd);
+    const first = await prepareFile(db, cfg, path, roots);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     commitRow(db, first.fileId);
 
     cfg.ocrBaseUrl = DEAD_OCR_BASE_URL;
     cfg.ocrModel = "test-ocr-model";
-    const forced = await prepareFile(db, cfg, path, cwd, { force: true });
+    const forced = await prepareFile(db, cfg, path, roots, { force: true });
     expect(forced).toMatchObject({ ok: false, reason: "ocr_unreachable" });
     expect(findFileById(db, first.fileId)?.status).toBe("pending");
     expect(countTransactionsBySourceFile(db, first.fileId)).toBe(1);
@@ -452,13 +452,13 @@ describe("prepareFile: --force", () => {
     const db = freshDB();
     const path = write("scan.pdf", scanPDF());
 
-    const first = await prepareFile(db, cfg, path, cwd);
+    const first = await prepareFile(db, cfg, path, roots);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     commitRow(db, first.fileId);
 
     const broken = failingStatement(db, "DELETE FROM files");
-    await expect(prepareFile(broken, cfg, path, cwd, { force: true })).rejects.toThrow("disk I/O error");
+    await expect(prepareFile(broken, cfg, path, roots, { force: true })).rejects.toThrow("disk I/O error");
     expect(readdirSync(cacheDir)).toEqual([first.fileId]);
     expect(findFileById(db, first.fileId)?.status).toBe("pending");
     expect(countTransactionsBySourceFile(db, first.fileId)).toBe(1);
@@ -468,7 +468,7 @@ describe("prepareFile: --force", () => {
     const db = freshDB();
     const path = write("statement.pdf", textPDF());
 
-    const first = await prepareFile(db, cfg, path, cwd);
+    const first = await prepareFile(db, cfg, path, roots);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     commitRow(db, first.fileId);
@@ -476,7 +476,7 @@ describe("prepareFile: --force", () => {
     vi.mocked(writeFileSync).mockImplementationOnce(() => {
       throw new Error("ENOSPC: no space left on device, write");
     });
-    await expect(prepareFile(db, cfg, path, cwd, { force: true })).rejects.toThrow("ENOSPC");
+    await expect(prepareFile(db, cfg, path, roots, { force: true })).rejects.toThrow("ENOSPC");
     expect(readdirSync(cacheDir)).toEqual([first.fileId]);
     expect(findFileById(db, first.fileId)?.status).toBe("pending");
     expect(countTransactionsBySourceFile(db, first.fileId)).toBe(1);
