@@ -10,6 +10,7 @@ import {
   insertTransaction,
   deleteTransaction as deleteTransactionRow,
   updateTransactionMeta,
+  validateTransactionMeta,
   bulkRecategorize,
   listTransactions as queryTransactions,
   countTransactions,
@@ -401,6 +402,8 @@ async function updateTransaction(
     aliases: UPDATE_TRANSACTION_ALIASES,
     atLeastOne: "at least one of --date, --description, --merchant is required",
   });
+  const check = validateTransactionMeta(fields);
+  if (!check.ok) fail("INVALID", check.message);
   const { db } = await openLedger(ctx);
   const updated = updateTransactionMeta(db, id, fields);
   if (!updated.ok) fail("INVALID", updated.message);

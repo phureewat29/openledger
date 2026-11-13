@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import Database from "libsql";
 import { openDB } from "../db/connection.js";
@@ -16,6 +15,7 @@ import {
   type CLIRunner,
   type Sandbox,
 } from "../../fixtures/sandbox.js";
+import { tempDir } from "../../fixtures/test-cleanup.js";
 
 let sandbox: Sandbox;
 let runCLI: CLIRunner;
@@ -455,7 +455,7 @@ describe("transactions CLI integration (subprocess)", () => {
   );
 
   it(
-    "a non-ISO --date is USAGE (2) with the --help hint on add and update alike; update refuses an empty description as add does",
+    "a non-ISO --date is USAGE (2) with the --help hint on add and update alike; update refuses an empty description as add does, before it opens the ledger",
     async () => {
       const dateError = (command: string) => ({
         code: "E_USAGE",
@@ -487,6 +487,12 @@ describe("transactions CLI integration (subprocess)", () => {
         code: "E_INVALID",
         message: "description must not be empty.",
       });
+      const missingConfig = join(sandbox.root, "missing-config.json");
+      const blankUnopened = await runCLI([
+        "transactions", "update", id, "--description", " ", "--config", missingConfig, "--json",
+      ]);
+      expect(blankUnopened.code).toBe(6);
+      expect(JSON.parse(blankUnopened.stderr.trim()).error.code).toBe("E_INVALID");
 
       const shown = parseOne((await runCLI(["transactions", "show", id, "--no-redact", "--json"])).stdout);
       expect(shown).toMatchObject({ date: "2026-03-02", description: "espresso" });
@@ -940,7 +946,7 @@ describe("transactions CLI integration (subprocess)", () => {
   it(
     "accounts create --input batch-creates accounts, is idempotent on re-run, and PARTIALs on a malformed row",
     async () => {
-      const dir = mkdtempSync(join(tmpdir(), "oled-accounts-input-"));
+      const dir = tempDir("oled-accounts-input-");
       const inputPath = join(dir, "accounts.ndjson");
       const rows = [
         { id: "thb:equity:batch-a", name: "Batch A", type: "equity", masked: "111-1-11111-1" },
@@ -1002,7 +1008,7 @@ describe("transactions CLI integration (subprocess)", () => {
   it(
     "accounts create --input rejects per-account flags passed alongside it (USAGE)",
     async () => {
-      const dir = mkdtempSync(join(tmpdir(), "oled-accounts-input-usage-"));
+      const dir = tempDir("oled-accounts-input-usage-");
       const inputPath = join(dir, "accounts.ndjson");
       writeFileSync(inputPath, JSON.stringify({ id: "thb:equity:batch-e", name: "E", type: "equity" }) + "\n");
 
