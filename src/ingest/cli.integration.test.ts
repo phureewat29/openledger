@@ -1,8 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, onTestFinished } from "vitest";
 import {
   closeSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readFileSync,
   truncateSync,
@@ -10,13 +9,11 @@ import {
   existsSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
 import Database from "libsql";
 import { migrate } from "../db/schema.js";
 import { ACCOUNT_TYPES } from "../contract/enums.js";
 import { createAccount, ensureLedgerRoot } from "../accounts/accounts.js";
 import {
-  afterTest,
   createSandbox,
   makeRunCLI,
   parseNDJSON,
@@ -25,6 +22,7 @@ import {
   type CLIRunner,
   type Sandbox,
 } from "../../fixtures/sandbox.js";
+import { createTestSandbox, tempDir } from "../../fixtures/test-cleanup.js";
 import { MAX_SOURCE_BYTES, loadSource } from "../extract/source.js";
 import { encryptedPDF, pdfOf, textPDF } from "../../fixtures/pdf.js";
 import { samplePNG } from "../../fixtures/images.js";
@@ -69,7 +67,7 @@ function stage(relPath: string, bytes: Buffer): string {
 function readDB(): Database.Database {
   const db = new Database(dbPath);
   db.pragma("foreign_keys = ON");
-  afterTest(() => {
+  onTestFinished(() => {
     if (db.open) db.close();
   });
   return db;
@@ -225,7 +223,7 @@ describe("ingest commit v2 (subprocess)", () => {
   }, 30000);
 
   it("reads the batch from a file via --input (agent file-staging path)", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "oled-input-"));
+    const dir = tempDir("oled-input-");
     const inputPath = join(dir, "batch.ndjson");
     writeFileSync(
       inputPath,
@@ -670,7 +668,7 @@ describe("ingest prepare (subprocess)", () => {
   }, 30000);
 
   it("resolves a relative path outside the data dir against the caller's cwd", async () => {
-    const box = createSandbox("oled-prepare-cwd-it-");
+    const box = createTestSandbox("oled-prepare-cwd-it-");
     writeConfig(box, {});
     const elsewhere = join(box.root, "elsewhere");
     mkdirSync(elsewhere);
@@ -863,7 +861,7 @@ describe("ingest list (subprocess)", () => {
 
 describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
   it("status counts waiting statements, and stops counting once prepare registers them", async () => {
-    const isolated = createSandbox("oled-ingest-new-it-");
+    const isolated = createTestSandbox("oled-ingest-new-it-");
     writeConfig(isolated, {});
     const run = makeRunCLI(isolated);
     mkdirSync(join(isolated.dataDir, "bank"), { recursive: true });
@@ -881,7 +879,7 @@ describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
   }, 60000);
 
   it("an empty files list points at ingest list instead of reading as nothing to do", async () => {
-    const isolated = createSandbox("oled-ingest-empty-it-");
+    const isolated = createTestSandbox("oled-ingest-empty-it-");
     writeConfig(isolated, {});
     const { stdout, code } = await makeRunCLI(isolated)(["files", "list", "--json"]);
     expect(code).toBe(0);
@@ -896,6 +894,7 @@ describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
     db.prepare(
       `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
     ).run(fileId, "/tmp/pending-hint.pdf", "pending-hint-hash", "application/pdf");
+    db.close();
 
     const ndjson = JSON.stringify({
       date: "2026-03-01",
@@ -957,6 +956,7 @@ describe("the pipeline tells an agent what is unfinished (subprocess)", () => {
     db.prepare(
       `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'ingested')`,
     ).run(fileId, "/tmp/refusal-retry.pdf", "refusal-retry-hash", "application/pdf");
+    db.close();
 
     // No eur ledger is open here, so every row is refused before it posts.
     const batch = (debitAccount: string) =>
@@ -1049,7 +1049,7 @@ describe("ingest done reconciliation (subprocess)", () => {
   ];
 
   it("closes a card statement when the ledger holds what the statement closes at", async () => {
-    const box = createSandbox("oled-recon-card-it-");
+    const box = createTestSandbox("oled-recon-card-it-");
     writeConfig(box, {});
     const run = makeRunCLI(box);
     await seedStatement(box, run, "sf-card", "thb", cardRows);
@@ -1066,7 +1066,7 @@ describe("ingest done reconciliation (subprocess)", () => {
   }, 60000);
 
   it("closes a bank statement too, reading a debit-normal balance the other way round", async () => {
-    const box = createSandbox("oled-recon-bank-it-");
+    const box = createTestSandbox("oled-recon-bank-it-");
     writeConfig(box, {});
     const run = makeRunCLI(box);
     await seedStatement(box, run, "sf-bank", "thb", [
@@ -1083,7 +1083,7 @@ describe("ingest done reconciliation (subprocess)", () => {
   }, 60000);
 
   it("compares in minor units, so sums no double can hold still tie", async () => {
-    const box = createSandbox("oled-recon-exact-it-");
+    const box = createTestSandbox("oled-recon-exact-it-");
     writeConfig(box, {});
     const run = makeRunCLI(box);
     // 0.1 + 0.2 !== 0.3 as doubles; as satang, 10 + 20 === 30.
@@ -1101,7 +1101,7 @@ describe("ingest done reconciliation (subprocess)", () => {
   }, 60000);
 
   it("refuses a closing balance the ledger disagrees with, and leaves the file pending", async () => {
-    const box = createSandbox("oled-recon-bad-it-");
+    const box = createTestSandbox("oled-recon-bad-it-");
     writeConfig(box, {});
     const run = makeRunCLI(box);
     await seedStatement(box, run, "sf-bad", "thb", cardRows);
@@ -1122,7 +1122,7 @@ describe("ingest done reconciliation (subprocess)", () => {
   }, 60000);
 
   it("counts a mismatch in the ledger's own units, not in hundredths", async () => {
-    const box = createSandbox("oled-recon-jpy-it-");
+    const box = createTestSandbox("oled-recon-jpy-it-");
     writeConfig(box, { displayCurrency: "JPY", displayLocale: "ja-JP" });
     const run = makeRunCLI(box);
     await seedStatement(box, run, "sf-jpy", "jpy", [
@@ -1142,7 +1142,7 @@ describe("ingest done reconciliation (subprocess)", () => {
   }, 60000);
 
   it("needs both reconciling flags, and closes plainly with neither", async () => {
-    const box = createSandbox("oled-recon-flags-it-");
+    const box = createTestSandbox("oled-recon-flags-it-");
     writeConfig(box, {});
     const run = makeRunCLI(box);
     await seedStatement(box, run, "sf-flags", "thb", cardRows);
@@ -1167,6 +1167,7 @@ describe("ingest fail (subprocess)", () => {
     db.prepare(
       `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
     ).run(fileId, "/tmp/cache-test.pdf", "cache-test-hash", "application/pdf");
+    db.close();
 
     const cacheSubdir = join(sandbox.cacheDir, fileId);
     mkdirSync(cacheSubdir, { recursive: true });
@@ -1196,6 +1197,7 @@ describe("legacy sf: file ids (subprocess)", () => {
     db.prepare(
       `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
     ).run(fileId, `/tmp/${fileId}.pdf`, `${fileId}-hash`, "application/pdf");
+    db.close();
     const cacheSubdir = join(sandbox.cacheDir, fileId);
     mkdirSync(cacheSubdir, { recursive: true });
     writeFileSync(join(cacheSubdir, "document.txt"), "--- page 1 ---\nstatement text\n");

@@ -16,6 +16,7 @@ import {
   type CLIRunner,
   type Sandbox,
 } from "../../../fixtures/sandbox.js";
+import { createTestSandbox } from "../../../fixtures/test-cleanup.js";
 
 let sandbox: Sandbox;
 let dbPath: string;
@@ -44,7 +45,7 @@ describe("system CLI integration (subprocess)", () => {
   it(
     "config --init on a fresh env creates the db and data dir, and bare config reflects them",
     async () => {
-      const isolated = createSandbox("oled-system-setup-it-");
+      const isolated = createTestSandbox("oled-system-setup-it-");
       const setupDataDir = isolated.dataDir;
       const setupDBPath = isolated.dbPath;
 
@@ -82,7 +83,7 @@ describe("system CLI integration (subprocess)", () => {
   it(
     "status and doctor name an unopenable ledger home-relative, never by the account's own path",
     async () => {
-      const isolated = createSandbox("oled-system-unopenable-it-");
+      const isolated = createTestSandbox("oled-system-unopenable-it-");
       const run = makeRunCLI(isolated);
       expect((await run(["config", "--init", "--json"])).code).toBe(0);
       writeFileSync(isolated.dbPath, Buffer.from("not a sqlite file"));
@@ -102,7 +103,7 @@ describe("system CLI integration (subprocess)", () => {
   it(
     "an unreadable context.md fails redacting reads closed (exit 3); --no-redact bypasses it, doctor names it",
     async () => {
-      const isolated = createSandbox("oled-system-context-it-");
+      const isolated = createTestSandbox("oled-system-context-it-");
       const run = makeRunCLI(isolated);
       expect((await run(["config", "--init", "--json"])).code).toBe(0);
       const contextPath = join(isolated.oledDir, "context.md");
@@ -143,7 +144,7 @@ describe("system CLI integration (subprocess)", () => {
   it(
     "open recreates a missing data dir owner-only (0700), as config --init creates it",
     async () => {
-      const isolated = createSandbox("oled-system-open-it-");
+      const isolated = createTestSandbox("oled-system-open-it-");
       const dataDir = join(isolated.root, "statements");
       writeConfig(isolated, { dataDir });
       const res = await makeRunCLI(isolated)(["open", "--json"], { env: stubOpenerEnv(isolated) });
@@ -157,7 +158,7 @@ describe("system CLI integration (subprocess)", () => {
   it(
     "config rejects an unknown --country with USAGE and names the ones it has",
     async () => {
-      const isolated = createSandbox("oled-system-country-it-");
+      const isolated = createTestSandbox("oled-system-country-it-");
       const res = await runCLI(["config", "--country", "bogus", "--json"], {
         env: isolated.env,
         cwd: isolated.root,
@@ -174,7 +175,7 @@ describe("system CLI integration (subprocess)", () => {
   it(
     "status on a virgin env creates no ledger, and reports one after config --init",
     async () => {
-      const isolated = createSandbox("oled-system-virgin-it-");
+      const isolated = createTestSandbox("oled-system-virgin-it-");
       const before = await runCLI(["status", "--json"], { env: isolated.env, cwd: isolated.root });
       expect(before.code).toBe(0);
       const blank = parseOne(before.stdout);
@@ -321,7 +322,7 @@ describe("system CLI integration (subprocess)", () => {
   it(
     "config: an ocr model persists without a url, and the model card stays out of the surface",
     async () => {
-      const isolated = createSandbox("oled-system-ocr-cfg-it-");
+      const isolated = createTestSandbox("oled-system-ocr-cfg-it-");
       const env = { env: isolated.env, cwd: isolated.root };
       const model = await runCLI(
         ["config", "--db", isolated.dbPath, "--data-dir", isolated.dataDir, "--ocr-model", "test-ocr-model", "--json"],
@@ -520,7 +521,7 @@ describe("system CLI integration (subprocess)", () => {
   it(
     "accounts show: a prefix-less id on a seeded ledger is NOT_FOUND (5) with a ledger-enumerating hint",
     async () => {
-      const isolated = createSandbox("oled-system-account-notfound-it-");
+      const isolated = createTestSandbox("oled-system-account-notfound-it-");
       writeConfig(isolated, {});
       const raw = new Database(isolated.dbPath);
       raw.pragma("foreign_keys = ON");

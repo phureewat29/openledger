@@ -500,7 +500,8 @@ type VoidMirrorOutcome =
 
 /**
  * Voids `fromId` into `toId` (sets `void_of`), never deletes, so re-ingesting the source file can't resurrect it.
- * Needs matching amount and both accounts, not date; the checks share the UPDATE's transaction.
+ * Needs matching amount and both accounts, not date. Re-voiding is a no-op. The checks share the UPDATE's
+ * transaction, or crossed merges (A into B, B into A) both pass and void the pair.
  */
 export function voidTransactionAsMirror(
   db: Database.Database,

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { readStdinBatch } from "./input.js";
-import { tempDir } from "../../fixtures/sandbox.js";
+import { tempDir } from "../../fixtures/test-cleanup.js";
 
 describe("readStdinBatch: --input decoding", () => {
   it("decodes UTF-16LE and BOM'd UTF-8 files (PowerShell redirect defaults)", async () => {

@@ -9,6 +9,7 @@ import {
   type CLIRunner,
   type Sandbox,
 } from "../../fixtures/sandbox.js";
+import { createTestSandbox } from "../../fixtures/test-cleanup.js";
 import { keyFingerprint } from "./config.js";
 
 let sandbox: Sandbox;
@@ -70,7 +71,7 @@ describe("config --locale (subprocess)", () => {
 
 describe("relative path flags (subprocess)", () => {
   it("persist absolute, resolved from the invoking cwd, so another cwd reaches the same ledger", async () => {
-    const isolated = createSandbox("oled-config-relative-it-");
+    const isolated = createTestSandbox("oled-config-relative-it-");
     const run = makeRunCLI(isolated);
     const work = join(isolated.root, "work");
     mkdirSync(work);
@@ -99,7 +100,7 @@ describe("relative path flags (subprocess)", () => {
 
 describe("the config-file gate (subprocess)", () => {
   it("a data command on a virgin setup exits NOT_READY and points at config --init", async () => {
-    const isolated = createSandbox("oled-config-gate-it-");
+    const isolated = createTestSandbox("oled-config-gate-it-");
     const { stderr, code } = await runCLI(["transactions", "list", "--json"], {
       env: isolated.env,
       cwd: isolated.root,
@@ -154,7 +155,7 @@ describe("the config-file gate (subprocess)", () => {
   }, 30000);
 
   it("a positional path runs an independent profile beside the default one", async () => {
-    const isolated = createSandbox("oled-config-profile-it-");
+    const isolated = createTestSandbox("oled-config-profile-it-");
     const profile = `${isolated.root}/profile.json`;
     const run = makeRunCLI(isolated);
     const init = await run(["config", profile, "--init", "--currency", "USD", "--json"]);
@@ -169,7 +170,7 @@ describe("the config-file gate (subprocess)", () => {
   }, 30000);
 
   it("two profiles initialized without --db each keep their own ledger beside their config", async () => {
-    const isolated = createSandbox("oled-config-profiles-it-");
+    const isolated = createTestSandbox("oled-config-profiles-it-");
     const run = makeRunCLI(isolated);
     const dbs: string[] = [];
     for (const name of ["p1", "p2"]) {
@@ -194,7 +195,7 @@ describe("the config-file gate (subprocess)", () => {
   }, 30000);
 
   it("--init refuses a fully initialized setup, and rebuilds a deleted ledger", async () => {
-    const isolated = createSandbox("oled-config-reinit-it-");
+    const isolated = createTestSandbox("oled-config-reinit-it-");
     const run = makeRunCLI(isolated);
     const first = await run(["config", "--init", "--json"]);
     expect(first.code).toBe(0);
@@ -220,7 +221,7 @@ describe("the config-file gate (subprocess)", () => {
 
 describe("a broken config file (subprocess)", () => {
   it("shows defaults with the problem named, and refuses to write over it", async () => {
-    const isolated = createSandbox("oled-config-broken-it-");
+    const isolated = createTestSandbox("oled-config-broken-it-");
     const run = makeRunCLI(isolated);
     writeFileSync(isolated.configPath, "not json\n");
 
@@ -238,7 +239,7 @@ describe("a broken config file (subprocess)", () => {
 
 describe("a malformed config file never echoes its content (subprocess)", () => {
   it("no surface shows a fragment of the half-typed API key in it", async () => {
-    const isolated = createSandbox("oled-config-leak-it-");
+    const isolated = createTestSandbox("oled-config-leak-it-");
     const run = makeRunCLI(isolated);
     // Unquoted, so V8's own parse message would quote the bytes around the bad token.
     writeFileSync(isolated.configPath, '{"ocrApiKey": sk-live-SECRET123}\n');
@@ -274,7 +275,7 @@ describe("config --ocr-api-key (subprocess)", () => {
     JSON.parse(readFileSync(box.configPath, "utf8"));
 
   it("persists the key 0600 and prints only its fingerprint", async () => {
-    const isolated = createSandbox("oled-config-key-it-");
+    const isolated = createTestSandbox("oled-config-key-it-");
     const run = makeRunCLI(isolated);
     const res = await run(["config", "--init", "--ocr-api-key", "sk-flag-secret", "--json"]);
     expect(res.code).toBe(0);
@@ -292,7 +293,7 @@ describe("config --ocr-api-key (subprocess)", () => {
   }, 30000);
 
   it("a converge with an unrelated flag leaves the persisted key alone", async () => {
-    const isolated = createSandbox("oled-config-key-it-");
+    const isolated = createTestSandbox("oled-config-key-it-");
     const run = makeRunCLI(isolated);
     // Seeded by hand: the write path is `--ocr-api-key`'s own test, not this one's.
     writeConfig(isolated, { ocrApiKey: "sk-keep-me" });
@@ -304,7 +305,7 @@ describe("config --ocr-api-key (subprocess)", () => {
   }, 30000);
 
   it('--ocr-api-key "" clears the persisted key', async () => {
-    const isolated = createSandbox("oled-config-key-it-");
+    const isolated = createTestSandbox("oled-config-key-it-");
     const run = makeRunCLI(isolated);
     writeConfig(isolated, { ocrApiKey: "sk-old" });
 

@@ -5,11 +5,11 @@ import { DEFAULT_SKILLS_DIR, installSkill, installedVersion, skillMd } from "./i
 import { getVersion } from "../lib/version.js";
 import {
   createSandbox,
-  tempDir,
   makeRunCLI,
   type CLIRunner,
   type Sandbox,
 } from "../../fixtures/sandbox.js";
+import { tempDir } from "../../fixtures/test-cleanup.js";
 
 // No yaml dep: key: value pairs between the fences.
 function parseFrontmatter(md: string): Record<string, string> {

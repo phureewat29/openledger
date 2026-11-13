@@ -1,9 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, onTestFinished } from "vitest";
 import Database from "libsql";
 import { migrate } from "../db/schema.js";
 import { createAccount } from "../accounts/accounts.js";
 import {
-  afterTest,
   createSandbox,
   makeRunCLI,
   parseNDJSON,
@@ -38,7 +37,7 @@ afterAll(() => {
 function readDB(): Database.Database {
   const db = new Database(dbPath);
   db.pragma("foreign_keys = ON");
-  afterTest(() => {
+  onTestFinished(() => {
     if (db.open) db.close();
   });
   return db;
@@ -64,6 +63,7 @@ async function raiseQuestion(): Promise<string> {
   const question = db
     .prepare(`SELECT id FROM questions WHERE transaction_id = ?`)
     .get(result.transaction_id) as { id: string } | undefined;
+  db.close();
   if (!question) throw new Error(`no question raised for transaction ${result.transaction_id}`);
   return question.id;
 }
