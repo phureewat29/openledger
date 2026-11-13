@@ -14,11 +14,7 @@ export interface TransactionMerchantInput extends MerchantUpsertInput {
   noise_tokens: readonly string[];
 }
 
-/**
- * One debit account, one credit account, one positive minor-unit `amount`
- * (INTEGER). Decimal <-> minor conversion happens at the CLI/pipeline
- * boundary, never here.
- */
+/** One debit, one credit, one positive minor-unit `amount`; decimal conversion happens at the CLI boundary. */
 export interface TransactionInput {
   /** Pre-assigned id (`tx:`+hash) so mid-ingest questions can reference the transaction before commit. */
   id?: string;
@@ -79,11 +75,7 @@ interface TransactionFields {
   credit_account_id: string;
 }
 
-/**
- * Shared with `validateRawTransaction` (src/ingest/commit.ts) so both
- * validators agree on wording; messages are field-first since they surface as
- * an agent's `dirty_input` reason.
- */
+/** Shared with `validateRawTransaction` so both validators agree on wording; field-first since it surfaces as `dirty_input` reasons. */
 export function validateTransactionFields(input: TransactionFields): ValidateTransactionResult {
   const meta = validateTransactionMeta({ date: input.date ?? "", description: input.description ?? "" });
   if (!meta.ok) return meta;
@@ -184,7 +176,7 @@ export function insertLinkedTransactions(
   );
 }
 
-// Shared by listing and counts so a `--query` filter (reads joined names) matches in both.
+/** Shared by listing and counts so a `--query` filter (reads joined names) matches in both. */
 const LIST_FROM = `FROM transactions t
    LEFT JOIN accounts da ON da.id = t.debit_account_id
    LEFT JOIN accounts ca ON ca.id = t.credit_account_id
@@ -244,7 +236,7 @@ function queryClause(text: string): Clause {
   return clause(QUERY_SQL, ...QUERY_COLUMNS.map(() => like));
 }
 
-// Shared by listTransactions and countTransactions so a filtered count matches the list.
+/** Shared by listTransactions and countTransactions so a filtered count matches the list. */
 const LIST_FILTERS: Filter<ListFilters>[] = [
   (o) => (o.includeVoid ? null : clause("t.void_of IS NULL")),
   (o) => (o.account ? clause("(t.debit_account_id = ? OR t.credit_account_id = ?)", o.account, o.account) : null),
@@ -340,11 +332,7 @@ function repointSides(db: Database.Database, from: string, to: string, ids: stri
     .run(from, to, from, to, ...ids).changes;
 }
 
-/**
- * Re-points the `fromId` side of every transaction touching it onto `toId`,
- * skipping the rows the debit<>credit CHECK or the
- * cross-ledger trigger would abort the statement on.
- */
+/** Re-points the `fromId` side onto `toId`, skipping rows the debit<>credit CHECK or cross-ledger trigger would abort on. */
 export function bulkRecategorize(
   db: Database.Database,
   fromId: string,
@@ -389,11 +377,7 @@ export function bulkRecategorize(
   });
 }
 
-/**
- * The re-point step of `mergeAccounts` (src/accounts/accounts.ts). Rows that
- * would become a degenerate self-transaction are deleted FIRST, since the
- * debit<>credit CHECK forbids that state even transiently.
- */
+/** The re-point step of `mergeAccounts`. Self-transaction rows are deleted FIRST: the debit<>credit CHECK forbids that state even transiently. */
 export function repointTransactions(
   db: Database.Database,
   fromId: string,
@@ -515,12 +499,8 @@ type VoidMirrorOutcome =
   | { ok: false; reason: VoidMirrorFailure; message: string };
 
 /**
- * Voids `fromId` into surviving `toId` (sets `void_of=toId`); never deletes,
- * so re-ingesting the mirror's source file can't resurrect it. Requires
- * matching amount and both accounts, but not date (statement vs. posting
- * dates legitimately differ). Re-voiding an already-void row is a no-op.
- * The checks share the UPDATE's transaction, or crossed merges (A into B, B
- * into A) would both pass the live check and void the pair.
+ * Voids `fromId` into `toId` (sets `void_of`), never deletes, so re-ingesting the source file can't resurrect it.
+ * Needs matching amount and both accounts, not date; the checks share the UPDATE's transaction.
  */
 export function voidTransactionAsMirror(
   db: Database.Database,
@@ -566,7 +546,7 @@ export function voidTransactionAsMirror(
   });
 }
 
-// Key order is the `transactions dedupe` wire order.
+/** Key order is the `transactions dedupe` wire order. */
 const DUPLICATE_FIELDS = [
   "id",
   "group_id",

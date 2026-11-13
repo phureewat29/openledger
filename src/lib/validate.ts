@@ -11,8 +11,10 @@ export class ValidationError extends Error {
   }
 }
 
-// Each preprocess below passes undefined through, so an absent required key
-// surfaces as a missing-required issue rather than a coerced value.
+/**
+ * Each preprocess below passes undefined through, so an absent required key
+ * surfaces as a missing-required issue rather than a coerced value.
+ */
 const toStringInput = (value: unknown): unknown =>
   typeof value === "number" || typeof value === "boolean" || typeof value === "bigint" ? String(value) : value;
 
@@ -103,9 +105,7 @@ function resolveRaw(
     .find((value) => value !== undefined);
 }
 
-// Absent keys are omitted so zod's optional/default/required handling stays authoritative.
-// A JSON null in a field that cannot hold null reads as absent too, so a default (and the
-// validator behind it) decides, never a coerced "null".
+/** Absent keys are omitted so zod stays authoritative; a JSON null in a non-nullable field reads as absent too. */
 function normalizeRaw(
   shape: Record<string, z.ZodType>,
   raw: Record<string, unknown>,
@@ -125,7 +125,7 @@ interface Issue {
   values?: unknown[];
 }
 
-// A Map, not an object literal: `issue.expected` is arbitrary text and must not reach Object.prototype.
+/** A Map, not an object literal: `issue.expected` is arbitrary text and must not reach Object.prototype. */
 const EXPECTED_TYPE_LABEL = new Map([
   ["string", "a string"],
   ["int", "an integer"],

@@ -21,8 +21,10 @@ function inScope(row: AccountRow, scope: FuzzyAccountScope): boolean {
   return row.type === scope.type && row.currency === scope.ledger;
 }
 
-// A mask in the text (`470686XXXXXX9483`) is authoritative: its tail wins over the
-// longest-digit-run fallback, which would prefer the longer unmasked prefix.
+/**
+ * A mask in the text (`470686XXXXXX9483`) is authoritative: its tail wins over the
+ * longest-digit-run fallback, which would prefer the longer unmasked prefix.
+ */
 function queryNumberKey(text: string): string {
   const tail = tailAfterMask(text);
   if (tail !== text) return accountNumberKey(tail);
@@ -40,8 +42,10 @@ const MATCH_THRESHOLD = 0.5;
 
 const SUBSTRING_FLOOR = 0.85;
 
-// Above the substring floor, below exact-name 1.0: masked keys can collide
-// across banks, so a number hit never outranks an exact name.
+/**
+ * Above the substring floor, below exact-name 1.0: masked keys can collide
+ * across banks, so a number hit never outranks an exact name.
+ */
 const NUMBER_FLOOR = 0.9;
 
 function rowNumberKey(row: AccountRow, name: string): string {

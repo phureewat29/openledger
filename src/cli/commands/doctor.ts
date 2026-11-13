@@ -25,7 +25,7 @@ import type { DoctorCheck as Check, DoctorReport } from "../../contract/doctor.j
 const HARD_CHECKS = new Set(["db_open", "schema_tables_present"]);
 const REQUIRED_TABLES = ["accounts", "transactions", "questions"];
 
-// Diagnosing must not provision: doctor reports what's missing and points at `config --init`.
+/** Diagnosing must not provision: doctor reports what's missing and points at `config --init`. */
 const INIT_HINT = "run `oled config --init` to create it";
 
 function checkFrom(name: string, result: Result<unknown>): Check {
@@ -37,8 +37,7 @@ function configCheck(cfg: ResolvedConfig): Check {
   return cfg.exists ? { name, ok: true } : { name, ok: false, detail: INIT_HINT };
 }
 
-// loadConfig degrades to defaults so a bad file can't take down the CLI itself; this is where
-// that silence ends.
+/** loadConfig degrades a bad file to defaults silently; this check is where that surfaces. */
 function configReadableCheck(loaded: LoadedConfig): Check {
   const name = "config_readable";
   if (!loaded.problem) return { name, ok: true };

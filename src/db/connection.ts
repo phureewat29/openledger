@@ -6,13 +6,15 @@ import { mkdirSync } from "fs";
 import { chmod600 } from "../lib/perms.js";
 import { errorMessage, tryExecute } from "../lib/result.js";
 
-// libsql defaults this to 0, so without it any write loses to a concurrent one instantly.
+/** libsql defaults this to 0, so without it any write loses to a concurrent one instantly. */
 const BUSY_TIMEOUT_MS = 5000;
 
-// Codes libsql reports when the volume or its permissions block the write, not contention.
+/** Codes libsql reports when the volume or its permissions block the write, not contention. */
 const NOT_WRITABLE_CODES = new Set(["SQLITE_READONLY", "SQLITE_PERM", "SQLITE_CANTOPEN"]);
 
-// libsql loads lazily here so its native binding stays off the startup path of commands that never open the ledger.
+/**
+ * libsql loads lazily here so its native binding stays off the startup path of commands that never open the ledger.
+ */
 export async function openDB(dbPath: string): Promise<Database.Database> {
   mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
 
@@ -40,16 +42,15 @@ export async function openDB(dbPath: string): Promise<Database.Database> {
   return db;
 }
 
-// A racer that loses the conversion has usually been kept out by a rival CONVERTING, so
-// one re-read after the lost wait finds WAL already set; a second loss means a real holder.
+/**
+ * A racer that loses the conversion has usually been kept out by a rival CONVERTING, so
+ * one re-read after the lost wait finds WAL already set; a second loss means a real holder.
+ */
 const WAL_OPEN_ATTEMPTS = 2;
 
 /**
- * Only the first-ever open converts the journal, and only that conversion contends;
- * re-setting WAL on a WAL database never goes busy, so the mode is read first and the
- * conversion is skipped on every later open. A foreign lock can make either the read or
- * the write below block, but the constructor's busy_timeout (BUSY_TIMEOUT_MS) already
- * covers each attempt's wait; the retry only re-reads the mode, it never waits on its own.
+ * Only the first-ever open converts the journal and contends; read the mode first and skip the conversion otherwise.
+ * busy_timeout covers each wait; the retry only re-reads the mode.
  */
 function ensureWAL(db: Database.Database, dbPath: string): void {
   for (let attempt = 1; ; attempt++) {
@@ -89,8 +90,10 @@ function openFailureError(err: unknown, dbPath: string): DBNotReadyError {
   return new DBNotReadyError(`Cannot open the ledger at ${dbPath}: ${errorMessage(err)}`, { cause: err });
 }
 
-// libsql answers every pragma read with `[{ <name>: value }]` and ignores `{ simple: true }`; an
-// empty array is also possible, so the row is optional-chained rather than destructured.
+/**
+ * libsql answers every pragma read with `[{ <name>: value }]` and ignores `{ simple: true }`; an
+ * empty array is also possible, so the row is optional-chained rather than destructured.
+ */
 function journalMode(db: Database.Database): string {
   const rows = db.pragma("journal_mode") as { journal_mode: string }[];
   return rows[0]?.journal_mode ?? "";

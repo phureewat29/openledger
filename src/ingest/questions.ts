@@ -210,7 +210,7 @@ export function raiseCurrencyMismatch(
   });
 }
 
-// account_id stays null: the named account can't exist without the ledger.
+/** account_id stays null: the named account can't exist without the ledger. */
 export function raiseUnknownLedger(
   db: Database.Database,
   ctx: QuestionContext,

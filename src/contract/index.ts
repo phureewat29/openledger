@@ -1,10 +1,6 @@
 /**
- * Consumer entry point for `@aquartier/openledger/contract`: zod schemas are
- * the source of truth, `z.infer` gives the matching types, and
- * `COMMAND_CONTRACTS` maps every CLI leaf command to its wire shape.
- *
- * Every schema describes post-redaction output. `--no-redact` changes values,
- * never structure, so no schema may ever grow a redaction-conditional field.
+ * Consumer entry point (`@aquartier/openledger/contract`): zod schemas are the source of truth.
+ * Schemas describe post-redaction output; `--no-redact` changes values, never structure.
  */
 export * from "./version.js";
 export * from "./exit.js";

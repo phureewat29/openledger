@@ -1,8 +1,4 @@
-/**
- * Generic loader for the shipped reference datasets: one `<cc>.json` per
- * country under `datasets/`. Adding a country is a new file, not a code
- * change; dataset-specific shape lives in datasets.ts.
- */
+/** Loader for the shipped reference datasets: one `<cc>.json` per country under `datasets/`; dataset-specific shape lives in datasets.ts. */
 
 import * as z from "zod";
 import { memoize } from "es-toolkit";
@@ -11,14 +7,16 @@ import { readFileSync, readdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Two levels below the package root under both tsx (src/datasets/) and the dist build.
+/** Two levels below the package root under both tsx (src/datasets/) and the dist build. */
 const DATASETS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../datasets");
 
 /** A flattened dataset row, always tagged with the (uppercased) country it loaded from. */
 export type DatasetRow = Readonly<Record<string, unknown> & { country: string }>;
 
-// `flatten` returns base rows (the loader adds `country`); unknown sibling
-// keys in `<cc>.json` are ignored.
+/**
+ * `flatten` returns base rows (the loader adds `country`); unknown sibling
+ * keys in `<cc>.json` are ignored.
+ */
 export interface DatasetDefinition<F extends { country: string } = { country: string }> {
   schema: z.ZodType<F>;
   flatten: (file: F) => Record<string, unknown>[];

@@ -10,7 +10,7 @@ import { MIGRATIONS, type Migration } from "./migrations/index.js";
 import { ISO_NOW_SQL } from "./timestamps.js";
 import { inTransaction } from "./transaction.js";
 
-// A migration may drop tables (0002 rebaselines v1); the file is copied aside first.
+/** A migration may drop tables (0002 rebaselines v1); the file is copied aside first. */
 export function migrate(
   db: Database.Database,
   dbPath?: string,
@@ -39,12 +39,8 @@ function newerThanBuildError(current: number, manifestLength: number): DBNotRead
 }
 
 /**
- * IMMEDIATE so a concurrent opener waits for the write lock instead of failing on the
- * first write, and the version is re-read under that lock: the waiter must see the
- * winner's rows and skip a migration already applied, or its stamp collides on the
- * schema_migrations primary key. That re-read can also land past this build's own
- * manifest (a newer-build winner stamped a version this build has no migration for),
- * which must throw rather than fall into the "already applied" skip below it.
+ * IMMEDIATE, with the version re-read under the lock so a waiter skips migrations the winner applied.
+ * A re-read past this build's manifest (newer-build winner) must throw, not fall into the "already applied" skip.
  */
 function applyMigration(
   db: Database.Database,
@@ -70,11 +66,7 @@ function applyMigration(
   });
 }
 
-/**
- * Every migration is CREATE TABLE IF NOT EXISTS, so a foreign database would otherwise be
- * half-adopted in silence. It runs under the migration's write lock because outside one a
- * concurrent opener's freshly committed tables read as somebody else's database.
- */
+/** Runs under the migration's write lock: outside it a concurrent opener's fresh tables read as a foreign database. */
 function refuseForeignDatabase(db: Database.Database, dbPath?: string): void {
   if (!hasUserTables(db)) return;
   const at = dbPath ? ` at ${dbPath}` : "";
@@ -117,14 +109,7 @@ function hasUserTables(db: Database.Database): boolean {
   return !!row;
 }
 
-/**
- * Folds the WAL into the main file first, or the copy would miss every committed row still in
- * it. A rollback-journal database has no WAL and the checkpoint is a no-op there. SQLite never
- * throws BUSY from this pragma: a concurrent reader makes it return a `busy: 1` row instead, so
- * the copy then reflects the last checkpointed state, older than the live database but never
- * torn. A thrown error here is a real failure (disk full, I/O) and must abort the upgrade rather
- * than let copyFileSync produce a backup that is silently missing rows.
- */
+/** Checkpoint the WAL first or the copy misses committed rows; a thrown error must abort the upgrade, never yield a short backup. */
 function backupDatabase(db: Database.Database, dbPath: string): void {
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   const backupPath = `${dbPath}.${localStamp(new Date())}.bak`;

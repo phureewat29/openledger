@@ -3,7 +3,7 @@ import { map, ok, tryExecute, unwrapOr, type Result } from "../lib/result.js";
 import { decodeUserText } from "../lib/text.js";
 import { chmod600 } from "../lib/perms.js";
 
-// lstat, not existsSync: existsSync calls a dangling symlink absent, which would silently drop the file's terms.
+/** lstat, not existsSync: existsSync calls a dangling symlink absent, which would silently drop the file's terms. */
 function isAbsent(path: string): boolean {
   return unwrapOr(tryExecute(() => lstatSync(path, { throwIfNoEntry: false }) === undefined), false);
 }

@@ -70,10 +70,8 @@ export function findDuplicateTransactions(db: Database.Database): DuplicateTrans
 }
 
 /**
- * Voids cross-statement mirrors into the earliest transaction, never deletes:
- * a delete's `void_of` self-FK (ON DELETE SET NULL) would un-void an
- * already-voided mirror. Candidates are read under the voids' own lock, so the
- * strict rule still holds for every row it voids.
+ * Voids mirrors into the earliest transaction, never deletes: a delete's `void_of` self-FK (ON DELETE SET NULL) would un-void a mirror.
+ * Candidates are read under the voids' own lock.
  */
 export function autoMergeStrictDuplicateTransactions(db: Database.Database): { merged: number } {
   return inTransaction(db, () => {

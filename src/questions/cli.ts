@@ -41,7 +41,7 @@ function toListRow(row: QuestionRow): Question {
   };
 }
 
-// `prompt` is the only free-text field; context is structured JSON the agent needs verbatim.
+/** `prompt` is the only free-text field; context is structured JSON the agent needs verbatim. */
 const QUESTION_REDACT_FIELDS = ["prompt"] as const;
 
 const LIST_COLUMNS: Column<Question>[] = [

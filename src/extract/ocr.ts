@@ -7,7 +7,7 @@ import { modelCardFor, type OCRParams } from "./cards/index.js";
 /** A small local model can spend minutes on a dense page; this is a stuck-server bound, not a target. */
 export const OCR_TIMEOUT_MS = 300_000;
 
-// A stalled server can outlive the abort, so a second bound races it.
+/** A stalled server can outlive the abort, so a second bound races it. */
 const TIMEOUT_GRACE_MS = 5_000;
 
 /** A liveness check, not a read: bounded independently of the per-page timeout. */
@@ -57,7 +57,7 @@ export function resolveOCR(source: OCRConfigSource): OCRSettings | null {
 type OCRFailure = "timeout" | "bad_response" | "unreachable" | "rejected";
 export type ServerFailure = Extract<OCRFailure, "unreachable" | "rejected">;
 
-// Exhaustive by construction: a new OCRFailure must be classified here to compile.
+/** Exhaustive by construction: a new OCRFailure must be classified here to compile. */
 const PAGE_LEVEL: Record<OCRFailure, boolean> = {
   timeout: true,
   bad_response: true,

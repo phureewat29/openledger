@@ -1,5 +1,7 @@
-// A type, not a message shape, so rewording a message can't move the exit
-// code; import-free so the CLI can `instanceof` it without loading libsql.
+/**
+ * A type, not a message shape, so rewording a message can't move the exit
+ * code; import-free so the CLI can `instanceof` it without loading libsql.
+ */
 export class DBNotReadyError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
@@ -29,7 +31,7 @@ export function sqliteErrorCode(err: unknown): string {
   return typeof code === "string" ? code : "";
 }
 
-// SQLITE_BUSY, SQLITE_BUSY_RECOVERY and SQLITE_BUSY_SNAPSHOT all mean locked now, fine later.
+/** SQLITE_BUSY, SQLITE_BUSY_RECOVERY and SQLITE_BUSY_SNAPSHOT all mean locked now, fine later. */
 export function isBusyError(err: unknown): boolean {
   return sqliteErrorCode(err).startsWith("SQLITE_BUSY");
 }

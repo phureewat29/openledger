@@ -28,7 +28,7 @@ const GLOBAL_OPTIONS: { name: string; desc: string; skipOn?: string }[] = [
   { name: "--config <path>", desc: "Config file to use (default ~/.oled/config.json)", skipOn: "config" },
 ];
 
-// Navigation hints the overview screen adds; they would only be noise inside the command's own help.
+/** Navigation hints the overview screen adds; they would only be noise inside the command's own help. */
 const ROOT_HELP_HINTS = new Map([
   ["status", "(default)"],
   ["setup", "(--dir <path>)"],
@@ -49,7 +49,6 @@ export function nearestCommand(input: string, commands: readonly Command[]): str
   return minBy(scored, (s) => s.dist)?.name ?? null;
 }
 
-// Candidates are `cmd`'s own subcommands; for the root, commandPath(cmd) is "oled".
 function failUnknownCommand(cmd: Command, helpTail: string): never {
   const input = cmd.args[0];
   const match = nearestCommand(input, cmd.commands);
@@ -60,7 +59,7 @@ function failUnknownCommand(cmd: Command, helpTail: string): never {
   });
 }
 
-// Parse failures never reach runAction; map them onto the same error contract here.
+/** Parse failures never reach runAction; map them onto the same error contract here. */
 function parseFailureHandler(cmd: Command, json: boolean): (err: CommanderError) => void {
   return (err) => {
     if (err.exitCode === 0) return;

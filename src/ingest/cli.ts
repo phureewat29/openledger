@@ -245,7 +245,7 @@ function reconcileStatement(db: Database.Database, target: ReconcileTarget): Rec
   };
 }
 
-// The cache goes only once `mark` returns: a refused close leaves the file pending with its extraction.
+/** The cache goes only once `mark` returns: a refused close leaves the file pending with its extraction. */
 async function closeFile<T>(
   ctx: Invocation,
   id: string,

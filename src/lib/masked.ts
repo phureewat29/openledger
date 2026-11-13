@@ -3,7 +3,7 @@
  * and the fuzzy matcher, so `••7652`, `••7652-0` and `76520` resolve alike.
  */
 
-// Characters statements use to blank the hidden middle of an account number.
+/** Characters statements use to blank the hidden middle of an account number. */
 const MASK_CHARS = "Xx•*…";
 
 /** Splits after the LAST mask char, so a masked run isn't mistaken for a check-digit separator. */
@@ -12,11 +12,7 @@ export function tailAfterMask(s: string): string {
   return lastAt === -1 ? s : s.slice(lastAt + 1);
 }
 
-/**
- * Tolerant of a trailing check digit (`xxx-7652-0` and `xxx-7652` both resolve
- * to one account). Digits before the mask are stripped first via `tailAfterMask`
- * so they can't corrupt the check-digit heuristic.
- */
+/** Tolerates a trailing check digit (`xxx-7652-0` and `xxx-7652` resolve alike); digits before the mask are stripped first. */
 export function accountNumberKey(raw: string | null | undefined): string {
   const tail = tailAfterMask(String(raw ?? ""));
   const digits = tail.replace(/\D+/g, "");

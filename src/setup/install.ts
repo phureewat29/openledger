@@ -45,7 +45,6 @@ export function installedVersion(skillsDir: string): string | null {
   return readFileSync(versionPath, "utf8").trim();
 }
 
-// --dir names the skills dir directly, else the home or cwd default.
 function skillsDirFor(opts: InstallOptions, { cwd, home }: PathRoots): string {
   if (opts.dir) return resolve(cwd, opts.dir);
   return resolve(opts.global ? home : cwd, DEFAULT_SKILLS_DIR);

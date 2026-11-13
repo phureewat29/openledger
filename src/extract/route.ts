@@ -28,7 +28,7 @@ export interface PageFacts {
   hasImage: boolean;
 }
 
-// Biased toward waste over loss: a junk text layer under this bar still counts as a scan.
+/** Biased toward waste over loss: a junk text layer under this bar still counts as a scan. */
 const PAGE_TEXT_CHARS = 400;
 
 export function classifyPage(page: PageFacts): PageContent {

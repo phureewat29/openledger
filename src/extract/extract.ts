@@ -70,7 +70,7 @@ const SERVER_FAILURE: Record<ServerFailure, "ocr_unreachable" | "ocr_rejected"> 
   rejected: "ocr_rejected",
 };
 
-// Images have no text layer; mupdf would resample a bare image as a fake 96-dpi PDF.
+/** Images have no text layer; mupdf would resample a bare image as a fake 96-dpi PDF. */
 async function probe(input: ExtractInput): Promise<Result<ProbedPage[]>> {
   if (input.kind === "image") return ok([]);
   return probePDFPages(input.bytes);

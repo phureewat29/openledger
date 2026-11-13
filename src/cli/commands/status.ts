@@ -21,8 +21,6 @@ import { getVersion } from "../../lib/version.js";
 import { CONTRACT_VERSION } from "../../contract/version.js";
 import type { StatusReport } from "../../contract/status.js";
 
-// Exported for tests: lets the default-profile-problem path be pinned directly, without a
-// subprocess or a real ~/.oled to leave a broken file in.
 export function buildReport(loaded: LoadedConfig, ledger: LedgerProbe): StatusReport {
   const cfg = loaded.config;
   const base: StatusReport = {
@@ -80,14 +78,14 @@ export function buildReport(loaded: LoadedConfig, ledger: LedgerProbe): StatusRe
   };
 }
 
-// Paths are home-relativized facts, not free text; only error prose and user_name can still carry PII.
+/** Paths are home-relativized facts, not free text; only error prose and user_name can still carry PII. */
 const STATUS_REDACT_FIELDS = ["error", "user_name", "config_problem"] as const;
 
 interface ShowStatusOpts {
   redact?: boolean;
 }
 
-// Redaction defaults on, so bare `oled` (no --no-redact flag) masks the same fields `status` does.
+/** Redaction defaults on, so bare `oled` (no --no-redact flag) masks the same fields `status` does. */
 export async function showStatus(ctx: Invocation, opts: ShowStatusOpts): Promise<void> {
   const loaded = inspectConfig(ctx.configPath, ctx.roots);
   const ledger = await probeLedger(loaded.config.dbPath, loaded.config.home);
@@ -143,7 +141,6 @@ const LABEL_WIDTH = 18;
 
 type Row = [string, string];
 
-// Exported for tests: this renderer only runs on a real TTY, so no subprocess suite executes it.
 export function renderTTY(r: StatusReport, paint: ChalkInstance, ledgerMissing = false): string {
   const section = (title: string, rows: Row[]): string => {
     const valueWidth = Math.max(0, ...rows.map(([, v]) => visibleLength(v)));
@@ -198,7 +195,7 @@ export function renderTTY(r: StatusReport, paint: ChalkInstance, ledgerMissing =
   ].join("");
 }
 
-// Ledgers in ISO order; each amount formats in its own currency, not the display currency.
+/** Ledgers in ISO order; each amount formats in its own currency, not the display currency. */
 function financialRows(
   worth: NonNullable<StatusReport["net_worth"]>,
   dim: (s: string) => string,

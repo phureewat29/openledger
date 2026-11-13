@@ -76,7 +76,9 @@ export function noiseTokens(country: string): readonly string[] {
   return noiseTokensOf(country.toUpperCase());
 }
 
-// `any` only erases each entry's own concrete `DatasetDefinition<...>` file shape, which the registry doesn't need.
+/**
+ * `any` only erases each entry's own concrete `DatasetDefinition<...>` file shape, which the registry doesn't need.
+ */
 const REGISTRY = {
   institutions: institutionsDataset,
   defaults: defaultsDataset,

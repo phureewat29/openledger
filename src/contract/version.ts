@@ -1,6 +1,2 @@
-/**
- * The consumer contract's wire-format version. Bump on ANY change to a schema
- * in this module tree, additive or not: a strict embedder's own schema breaks
- * on a new field exactly as on a removed one, and the bump is what lets them gate.
- */
+/** Wire-format version. Bump on ANY schema change, additive or not: a strict embedder breaks on a new field as on a removed one. */
 export const CONTRACT_VERSION = 1;

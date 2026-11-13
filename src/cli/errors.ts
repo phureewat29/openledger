@@ -13,7 +13,7 @@ import type { ExitCode } from "../contract/exit.js";
 
 export type FailureCode = Exclude<ExitCode, "OK">;
 
-// Not exported: outside this module, fail() is the only construction site for CLIError.
+/** Not exported: outside this module, fail() is the only construction site for CLIError. */
 class CLIError extends Error {
   readonly code: FailureCode;
   readonly hint?: string;
@@ -83,7 +83,7 @@ export function toCLIError(thrown: unknown, cmd?: Command): CLIError {
   return new CLIError("GENERIC", errorMessage(thrown));
 }
 
-// Declare `table` as `Record<Reason, FailureCode>` so a reason nobody assigned a code fails the build.
+/** Declare `table` as `Record<Reason, FailureCode>` so a reason nobody assigned a code fails the build. */
 export function failReason<R extends string>(
   table: Record<R, FailureCode>,
   failure: { reason: NoInfer<R>; message: string },
@@ -92,7 +92,7 @@ export function failReason<R extends string>(
   fail(table[failure.reason], failure.message, hint === undefined ? undefined : { hint });
 }
 
-// Failures of the ledger itself, not of one item: every later item would hit them too.
+/** Failures of the ledger itself, not of one item: every later item would hit them too. */
 const LEDGER_FAILURES: FailureCode[] = ["BUSY", "NOT_READY"];
 
 /**

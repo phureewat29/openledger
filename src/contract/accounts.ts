@@ -161,11 +161,7 @@ export const AdjustAccountResult = z.object({
 });
 export type AdjustAccountResult = z.infer<typeof AdjustAccountResult>;
 
-/**
- * `id` always. `name`/`renamed` and `before`/`after` each appear only when that
- * half of the update (rename vs. metadata patch) ran; at least one always does.
- * `before`/`after` hold whichever patch fields were given, so values vary by key.
- */
+/** `id` always; `name`/`renamed` and `before`/`after` appear only when that half of the update ran (at least one always does). */
 export const UpdateAccountResult = z.object({
   id: z.string(),
   name: z.string().optional(),

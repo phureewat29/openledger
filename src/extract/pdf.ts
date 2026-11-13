@@ -5,12 +5,12 @@ import type { PageFacts } from "./route.js";
 
 type Mupdf = typeof import("mupdf");
 
-// Lazy: the WASM module isn't loaded until first call; ESM caches the import.
+/** Lazy: the WASM module isn't loaded until first call; ESM caches the import. */
 export const loadMupdf = (): Promise<Mupdf> => import("mupdf");
 
 const PDF_MIME = "application/pdf";
 
-// mupdf's authenticatePassword returns 0 on a wrong password, non-zero on success.
+/** mupdf's authenticatePassword returns 0 on a wrong password, non-zero on success. */
 const MUPDF_AUTH_FAILED = 0;
 
 export type UnlockFailureReason = "unsupported_document" | "wrong_password";
@@ -53,7 +53,7 @@ export interface ProbedPage extends PageFacts {
   text: string;
 }
 
-// preserve-images makes image blocks visible to the walker; without it a scan looks blank.
+/** preserve-images makes image blocks visible to the walker; without it a scan looks blank. */
 const STEXT_FLAGS = "preserve-whitespace,preserve-images";
 
 function hasImageBlock(stext: StructuredText): boolean {

@@ -27,7 +27,7 @@ export interface AccountBalanceMinor extends AccountRow {
   balance: number;
 }
 
-// Minor units; the CLI converts with `toDecimalTotals`.
+/** Minor units; the CLI converts with `toDecimalTotals`. */
 interface NetWorth {
   assets: MinorTotals;
   liabilities: MinorTotals;
@@ -202,11 +202,7 @@ type AdjustAccountBalanceOutcome =
     }
   | { ok: false; reason: AdjustBalanceFailure; message: string };
 
-/**
- * Ledger comes from the target account, never config; delta math is integer
- * minor units. The balance is read under the write lock, so a concurrent
- * write can't move it between the read and the balancing entry.
- */
+/** Ledger comes from the target account, never config; integer minor units. The balance is read under the write lock so a concurrent write can't move it. */
 export function adjustAccountBalance(
   db: Database.Database,
   opts: AdjustAccountBalanceOpts,

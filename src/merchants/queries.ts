@@ -41,12 +41,7 @@ const DEFAULT_NOISE = [
   "co", "ltd", "company", "inc", "llc", "plc", "intl",
 ] as const;
 
-/**
- * Strips store ids, terminal codes, and transaction-type words to the form
- * `merchant_aliases.normalized_pattern` indexes. `noiseTokens` is the caller's
- * locale layer, stripped on top of DEFAULT_NOISE; the punctuation pass drops
- * non-ASCII, so only romanized tokens can match.
- */
+/** Strips store ids, terminal codes and transaction-type words to the `normalized_pattern` form; `noiseTokens` adds a locale layer. Only romanized tokens survive. */
 export function normalizeDescriptor(raw: string, noiseTokens: readonly string[]): string {
   if (!raw) return "";
   const lowered = raw.toLowerCase();
@@ -145,11 +140,7 @@ interface RenameMerchantResult {
   alias_conflict?: MerchantAliasConflict;
 }
 
-/**
- * Keeps the old name as an alias so raw descriptors that produced it still
- * resolve to this merchant. Display names are a live join, so no transaction
- * rows need touching.
- */
+/** Keeps the old name as an alias so raw descriptors that produced it still resolve here. */
 export function renameMerchant(
   db: Database.Database,
   id: string,

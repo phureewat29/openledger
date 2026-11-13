@@ -57,7 +57,7 @@ export function flattenRows(obj: Record<string, unknown>): [string, string][] {
   );
 }
 
-// Human output only (TTY: aligned two-column, piped: tab-separated); the caller owns --json.
+/** Human output only (TTY: aligned two-column, piped: tab-separated); the caller owns --json. */
 export function formatKeyValues(
   rows: [string, string | number | boolean][],
   opts: { tty: boolean; paintKey?: (key: string) => string },

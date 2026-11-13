@@ -36,7 +36,9 @@ interface CommitIngestOpts {
   input?: string;
 }
 
-// The store trims canonical_name too; validating here turns a malformed merchant into dirty input, not a row crash.
+/**
+ * The store trims canonical_name too; validating here turns a malformed merchant into dirty input, not a row crash.
+ */
 const MERCHANT_INPUT = json(
   z.object({
     canonical_name: z.string().trim().min(1),
@@ -51,8 +53,10 @@ const MERCHANT_INPUT = json(
   .nullable()
   .default(null);
 
-// validateRawTransaction is the validity authority: missing fields default to "" and surface as dirty_input.
-// amount is excluded so its raw type reaches the validator's typeof check, unconverted by num().
+/**
+ * validateRawTransaction is the validity authority: missing fields default to "" and surface as dirty_input.
+ * amount is excluded so its raw type reaches the validator's typeof check, unconverted by num().
+ */
 const LINKED_HEADER_SPEC = z.object({
   date: str().default(""),
   description: str().default(""),
@@ -87,7 +91,7 @@ const STANDALONE_SPEC = z.object({
   currency: str().nullable().default(null),
 });
 
-// debit/credit accept a snake_case synonym that isn't the camelCase auto-bridge.
+/** debit/credit accept a snake_case synonym that isn't the camelCase auto-bridge. */
 const LEG_ALIASES = {
   debit_account_id: ["debit_account"],
   credit_account_id: ["credit_account"],
@@ -235,11 +239,7 @@ function rethrowMidBatch(thrown: unknown, results: CommitResult[]): never {
   });
 }
 
-/**
- * Writes each row's result as it lands. A row with no source address posts under a
- * random id, so once a lock aborts a batch that posted rows, a blind re-run would
- * post them twice: the error names the index to resume from instead.
- */
+/** Writes each row's result as it lands. A row with no source address posts under a random id, so a lock-aborted batch names the index to resume from. */
 export function commitRows(
   out: Output,
   db: Database.Database,

@@ -20,7 +20,7 @@ import type {
   NotesRemoveSummary,
 } from "../contract/notes.js";
 
-// `content` is the only free-text field; id/category/created_at are structured data left verbatim.
+/** `content` is the only free-text field; id/category/created_at are structured data left verbatim. */
 const NOTE_REDACT_FIELDS = ["content"] as const;
 
 const NOTE_COLUMNS: Column<NoteRow>[] = [

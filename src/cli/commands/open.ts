@@ -11,7 +11,7 @@ const OPENERS: Partial<Record<NodeJS.Platform, string>> = {
   linux: "xdg-open",
 };
 
-// Never rejects: resolves with an error message on spawn failure, else undefined.
+/** Never rejects: resolves with an error message on spawn failure, else undefined. */
 function spawnOpener(cmd: string, dataDir: string): Promise<string | undefined> {
   return new Promise((resolvePromise) => {
     const child = spawn(cmd, [dataDir], { stdio: "ignore", detached: true });
@@ -21,7 +21,7 @@ function spawnOpener(cmd: string, dataDir: string): Promise<string | undefined> 
   });
 }
 
-// The path is reported even when the opener fails: it is still useful on its own.
+/** The path is reported even when the opener fails: it is still useful on its own. */
 async function openDataDir(ctx: Invocation): Promise<void> {
   const { dataDir } = requireConfig(ctx.configPath, ctx.roots);
   // 0700 like config --init creates it: the data dir holds the raw statements.

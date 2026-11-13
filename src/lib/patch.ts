@@ -3,15 +3,17 @@ export interface PatchField {
   transform?: (value: unknown) => unknown;
 }
 
-interface PatchResult {
+export interface PatchResult {
   sets: string[];
   params: unknown[];
   before: Record<string, unknown>;
   after: Record<string, unknown>;
 }
 
-// A key participates only when `patch[key] !== undefined` (explicit `null`
-// binds SQL NULL); callers test `sets.length` for emptiness.
+/**
+ * A key participates only when `patch[key] !== undefined` (explicit `null`
+ * binds SQL NULL); callers test `sets.length` for emptiness.
+ */
 export function buildPatch<Row extends object>(
   spec: Record<string, PatchField>,
   current: Row,

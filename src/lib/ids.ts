@@ -22,11 +22,7 @@ export function deriveGroupId(fileHash: string, page: number, rowIndex: number):
   return "tg:" + hash16(`${fileHash}|${page}|${rowIndex}`);
 }
 
-/**
- * Account ids are `<currency>:<type>(:<segment>)*`, lowercase. Mirrors the
- * `upper(substr(a.id,1,3))` projection (accounts/queries.ts) and the
- * trigger's `substr(id,1,4)` compare — change them together.
- */
+/** Account ids are `<currency>:<type>(:<segment>)*`, lowercase. Mirrors accounts/queries.ts's `upper(substr(a.id,1,3))` and the trigger's `substr(id,1,4)`: change together. */
 export function currencyOf(accountId: string): string {
   return accountId.slice(0, 3).toUpperCase();
 }

@@ -11,8 +11,10 @@ export function requireYes(opts: { yes?: boolean }, what: string): void {
   }
 }
 
-// Redaction is on unless --no-redact set opts.redact === false; it's undefined for a
-// direct call, so `!!opts.redact` reads backwards.
+/**
+ * Redaction is on unless --no-redact set opts.redact === false; it's undefined for a
+ * direct call, so `!!opts.redact` reads backwards.
+ */
 export function redactionEnabled(opts: { redact?: boolean }): boolean {
   return opts.redact !== false;
 }
@@ -37,7 +39,7 @@ function readInputFile(inputPath: string): string {
   return read.value;
 }
 
-// Auto-detects a JSON array (leading `[`) vs NDJSON; row validation is the caller's job.
+/** Auto-detects a JSON array (leading `[`) vs NDJSON; row validation is the caller's job. */
 export async function readStdinBatch(inputPath?: string): Promise<unknown[]> {
   const from = inputPath ?? "stdin";
   const source = inputPath ? readInputFile(inputPath) : await readStdinToEnd();

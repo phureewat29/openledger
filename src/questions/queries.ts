@@ -132,7 +132,7 @@ const QUESTION_FILTERS: Filter<QuestionScope>[] = [
   (scope) => (scope.includeDeferred ? null : ACTIVE_DEFERRED_CLAUSE),
 ];
 
-// Shared by listQuestions/countQuestions so a filtered count matches the list.
+/** Shared by listQuestions/countQuestions so a filtered count matches the list. */
 function questionWhere(scope: QuestionScope): Clause {
   return whereSQL(QUESTION_FILTERS.map((filter) => filter(scope)));
 }

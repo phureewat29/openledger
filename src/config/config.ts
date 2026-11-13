@@ -78,7 +78,7 @@ function pickConfigFields(obj: Record<string, unknown>): Partial<OpenLedgerConfi
   return pickBy(pick(obj, CONFIG_KEYS), (value) => typeof value === "string") as Partial<OpenLedgerConfig>;
 }
 
-// V8's message quotes the input around a bad token, and this file holds ocrApiKey.
+/** V8's message quotes the input around a bad token, and this file holds ocrApiKey. */
 const JSON_POSITION_RE = /at position (\d+)/;
 
 /** A fixed message with at most a line and column; never any of the file's text. */

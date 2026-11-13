@@ -1,4 +1,6 @@
-// ACCOUNT_TYPES, FILE_STATUSES and NOTE_CATEGORIES mirror CHECK constraints in db/migrations (pinned by schema.test.ts).
+/**
+ * ACCOUNT_TYPES, FILE_STATUSES and NOTE_CATEGORIES mirror CHECK constraints in db/migrations (pinned by schema.test.ts).
+ */
 export const ACCOUNT_TYPES = ["asset", "liability", "income", "expense", "equity"] as const;
 
 /** At rest only; `ingest list` adds the display states `new` and `unreadable`. */

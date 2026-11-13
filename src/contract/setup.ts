@@ -7,7 +7,7 @@ export const SetupInstalledTarget = z.object({
 });
 export type SetupInstalledTarget = z.infer<typeof SetupInstalledTarget>;
 
-// `--print` dumps SKILL.md as raw markdown and never reaches this shape, even under --json.
+/** `--print` dumps SKILL.md as raw markdown and never reaches this shape, even under --json. */
 export const SetupInstallResult = z.object({
   installed: z.array(SetupInstalledTarget),
 });

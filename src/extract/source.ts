@@ -27,7 +27,7 @@ export const SUPPORTED_EXTS = Object.keys(SOURCES);
 
 export const MAX_SOURCE_BYTES = 30 * 1024 * 1024;
 
-// Some producers emit a preamble before the header, so the marker is searched, not at offset 0.
+/** Some producers emit a preamble before the header, so the marker is searched, not at offset 0. */
 const PDF_SNIFF_BYTES = 1024;
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

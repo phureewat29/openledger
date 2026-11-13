@@ -44,7 +44,7 @@ interface Globals {
   config: string | undefined;
 }
 
-// The root consumes these flags anywhere in argv, so every level but the root holds only defaults.
+/** The root consumes these flags anywhere in argv, so every level but the root holds only defaults. */
 export function readGlobals(cmd: Command): Globals {
   const { json, color, config } = cmd.optsWithGlobals<{
     json?: boolean;
@@ -62,8 +62,7 @@ function outputMode(
   return { tty, color, kind: json ? "json" : tty ? "tty" : "plain" };
 }
 
-// libsql attaches `_metadata: { duration }` to every `.get()` row; stripped once here.
-// `.all()` rows carry no `_metadata`, so nested arrays don't need it.
+/** libsql attaches `_metadata` to `.get()` rows only; `.all()` rows carry none. */
 function stripMetadata<T>(value: T): T {
   if (value === null || typeof value !== "object" || !("_metadata" in value)) return value;
   return omit(value as Record<string, unknown>, ["_metadata"]) as T;
@@ -151,7 +150,7 @@ function reportError(err: unknown, json: boolean, cmd?: Command): number {
   return exitCode;
 }
 
-// A parse failure precedes option binding, so argv is the only `--json` signal left.
+/** A parse failure precedes option binding, so argv is the only `--json` signal left. */
 export function reportParseError(err: unknown, argv: readonly string[]): void {
   process.exitCode = reportError(err, argv.includes("--json"));
 }
@@ -161,7 +160,7 @@ type Handler<A extends unknown[]> = (
   ...args: A
 ) => Promise<ExitCode | void> | ExitCode | void;
 
-// Sets process.exitCode rather than calling process.exit so buffered stdout/stderr flush before exit.
+/** Sets process.exitCode rather than calling process.exit so buffered stdout/stderr flush before exit. */
 export function runAction<A extends unknown[]>(
   handler: Handler<A>,
 ): (...args: [...A, Command]) => Promise<void> {

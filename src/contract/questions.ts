@@ -9,11 +9,7 @@ export const Question = z.object({
   prompt: z.string(),
   transaction_id: z.string().nullable(),
   account_id: z.string().nullable(),
-  /**
-   * The kind's own structured payload, passed through unvalidated: narrow it by
-   * `kind` before reading. null when the question carries none, or when the
-   * stored blob failed to parse.
-   */
+  /** Kind-specific payload, unvalidated: narrow by `kind` before reading. null when absent or the stored blob failed to parse. */
   context: z.unknown(),
   file_id: z.string().nullable(),
   created_at: z.iso.datetime(),

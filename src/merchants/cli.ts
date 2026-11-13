@@ -36,7 +36,9 @@ import * as z from "zod";
 import { parseInput, str, bool, int } from "../lib/validate.js";
 import { clampOffset } from "../lib/limit.js";
 
-// `canonical_name` is the only free-text field; ids and the default-account link are structured data left verbatim.
+/**
+ * `canonical_name` is the only free-text field; ids and the default-account link are structured data left verbatim.
+ */
 const MERCHANT_REDACT_FIELDS = ["canonical_name"] as const;
 
 const MERCHANT_COLUMNS: Column<Merchant>[] = [

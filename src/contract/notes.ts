@@ -3,7 +3,7 @@ import type { CommandContract } from "./kind.js";
 import { Summary } from "./primitives.js";
 import { NOTE_CATEGORIES } from "./enums.js";
 
-// `content` is redacted by default on list.
+/** `content` is redacted by default on list. */
 export const Note = z.object({
   id: z.number().int(),
   content: z.string(),

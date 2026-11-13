@@ -14,12 +14,7 @@ import { NOTES_CONTRACTS } from "./notes.js";
 import { DATASETS_CONTRACTS } from "./datasets.js";
 import { OPEN_CONTRACTS } from "./open.js";
 
-/**
- * One entry per leaf command path of the CLI (e.g. `"ingest commit"`), keyed
- * exactly as `oled <path>` without the `oled` prefix. `src/contract/coverage.test.ts`
- * walks the real commander tree and fails on any mismatch in either direction;
- * this table is the literal source, the test only keeps it honest.
- */
+/** One entry per leaf command path, keyed as `oled <path>` without the prefix; coverage.test.ts fails on any mismatch with the commander tree. */
 export const COMMAND_CONTRACTS = {
   ...STATUS_CONTRACTS,
   ...DOCTOR_CONTRACTS,

@@ -62,15 +62,16 @@ import type {
   TreeAccountsSummary,
 } from "../contract/accounts.js";
 
-// Record<Union, FailureCode> fails the build if a reason case is unhandled.
 export const ACCOUNT_FAILURE_EXIT: Record<AccountFailure, FailureCode> = {
   account_exists: "INVALID",
   parent_not_found: "NOT_FOUND",
   invalid_hierarchy: "INVALID",
 };
 
-// Ledgers are enumerated from the accounts table, never from config, so a bad prefix can't
-// resolve against config state; the caller's own hint applies only once the id names a real ledger.
+/**
+ * Ledgers are enumerated from the accounts table, never from config, so a bad prefix can't
+ * resolve against config state; the caller's own hint applies only once the id names a real ledger.
+ */
 export function failAccountNotFound(db: Database.Database, id: string, hint?: string): never {
   if (isLedgerScopedId(id) && ledgerExists(db, currencyOf(id))) {
     fail("NOT_FOUND", `account "${id}" not found`, { hint });
@@ -89,7 +90,7 @@ export function requireAccount(db: Database.Database, id: string, hint?: string)
   return account;
 }
 
-// Only `name` is free text; id/parent_id/type/currency and balances are structured, left verbatim.
+/** Only `name` is free text; id/parent_id/type/currency and balances are structured, left verbatim. */
 const ACCOUNT_REDACT_FIELDS = ["name"] as const;
 
 function presentAccount(a: AccountBalanceMinor): PresentedAccount {
@@ -227,7 +228,7 @@ async function showAccount(ctx: Invocation, id: string, opts: ShowAccountOpts): 
   ctx.out.emitObject(redact(detail, ACCOUNT_REDACT_FIELDS));
 }
 
-// A record, not any JSON: a scalar or array stored here would refuse every later metadata patch.
+/** A record, not any JSON: a scalar or array stored here would refuse every later metadata patch. */
 const METADATA_INPUT = json(z.record(z.string(), z.unknown()), "a JSON object").optional();
 
 const CREATE_ACCOUNT_SPEC = z.object({
@@ -263,7 +264,7 @@ async function createSingleAccount(ctx: Invocation, opts: Record<string, unknown
   ctx.out.emitObject(result);
 }
 
-// Commander keys of the per-account flags, so a defaulted global (`color: true`) never counts as one.
+/** Commander keys of the per-account flags, so a defaulted global (`color: true`) never counts as one. */
 const ACCOUNT_FLAG_KEYS = [
   ...Object.keys(CREATE_ACCOUNT_SPEC.shape).map((key) => camelCase(key)),
   ...Object.values(CREATE_ACCOUNT_ALIASES).flat(),
@@ -314,11 +315,7 @@ function tallyOf(row: AccountsCreateBatchRow): BatchTally {
   return "duplicate" in row ? "duplicates" : "created";
 }
 
-/**
- * One result row per item plus a summary row; exits PARTIAL on any failure.
- * `account_exists` counts as success (`duplicate: true`). Rows are written as
- * they land, so a ledger failure that aborts the batch leaves the landed ones reported.
- */
+/** One result row per item plus a summary; exits PARTIAL on any failure. `account_exists` counts as success (`duplicate: true`). */
 export function createAccountsBatch(
   out: Output,
   db: Database.Database,
@@ -466,7 +463,7 @@ export const UPDATE_ACCOUNT_EXIT: Record<UpdateAccountMetadataFailure, FailureCo
   unreadable_metadata: "INVALID",
 };
 
-// Reward points aren't a ledger unit, so they ride in the metadata blob rather than a stored column.
+/** Reward points aren't a ledger unit, so they ride in the metadata blob rather than a stored column. */
 function buildAccountPatch({
   points_balance,
   metadata,

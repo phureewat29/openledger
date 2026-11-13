@@ -67,8 +67,10 @@ export function namesUnopenedLedger(db: Database.Database, accountId: string): b
   return isLedgerScopedId(accountId) && !ledgerExists(db, currencyOf(accountId));
 }
 
-// Stricter than MATCH_THRESHOLD (accounts/matching.ts): hints are unprompted,
-// so precision wins over recall. Tune the two together.
+/**
+ * Stricter than MATCH_THRESHOLD (accounts/matching.ts): hints are unprompted,
+ * so precision wins over recall. Tune the two together.
+ */
 const FUZZY_THRESHOLD = 0.7;
 
 /**
@@ -178,11 +180,7 @@ interface CreatedAccount {
   account_number_masked?: string | null;
 }
 
-/**
- * An omitted `parent_id` opens every missing ancestor. A refusal can only come
- * before the first write: the grammar check precedes the walk, and an id that
- * already exists has every ancestor already.
- */
+/** An omitted `parent_id` opens every missing ancestor. A refusal can only precede the first write. */
 export function createOneAccount(
   db: Database.Database,
   input: CreateAccountInput,

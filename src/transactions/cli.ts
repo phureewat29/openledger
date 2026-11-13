@@ -95,8 +95,10 @@ const LIST_TRANSACTIONS_SPEC = z.object({
   offset: int().optional(),
 });
 
-// `--amount` is decimal but stored amounts are minor units, so the filter needs a currency:
-// from `--account`'s ledger, else an explicit `--currency` (no display-currency fallback).
+/**
+ * `--amount` is decimal but stored amounts are minor units, so the filter needs a currency:
+ * from `--account`'s ledger, else an explicit `--currency` (no display-currency fallback).
+ */
 function amountFilterCurrency(account?: string, currency?: string): string {
   if (account) return currencyOf(account);
   if (currency) return currency;
@@ -282,7 +284,7 @@ const ADD_TRANSACTION_FLAGS_OPTS = {
   aliases: { debit_account_id: ["debitAccount"], credit_account_id: ["creditAccount"] },
 };
 
-// Decimal amount, no account validation: that's the caller's job.
+/** Decimal amount, no account validation: that's the caller's job. */
 function buildRawTransaction(opts: AddTransactionOpts): RawTransactionInput {
   const parsed = parseInput(ADD_TRANSACTION_FLAGS_SPEC, opts, ADD_TRANSACTION_FLAGS_OPTS);
   // str() accepts "" and whitespace alike (the flag not being passed); must fail USAGE
@@ -430,7 +432,7 @@ export const RECATEGORIZE_EXIT: Record<RecategorizeFailure, FailureCode> = {
   not_found: "NOT_FOUND",
 };
 
-// The `--filter-account` clarification is folded into the label so a missing flag still explains it.
+/** The `--filter-account` clarification is folded into the label so a missing flag still explains it. */
 const RECATEGORIZE_LABELS = {
   filter_account: "--filter-account (recategorize moves that account's transactions)",
 };

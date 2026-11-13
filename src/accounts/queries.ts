@@ -1,7 +1,7 @@
 import type Database from "libsql";
 import { parseJSONOrNull } from "../lib/json.js";
 import { normalizeMaskedAccountNumber } from "../lib/masked.js";
-import { buildPatch, type PatchField } from "../lib/patch.js";
+import { buildPatch, type PatchField, type PatchResult } from "../lib/patch.js";
 import { inTransaction } from "../db/transaction.js";
 import { ACCOUNT_TYPES } from "../contract/enums.js";
 
@@ -11,11 +11,7 @@ export function isAccountType(value: string): value is AccountType {
   return (ACCOUNT_TYPES as readonly string[]).includes(value);
 }
 
-/**
- * Currency is derived from the id's currency head, never stored: the same
- * rule as `currencyOf` (src/lib/ids.ts) and the cross-ledger trigger's
- * `substr(id,1,4)` compare (0001_baseline.ts). Change all three together.
- */
+/** Currency is the id's currency head, never stored: same rule as `currencyOf` and the cross-ledger trigger's `substr(id,1,4)`. Change all together. */
 export function accountCurrencySQL(alias: string): string {
   return `upper(substr(${alias}.id,1,3))`;
 }
@@ -178,8 +174,6 @@ function storedMetadata(metadataJSON: string | null): Record<string, unknown> | 
   const parsed = parseJSONOrNull(metadataJSON);
   return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
 }
-
-type PatchResult = ReturnType<typeof buildPatch>;
 
 const NO_METADATA_PATCH: PatchResult = { sets: [], params: [], before: {}, after: {} };
 

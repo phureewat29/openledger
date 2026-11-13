@@ -55,12 +55,7 @@ export async function openLedger(
   return { config, db: await openDB(config.dbPath) };
 }
 
-/**
- * For commands that report on a profile rather than operate on one (`status`, `doctor`): an
- * absent DEFAULT config is itself a state worth describing, not a failure, so it loads
- * leniently. But a --config the caller actually named must still resolve: otherwise the
- * report would silently describe the default profile's ledger instead of the one asked for.
- */
+/** For `status`/`doctor`: an absent DEFAULT config loads leniently, but a named --config must still resolve, or the report would describe the default profile. */
 export function inspectConfig(path: string | undefined, roots: PathRoots): LoadedConfig {
   const loaded = loadConfig(path, roots);
   // An explicit empty path still counts as "named"; only true absence stays lenient.
@@ -125,7 +120,7 @@ function showPayload(loaded: LoadedConfig): ConfigShowResult {
  *  letters can never become one. */
 const CURRENCY_CODE_RE = /^[a-z]{3}$/i;
 
-// A tag Intl rejects would make every later money format throw; "" stays allowed and means unset.
+/** A tag Intl rejects would make every later money format throw; "" stays allowed and means unset. */
 function checkLocale(value: string, ctx: z.RefinementCtx): void {
   if (!value || tryExecute(() => Intl.getCanonicalLocales(value)).ok) return;
   ctx.addIssue({
@@ -161,12 +156,16 @@ type ConvergeFlags = z.infer<typeof CONVERGE_FLAGS_SPEC>;
 
 type SettingFlags = Omit<ConvergeFlags, "init">;
 
-// ocrApiKey may be undefined here; saveConfig drops undefined entries, so an
-// absent flag can never clear a persisted key.
+/**
+ * ocrApiKey may be undefined here; saveConfig drops undefined entries, so an
+ * absent flag can never clear a persisted key.
+ */
 type ConvergedConfig = Omit<OpenLedgerConfig, "ocrApiKey"> & { ocrApiKey?: string };
 
-// Precedence: flag > file > default; country is validated first so an unknown
-// name never reaches the file.
+/**
+ * Precedence: flag > file > default; country is validated first so an unknown
+ * name never reaches the file.
+ */
 function resolveConvergedConfig(
   flags: SettingFlags,
   loaded: LoadedConfig,
@@ -201,7 +200,7 @@ function resolveConvergedConfig(
   };
 }
 
-// Idempotent: each value resolves to an explicit flag, the file, or a default.
+/** Idempotent: each value resolves to an explicit flag, the file, or a default. */
 async function convergeConfig(
   out: Output,
   flags: SettingFlags,
@@ -221,7 +220,6 @@ async function convergeConfig(
   // Seeds the display-currency ledger's structural accounts so first ingest resolves them.
   ensureStructuralAccounts(db, merged.displayCurrency);
 
-  // createContextTemplate no-ops if the file exists, so this never clobbers edits.
   createContextTemplate(loaded.config.contextPath, merged.userName);
 
   const result: ConfigConvergeResult = {
@@ -249,8 +247,6 @@ function showConfig(out: Output, path: string | undefined, loaded: LoadedConfig)
   out.emitRecord(showPayload(loaded));
 }
 
-// One verb, three moods: bare shows, setting flags write (creating the file on
-// first touch), --init asserts the setup is being created fresh.
 async function configureHarness(
   ctx: Invocation,
   path: string | undefined,
