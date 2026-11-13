@@ -216,6 +216,12 @@ describe("validate: atLeastOne", () => {
     expect(() => parseInput(targeted, { id: "m:1" }, { atLeastOne: msg })).toThrowError(msg);
     expect(parseInput(targeted, { id: "m:1", due_day: "3" }, { atLeastOne: msg })).toEqual({ id: "m:1", due_day: 3 });
   });
+
+  it("counts a defaulted key only when the input supplies it", () => {
+    const defaulted = z.object({ name: str().optional(), limit: int().default(10) });
+    expect(() => parseInput(defaulted, {}, { atLeastOne: msg })).toThrowError(msg);
+    expect(parseInput(defaulted, { limit: "5" }, { atLeastOne: msg })).toEqual({ limit: 5 });
+  });
 });
 
 describe("validate: entry-point shapes", () => {

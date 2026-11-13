@@ -77,7 +77,7 @@ interface ParseOptions {
   aliases?: Record<string, string[]>;
   /** Override the default `--key-with-dashes` label per spec key. */
   labels?: Record<string, string>;
-  /** Fail with this message when the parse produces no optional key; a required key never counts. */
+  /** Fail with this message when the input supplies no optional key; a required key never counts. */
   atLeastOne?: string;
 }
 
@@ -175,9 +175,11 @@ function formatError(
   return failed.map((f) => f.clause).join("; ");
 }
 
-function hasOptionalKey(schema: z.ZodObject, parsed: object): boolean {
+/** Reads the raw input, not the parse: a `.default()` key is in every parsed object. */
+function suppliesOptionalKey(schema: z.ZodObject, raw: object, opts: ParseOptions): boolean {
   const shape = schema.shape as Record<string, z.ZodType>;
-  return Object.keys(parsed).some((key) => shape[key].safeParse(undefined).success);
+  const supplied = normalizeRaw(shape, raw as Record<string, unknown>, opts.aliases);
+  return Object.keys(supplied).some((key) => shape[key].safeParse(undefined).success);
 }
 
 /** Accumulates every missing-required and coercion error into one thrown `ValidationError`. */
@@ -188,7 +190,7 @@ export function parseInput<S extends z.ZodObject>(
 ): z.infer<S> {
   const result = safeParse(schema, raw, opts);
   if (!result.ok) throw new ValidationError(result.error);
-  if (opts?.atLeastOne && !hasOptionalKey(schema, result.value)) {
+  if (opts?.atLeastOne && !suppliesOptionalKey(schema, raw, opts)) {
     throw new ValidationError(opts.atLeastOne);
   }
   return result.value;
