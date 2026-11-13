@@ -1,0 +1,11 @@
+OpenThai2.0-OCR-Text (iApp Technology)
+
+This model includes or is derived from the following Apache-2.0 licensed work:
+
+  PP-OCRv6_tiny_det, PP-OCRv6_tiny_rec, th_PP-OCRv5_mobile_rec (character list)
+  Copyright (c) PaddlePaddle Authors
+  https://huggingface.co/PaddlePaddle
+  Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
+
+det.onnx is PP-OCRv6_tiny_det as distributed. rec.onnx is a fine-tune of
+PP-OCRv6_tiny_rec with a replaced Thai classifier, trained by iApp.
