@@ -30,7 +30,8 @@
     "models/",
     "skills/",
     "datasets/",
-    "plugin.json"
+    "plugin.json",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "exports": {
     "./contract": {
