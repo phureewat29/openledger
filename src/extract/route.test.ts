@@ -7,22 +7,31 @@ describe("READER", () => {
   });
 });
 
-const text: PageFacts = { chars: 2411, hasImage: false };
-const scan: PageFacts = { chars: 0, hasImage: true };
-const blank: PageFacts = { chars: 0, hasImage: false };
+const text: PageFacts = { chars: 2411, imageCover: 0 };
+const scan: PageFacts = { chars: 0, imageCover: 1 };
+const blank: PageFacts = { chars: 0, imageCover: 0 };
 
 describe("classifyPage", () => {
-  it("counts a page with enough characters as text, image or not", () => {
-    expect(classifyPage({ chars: 400, hasImage: false })).toBe("text");
-    expect(classifyPage({ chars: 400, hasImage: true })).toBe("text");
+  it("trusts a long text layer whatever lies under it", () => {
+    expect(classifyPage({ chars: 400, imageCover: 0 })).toBe("text");
+    expect(classifyPage({ chars: 400, imageCover: 1 })).toBe("text");
   });
 
-  it("counts a thin text layer over an image as a scan", () => {
-    expect(classifyPage({ chars: 399, hasImage: true })).toBe("scan");
+  it("counts a thin text layer over a page-sized image as a scan", () => {
+    expect(classifyPage({ chars: 399, imageCover: 0.5 })).toBe("scan");
   });
 
-  it("counts a thin text layer with no image as blank", () => {
-    expect(classifyPage({ chars: 399, hasImage: false })).toBe("blank");
+  it("keeps a short digital layer as text, bare or beside a logo", () => {
+    expect(classifyPage({ chars: 129, imageCover: 0 })).toBe("text");
+    expect(classifyPage({ chars: 129, imageCover: 0.04 })).toBe("text");
+  });
+
+  it("counts an image with no text layer as a scan, however small", () => {
+    expect(classifyPage({ chars: 0, imageCover: 0.04 })).toBe("scan");
+  });
+
+  it("counts a page with neither text nor image as blank", () => {
+    expect(classifyPage(blank)).toBe("blank");
   });
 });
 
@@ -33,6 +42,10 @@ describe("verdictOf", () => {
 
   it("lets a blank trailer page keep the document complete", () => {
     expect(verdictOf([text, text, blank])).toBe("complete");
+  });
+
+  it("lets a short closing page with a logo keep the document complete", () => {
+    expect(verdictOf([text, { chars: 60, imageCover: 0.04 }])).toBe("complete");
   });
 
   it("calls a text document with one scanned page partial", () => {

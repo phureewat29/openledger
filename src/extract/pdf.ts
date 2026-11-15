@@ -1,5 +1,5 @@
-import { range } from "es-toolkit";
-import type { Document, StructuredText } from "mupdf";
+import { clamp, range, sumBy } from "es-toolkit";
+import type { Document, Rect, StructuredText } from "mupdf";
 import { tryExecute, type Result } from "../lib/result.js";
 import type { PageFacts } from "./route.js";
 
@@ -50,21 +50,28 @@ export interface ProbedPage extends PageFacts {
 /** preserve-images makes image blocks visible to the walker; without it a scan looks blank. */
 const STEXT_FLAGS = "preserve-whitespace,preserve-images";
 
-function hasImageBlock(stext: StructuredText): boolean {
-  let found = false;
-  stext.walk({
-    onImageBlock: () => {
-      found = true;
-    },
-  });
-  return found;
+const area = ([x0, y0, x1, y1]: Rect): number => Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
+
+const clipTo = ([x0, y0, x1, y1]: Rect, [bx0, by0, bx1, by1]: Rect): Rect => [
+  Math.max(x0, bx0),
+  Math.max(y0, by0),
+  Math.min(x1, bx1),
+  Math.min(y1, by1),
+];
+
+/** Overlapping images count twice, which only errs toward calling a page a scan. */
+function imageCover(stext: StructuredText, bounds: Rect): number {
+  const images: Rect[] = [];
+  stext.walk({ onImageBlock: (bbox) => void images.push(clipTo(bbox, bounds)) });
+  const pageArea = area(bounds);
+  return pageArea > 0 ? clamp(sumBy(images, area) / pageArea, 0, 1) : 0;
 }
 
 function probeOne(doc: Document, index: number): ProbedPage {
   return destroyAfter(doc.loadPage(index), (page) =>
     destroyAfter(page.toStructuredText(STEXT_FLAGS), (stext) => {
       const text = stext.asText().replace(/\n{3,}/g, "\n\n").trim();
-      return { page: index + 1, chars: text.length, hasImage: hasImageBlock(stext), text };
+      return { page: index + 1, chars: text.length, imageCover: imageCover(stext, page.getBounds()), text };
     }),
   );
 }

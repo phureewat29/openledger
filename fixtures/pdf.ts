@@ -4,7 +4,7 @@
  * writer `encryptedPDF` needs).
  */
 
-export type PageKind = "text" | "blank" | "image";
+export type PageKind = "text" | "short" | "logo" | "blank" | "image";
 
 function buildPDF(objects: string[]): Buffer {
   const header = "%PDF-1.4\n";
@@ -30,12 +30,13 @@ function streamObject(content: string): string {
   return `<</Length ${Buffer.byteLength(content, "latin1")}>>stream\n${content}\nendstream`;
 }
 
-// 20 lines clears the 400-char text-layer bar the way a real statement page does.
+// 20 lines clears the 400-char text-layer bar the way a real statement page does; 3 lines is a short digital slip.
 const TEXT_LINES = 20;
+const SHORT_LINES = 3;
 
-function textContent(page: number): string {
+function textContent(page: number, lines = TEXT_LINES): string {
   let content = "BT /F1 11 Tf 36 756 Td 14 TL\n";
-  for (let line = 0; line < TEXT_LINES; line++) {
+  for (let line = 0; line < lines; line++) {
     content += `(page${page} line ${String(line).padStart(2, "0")} 1234.56 THB DEBIT ACME) Tj T*\n`;
   }
   return `${content}ET\n`;
@@ -53,6 +54,11 @@ function imageContent(width: number, height: number): string {
   );
 }
 
+/** A bank logo: the same 2x2 bitmap drawn 60x30 pt in the top-right corner, far under half the page. */
+function logoContent(width: number, height: number): string {
+  return `q 60 0 0 30 ${width - 96} ${height - 66} cm\n` + "BI /W 2 /H 2 /CS /RGB /BPC 8 /F /AHx ID\n" + "ff0000 00ff00 0000ff ffffff>\nEI Q\n";
+}
+
 /** In points; the render tests read the size back out of the rasters they produce. */
 interface PageSize {
   width: number;
@@ -63,6 +69,8 @@ export const LETTER: PageSize = { width: 612, height: 792 };
 
 const CONTENT: Record<PageKind, (page: number, size: PageSize) => string> = {
   text: (page) => textContent(page),
+  short: (page) => textContent(page, SHORT_LINES),
+  logo: (page, size) => logoContent(size.width, size.height) + textContent(page, SHORT_LINES),
   blank: () => "\n",
   image: (_, size) => imageContent(size.width, size.height),
 };

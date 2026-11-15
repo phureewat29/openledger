@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { classifyPage } from "./route.js";
 import { isEncryptedPDF, probePDFPages, unlockPDF } from "./pdf.js";
-import { corruptPDF, encryptedPDF, mixedPDF, scanPDF, textPDF } from "../../fixtures/pdf.js";
+import { corruptPDF, encryptedPDF, mixedPDF, pdfOf, scanPDF, textPDF } from "../../fixtures/pdf.js";
 
 describe("probePDFPages", () => {
   it("extracts the text layer and measures it in one pass, 1-based", async () => {
@@ -13,14 +13,24 @@ describe("probePDFPages", () => {
     expect(probe.value[0].chars).toBeGreaterThan(400);
     expect(probe.value[0].chars).toBe(probe.value[0].text.length);
     expect(probe.value[0].text).toContain("1234.56 THB DEBIT ACME");
-    expect(probe.value[0].hasImage).toBe(false);
+    expect(probe.value[0].imageCover).toBe(0);
   });
 
   it("sees the image block on a scanned page with no text", async () => {
     const probe = await probePDFPages(scanPDF());
     expect(probe.ok).toBe(true);
     if (!probe.ok) return;
-    expect(probe.value[0]).toMatchObject({ page: 1, chars: 0, hasImage: true });
+    expect(probe.value[0]).toMatchObject({ page: 1, chars: 0, imageCover: 1 });
+  });
+
+  it("measures a logo as a small share of the page and keeps its short text layer", async () => {
+    const probe = await probePDFPages(pdfOf(["short", "logo"]));
+    expect(probe.ok).toBe(true);
+    if (!probe.ok) return;
+    expect(probe.value[0]).toMatchObject({ imageCover: 0 });
+    expect(probe.value[1].imageCover).toBeGreaterThan(0);
+    expect(probe.value[1].imageCover).toBeLessThan(0.01);
+    expect(probe.value.map(classifyPage)).toEqual(["text", "text"]);
   });
 
   it("classifies a mixed document as text, blank, scan: a partial text layer", async () => {

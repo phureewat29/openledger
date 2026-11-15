@@ -43,6 +43,13 @@ describe("extractFile: text-layer route", () => {
     ]);
     expect(reader.seen).toEqual([]);
   });
+
+  it("keeps a short digital slip, bare or with a logo, on its exact text layer", async () => {
+    const reader = fakeReader();
+    const outcome = await extractFile(pdfInput(pdfOf(["short", "logo"])), { read: reader.read });
+    expect(outcome.ok && outcome.value).toMatchObject({ source: "text-layer", textLayer: "complete" });
+    expect(reader.seen).toEqual([]);
+  });
 });
 
 describe("extractFile: ocr route", () => {

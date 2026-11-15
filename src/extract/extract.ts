@@ -47,7 +47,7 @@ interface Kind {
 }
 
 /** An image is one scanned page with no text layer; mupdf would probe it as a resampled fake 96-dpi PDF. */
-const IMAGE_PAGE: ProbedPage = { page: 1, chars: 0, hasImage: true, text: "" };
+const IMAGE_PAGE: ProbedPage = { page: 1, chars: 0, imageCover: 1, text: "" };
 
 const KINDS: Record<SourceKind, Kind> = {
   pdf: { probe: probePDFPages, render: renderPDFPage, unreadable: "pdf_unreadable" },
