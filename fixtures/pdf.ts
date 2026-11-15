@@ -41,7 +41,10 @@ function textContent(page: number): string {
   return `${content}ET\n`;
 }
 
-// An inline image (BI/ID/EI) with an ASCIIHex payload: a 2x2 bitmap stretched over the page, like a scanned page looks to the probe.
+/**
+ * An inline image (BI/ID/EI) with an ASCIIHex payload: a 2x2 bitmap stretched over the page,
+ * like a scanned page looks to the probe. Its quadrants are red, green / blue, white.
+ */
 function imageContent(width: number, height: number): string {
   return (
     `q ${width} 0 0 ${height} 0 0 cm\n` +
@@ -50,18 +53,22 @@ function imageContent(width: number, height: number): string {
   );
 }
 
-const CONTENT: Record<PageKind, (page: number) => string> = {
+/** In points; the render tests read the size back out of the rasters they produce. */
+interface PageSize {
+  width: number;
+  height: number;
+}
+
+export const LETTER: PageSize = { width: 612, height: 792 };
+
+const CONTENT: Record<PageKind, (page: number, size: PageSize) => string> = {
   text: (page) => textContent(page),
   blank: () => "\n",
-  image: () => imageContent(WIDTH, HEIGHT),
+  image: (_, size) => imageContent(size.width, size.height),
 };
 
-// US Letter in points; the render tests read this size back out of the PNG they produce.
-const WIDTH = 612;
-const HEIGHT = 792;
-
 /** One PDF per page-kind list: object 1 is the catalog, 2 the page tree, then page+content pairs, then the font. */
-export function pdfOf(kinds: PageKind[]): Buffer {
+export function pdfOf(kinds: PageKind[], size: PageSize = LETTER): Buffer {
   const firstPage = 3;
   const fontNumber = firstPage + kinds.length * 2;
   const kids = kinds.map((_, index) => `${firstPage + index * 2} 0 R`).join(" ");
@@ -72,10 +79,10 @@ export function pdfOf(kinds: PageKind[]): Buffer {
   ];
   for (const [index, kind] of kinds.entries()) {
     objects.push(
-      `<</Type/Page/Parent 2 0 R/MediaBox[0 0 ${WIDTH} ${HEIGHT}]` +
+      `<</Type/Page/Parent 2 0 R/MediaBox[0 0 ${size.width} ${size.height}]` +
         `/Resources<</Font<</F1 ${fontNumber} 0 R>>>>/Contents ${firstPage + index * 2 + 1} 0 R>>`,
     );
-    objects.push(streamObject(CONTENT[kind](index + 1)));
+    objects.push(streamObject(CONTENT[kind](index + 1, size)));
   }
   objects.push("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>");
 
@@ -115,9 +122,4 @@ export async function encryptedPDF(
   } finally {
     doc.destroy();
   }
-}
-
-/** Width and height straight from the PNG IHDR chunk. */
-export function pngSize(bytes: Buffer): { width: number; height: number } {
-  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
 }

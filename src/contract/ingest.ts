@@ -31,47 +31,22 @@ export type IngestListSummary = z.infer<typeof IngestListSummary>;
 export const TextLayer = z.enum(["complete", "partial", "none"]);
 export type TextLayer = z.infer<typeof TextLayer>;
 
-export const PrepareTextPage = z.object({
+export const PreparePage = z.object({
   /** 1-based; cite as `source_page` on commit. */
   page: z.number().int(),
   chars: z.number().int(),
 });
-export type PrepareTextPage = z.infer<typeof PrepareTextPage>;
-
-export const PrepareImagePage = z.object({
-  page: z.number().int(),
-  path: z.string(),
-});
-export type PrepareImagePage = z.infer<typeof PrepareImagePage>;
+export type PreparePage = z.infer<typeof PreparePage>;
 
 /** One `document` to read, pages separated by `--- page N ---` markers. */
-export const PrepareTextResult = z.object({
+export const PrepareResult = z.object({
   file_id: z.string(),
-  kind: z.literal("text"),
   source: z.enum(["text-layer", "ocr"]),
   text_layer: TextLayer,
   page_count: z.number().int(),
-  ocr_model: z.string().optional(),
   document: z.string(),
-  pages: z.array(PrepareTextPage),
-  /** Pages OCR lost (the reason `prepare` exits 7); the `ocr` source only, `[]` when none. */
-  failed_pages: z.array(z.number().int()).optional(),
+  pages: z.array(PreparePage),
 });
-export type PrepareTextResult = z.infer<typeof PrepareTextResult>;
-
-/** One image path per page, in order, for the caller to read itself. */
-export const PrepareImagesResult = z.object({
-  file_id: z.string(),
-  kind: z.literal("images"),
-  source: z.enum(["raster", "original"]),
-  text_layer: TextLayer,
-  page_count: z.number().int(),
-  dpi: z.number().int().optional(),
-  pages: z.array(PrepareImagePage),
-});
-export type PrepareImagesResult = z.infer<typeof PrepareImagesResult>;
-
-export const PrepareResult = z.union([PrepareTextResult, PrepareImagesResult]);
 export type PrepareResult = z.infer<typeof PrepareResult>;
 
 export const CommitSide = z.object({
@@ -203,7 +178,7 @@ export type IngestFailResult = z.infer<typeof IngestFailResult>;
 
 export const INGEST_CONTRACTS = {
   "ingest list": { lines: [IngestFile, IngestListSummary], summary: "plain" },
-  "ingest prepare": { lines: [PrepareTextResult, PrepareImagesResult] },
+  "ingest prepare": { lines: [PrepareResult] },
   "ingest commit": {
     lines: [CommitFailureResult, CommitCompoundResult, CommitStandaloneResult, CommitSummary],
     summary: "plain",

@@ -66,21 +66,21 @@ describe("loadConfig hardening", () => {
 });
 
 describe("loadConfig: a malformed file never echoes its content", () => {
-  const SECRET = "sk-live-SECRET123";
+  const NAME = "Somchai Jaidee";
 
   // Every shape V8 reports differently: an unexpected token (which V8 quotes), a
   // positioned error, a truncated file, and a value that is not an object.
   const MALFORMED: [string, string, string][] = [
-    ["an unquoted value", `{"ocrApiKey": ${SECRET}}`, "it is not valid JSON"],
+    ["an unquoted value", `{"userName": ${NAME}}`, "it is not valid JSON"],
     [
       "a missing comma",
-      `{\n  "ocrApiKey": "${SECRET}"\n  "userName": "Bob"\n}`,
+      `{\n  "userName": "${NAME}"\n  "country": "TH"\n}`,
       "it is not valid JSON at line 3, column 3",
     ],
-    ["a trailing comma", `{"ocrApiKey": "${SECRET}",}`, "it is not valid JSON at line 1, column 35"],
-    ["a truncated file", `{"ocrApiKey": "${SECRET}`, "it is not valid JSON at line 1, column 33"],
-    ["a bare word", "sk-live-SECRET123", "it is not valid JSON"],
-    ["a string instead of an object", `"${SECRET}"`, "it does not hold a JSON object"],
+    ["a trailing comma", `{"userName": "${NAME}",}`, "it is not valid JSON at line 1, column 31"],
+    ["a truncated file", `{"userName": "${NAME}`, "it is not valid JSON at line 1, column 29"],
+    ["a bare word", NAME, "it is not valid JSON"],
+    ["a string instead of an object", `"${NAME}"`, "it does not hold a JSON object"],
   ];
 
   // EACCES is the error that names the path; root reads through mode 000, and win32 has no such mode.
@@ -102,7 +102,7 @@ describe("loadConfig: a malformed file never echoes its content", () => {
     const { problem, config } = loadConfig(path, { cwd: dir, home: dir });
     expect(problem).toBe(expected);
     // A broken file degrades to defaults; nothing from it survives into the values either.
-    expect(config.ocrApiKey).toBe("");
+    expect(config.userName).toBe("User");
   });
 });
 

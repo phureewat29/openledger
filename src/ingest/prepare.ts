@@ -3,8 +3,7 @@ import { resolve } from "node:path";
 import type Database from "libsql";
 import type { OpenLedgerConfig } from "../config/config.js";
 import { findFileByHash, replaceFile } from "../files/queries.js";
-import { extractFile, type Extraction, type TextPage } from "../extract/extract.js";
-import { resolveOCR, type OCRConfigSource } from "../extract/ocr.js";
+import { extractFile, type Extraction, type PageReader, type TextPage } from "../extract/extract.js";
 import { isEncryptedPDF, unlockPDF, type UnlockFailureReason } from "../extract/pdf.js";
 import { loadSource, type LoadedSource } from "../extract/source.js";
 import { newFileId } from "../lib/ids.js";
@@ -19,7 +18,7 @@ import {
   walkFiles,
   type WalkedFile,
 } from "../files/files.js";
-import type { IngestFile, PrepareImagesResult, PrepareTextResult, TextLayer } from "../contract/ingest.js";
+import type { IngestFile, PreparePage, PrepareResult, TextLayer } from "../contract/ingest.js";
 
 type IngestStatus = IngestFile["status"];
 
@@ -73,14 +72,14 @@ export async function discoverFiles(
 }
 
 interface PrepareOptions {
+  /** Reads a page that has no usable text layer; the CLI passes the OCR engine's. */
+  read: PageReader;
   password?: string;
   /** Re-reads bytes, then replaces the prior row, dropping its transactions,
    *  questions, and artifacts. */
   force?: boolean;
   /** Ignore the text layer, for garbled or junk layers. */
   rescan?: boolean;
-  /** Ignore the OCR endpoint, and read the page images yourself. */
-  noOCR?: boolean;
 }
 
 export type PrepareFailure =
@@ -90,47 +89,20 @@ export type PrepareFailure =
   | "too_large"
   | "unreadable"
   | "pdf_unreadable"
+  | "image_unreadable"
   | "password_required"
   | "wrong_password"
-  | "ocr_unreachable"
-  | "ocr_rejected";
-
-interface TextPageChars {
-  page: number;
-  chars: number;
-}
-
-interface ImagePagePath {
-  page: number;
-  path: string;
-}
+  | "ocr_unavailable";
 
 type PrepareOutcome =
   | {
       ok: true;
       fileId: string;
-      kind: "text";
-      source: PrepareTextResult["source"];
+      source: PrepareResult["source"];
       textLayer: TextLayer;
-      /** The model that read the pages, on the ocr route only. */
-      model?: string;
-      pageCount: number;
       /** One file to read, pages separated by `--- page N ---` markers. */
       document: string;
-      pages: TextPageChars[];
-      /** Pages whose text is a placeholder because the endpoint failed on them. */
-      failedPages: number[];
-    }
-  | {
-      ok: true;
-      fileId: string;
-      kind: "images";
-      source: PrepareImagesResult["source"];
-      textLayer: TextLayer;
-      pageCount: number;
-      /** Present when the pages were rasterized from a PDF. */
-      dpi?: number;
-      pages: ImagePagePath[];
+      pages: PreparePage[];
     }
   | { ok: false; reason: PrepareFailure; message: string };
 
@@ -188,78 +160,25 @@ function documentText(pages: TextPage[]): string {
 interface WriteTarget {
   fileId: string;
   dir: string;
-  /** The input file's own path: what an untouched image page cites. */
-  sourcePath: string;
 }
 
 /** Rebuilt per prepare, so a prior run's artifacts can never be mistaken for this one's. */
-function freshDir(dir: string): void {
-  rmSync(dir, RM_OPTS);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-}
-
-function writeDocument(
-  extraction: Extract<Extraction, { kind: "text" }>,
-  target: WriteTarget,
-): PrepareSuccess {
-  freshDir(target.dir);
+function writeDocument(extraction: Extraction, target: WriteTarget): PrepareSuccess {
+  rmSync(target.dir, RM_OPTS);
+  mkdirSync(target.dir, { recursive: true, mode: 0o700 });
   const document = resolve(target.dir, DOCUMENT_FILE);
   writeFileSync(document, documentText(extraction.pages), { mode: 0o600 });
   return {
     ok: true,
     fileId: target.fileId,
-    kind: "text",
     source: extraction.source,
     textLayer: extraction.textLayer,
-    model: extraction.model,
-    pageCount: extraction.pages.length,
     document,
     pages: extraction.pages.map((page) => ({ page: page.page, chars: page.text.length })),
-    failedPages: extraction.failedPages,
   };
 }
 
-function writePages(
-  extraction: Extract<Extraction, { kind: "images" }>,
-  target: WriteTarget,
-): PrepareSuccess {
-  const head = {
-    ok: true as const,
-    fileId: target.fileId,
-    kind: "images" as const,
-    source: extraction.source,
-    textLayer: extraction.textLayer,
-    pageCount: extraction.pages.length,
-    dpi: extraction.dpi,
-  };
-
-  // An untouched image is read where it lies; only a prior run's artifacts could be there to mislead.
-  if (extraction.source === "original") {
-    rmSync(target.dir, RM_OPTS);
-    const pages = extraction.pages.map((page) => ({ page: page.page, path: target.sourcePath }));
-    return { ...head, pages };
-  }
-
-  freshDir(target.dir);
-  const pages = extraction.pages.map((page): ImagePagePath => {
-    const path = resolve(target.dir, `p${page.page}.png`);
-    writeFileSync(path, page.bytes, { mode: 0o600 });
-    return { page: page.page, path };
-  });
-  return { ...head, pages };
-}
-
-const WRITE_ARTIFACTS: {
-  [K in Extraction["kind"]]: (
-    extraction: Extract<Extraction, { kind: K }>,
-    target: WriteTarget,
-  ) => PrepareSuccess;
-} = {
-  text: writeDocument,
-  images: writePages,
-};
-
-export type PrepareConfig = Pick<OpenLedgerConfig, "dataDir" | "cacheDir"> & OCRConfigSource;
+export type PrepareConfig = Pick<OpenLedgerConfig, "dataDir" | "cacheDir">;
 
 /** A failed --force keeps the prior file row and its transactions; only success replaces it. */
 export async function prepareFile(
@@ -267,7 +186,7 @@ export async function prepareFile(
   cfg: PrepareConfig,
   entryOrId: string,
   roots: Pick<PathRoots, "cwd">,
-  opts: PrepareOptions = {},
+  opts: PrepareOptions,
 ): Promise<PrepareOutcome> {
   const absPath = resolveEntryPath(db, cfg.dataDir, entryOrId, roots);
   if (absPath === null) {
@@ -286,24 +205,18 @@ export async function prepareFile(
   if (!readable.ok) return readable;
 
   const extracted = await extractFile(
-    { kind: source.kind, mime: source.mime, bytes: readable.bytes, path: source.path },
-    { ocr: resolveOCR(cfg), overrides: { rescan: opts.rescan, noOCR: opts.noOCR } },
+    { kind: source.kind, bytes: readable.bytes },
+    { read: opts.read, rescan: opts.rescan },
   );
-  if (!extracted.ok) return { ok: false, reason: extracted.reason, message: extracted.message };
+  if (!extracted.ok) return extracted;
 
-  const target: WriteTarget = {
-    fileId,
-    dir: resolve(cfg.cacheDir, fileId),
-    sourcePath: source.path,
-  };
-  const writeArtifacts = (): PrepareSuccess =>
-    WRITE_ARTIFACTS[extracted.value.kind](extracted.value as never, target);
-  if (!prior) return writeArtifacts();
+  const target: WriteTarget = { fileId, dir: resolve(cfg.cacheDir, fileId) };
+  if (!prior) return writeDocument(extracted.value, target);
 
   // No row points at the new id until the swap lands, so done/fail/drop could never purge what a failure leaves.
   let written: PrepareSuccess;
   try {
-    written = writeArtifacts();
+    written = writeDocument(extracted.value, target);
     replaceFile(db, prior.id, pendingRow(source, fileId));
   } catch (thrown) {
     tryExecute(() => cleanCache(cfg.cacheDir, fileId));

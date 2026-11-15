@@ -36,7 +36,7 @@ function sqlCalls(text: string): string[] {
     .map(([call]) => call);
 }
 
-// Runtime edges only: type-only imports are erased (extract/cards has a type-only cycle).
+// Runtime edges only: type-only imports are erased from the emitted JS.
 function findCycle(files: SourceFile[]): string[] | null {
   const edges = new Map(
     files.map((file) => [
@@ -76,6 +76,25 @@ describe("module boundaries", () => {
     expect(
       violations(lib, (_, ref, target) =>
         target ? !under(target, "lib") : !isBuiltin(ref.specifier) && !LIB_PACKAGES.has(ref.specifier),
+      ),
+    ).toEqual([]);
+  });
+
+  it("src/ocr imports nothing from src/ but src/lib", () => {
+    const ocr = PRODUCTION.filter((file) => under(file.path, "ocr"));
+    expect(ocr.length).toBeGreaterThan(0);
+    expect(
+      violations(ocr, (_, __, target) => target !== null && !under(target, "ocr") && !under(target, "lib")),
+    ).toEqual([]);
+  });
+
+  it("src/extract takes only the Raster type from src/ocr, never the engine", () => {
+    const extract = PRODUCTION.filter((file) => under(file.path, "extract"));
+    expect(
+      violations(
+        extract,
+        (_, ref, target) =>
+          target !== null && under(target, "ocr") && (!ref.isTypeOnly || rel(target) !== "ocr/raster.ts"),
       ),
     ).toEqual([]);
   });

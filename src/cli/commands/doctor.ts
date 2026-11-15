@@ -15,12 +15,7 @@ import { runAction, type Invocation, type Output } from "../output.js";
 import type { Column } from "../format.js";
 import type { ExitCode } from "../../contract/exit.js";
 import { tryExecute, type Result } from "../../lib/result.js";
-import {
-  pickServedModel,
-  probeOCREndpoint,
-  resolveOCR,
-  type OCRConfigSource,
-} from "../../extract/ocr.js";
+import { loadEngine } from "../../ocr/read.js";
 import type { DoctorCheck as Check, DoctorReport } from "../../contract/doctor.js";
 
 const HARD_CHECKS = new Set(["db_open", "schema_tables_present"]);
@@ -74,24 +69,18 @@ function schemaTablesCheck(ledger: LedgerProbe): Check {
   return { name, ok: true };
 }
 
-export async function ocrEndpointCheck(source: OCRConfigSource): Promise<Check> {
-  const name = "ocr_endpoint";
-  const settings = resolveOCR(source);
-  if (!settings) return { name, ok: true, detail: "off (set --ocr-base-url to enable)" };
-
-  const { baseURL, model } = settings;
-  const served = await probeOCREndpoint(settings);
-  if (!served.ok) return { name, ok: false, detail: `${baseURL}: ${served.error}` };
-  const match = pickServedModel(model, served.value);
-  if (!match) {
-    return {
-      name,
-      ok: false,
-      detail: `${baseURL} does not serve ${model} (serving: ${served.value.join(", ") || "nothing"})`,
-    };
-  }
-  const shown = match === model ? model : `${model} → ${match}`;
-  return { name, ok: true, detail: `${shown} at ${baseURL}` };
+/**
+ * Not a HARD_CHECK, like mupdf_loads: a broken engine blocks only pages with no text
+ * layer, and `ingest prepare` refuses those itself, while the ledger stays usable.
+ */
+export function ocrEngineCheck(engine: Result<unknown>): Check {
+  const name = "ocr_engine";
+  if (engine.ok) return { name, ok: true };
+  return {
+    name,
+    ok: false,
+    detail: `${engine.error}: reinstall the CLI (npm install -g @aquartier/openledger)`,
+  };
 }
 
 /** Informational only; never a HARD_CHECK. */
@@ -131,7 +120,7 @@ async function runChecks(loaded: LoadedConfig, roots: PathRoots): Promise<Check[
     checkFrom("mupdf_loads", await tryExecute(loadMupdf)),
     schemaTablesCheck(ledger),
     skillPackCheck(roots),
-    await ocrEndpointCheck(cfg),
+    ocrEngineCheck(await loadEngine()),
   ];
 }
 

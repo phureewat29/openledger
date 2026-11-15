@@ -1,29 +1,10 @@
 import { describe, it, expect } from "vitest";
-import {
-  classifyPage,
-  readerFor,
-  verdictOf,
-  type OCRAvailability,
-  type PageFacts,
-  type Reader,
-} from "./route.js";
-import type { TextLayer } from "../contract/ingest.js";
+import { READER, classifyPage, verdictOf, type PageFacts } from "./route.js";
 
-const ROUTES: [TextLayer, OCRAvailability, Reader][] = [
-  ["complete", "ready", "text-layer"],
-  ["complete", "unset", "text-layer"],
-  ["partial", "ready", "ocr"],
-  ["partial", "unset", "agent"],
-  ["none", "ready", "ocr"],
-  ["none", "unset", "agent"],
-];
-
-describe("readerFor", () => {
-  for (const [textLayer, ocr, expected] of ROUTES) {
-    it(`routes ${textLayer} text layer with ocr ${ocr} to ${expected}`, () => {
-      expect(readerFor(textLayer, ocr)).toBe(expected);
-    });
-  }
+describe("READER", () => {
+  it("reads a complete text layer directly, and a partial or missing one by OCR", () => {
+    expect(READER).toEqual({ complete: "text-layer", partial: "ocr", none: "ocr" });
+  });
 });
 
 const text: PageFacts = { chars: 2411, hasImage: false };

@@ -1,196 +1,112 @@
 import { describe, it, expect } from "vitest";
-import { extractFile, type ExtractInput } from "./extract.js";
-import { DEFAULT_RENDER } from "./pdf.js";
-import { corruptPDF, mixedPDF, pdfOf, scanPDF, textPDF } from "../../fixtures/pdf.js";
-import { samplePNG } from "../../fixtures/images.js";
-import {
-  DEAD_OCR_TEST_TIMEOUT_MS,
-  LIVE_PAGE_TIMEOUT_MS,
-  deadOCRSettings,
-  liveOCR,
-  requireLiveOCR,
-} from "../../fixtures/ocr.js";
-
-const NO_OCR = { ocr: null };
+import { err, ok } from "../lib/result.js";
+import type { Raster } from "../ocr/raster.js";
+import { extractFile, type ExtractInput, type PageReader } from "./extract.js";
+import { corruptPDF, mixedPDF, pdfOf, textPDF } from "../../fixtures/pdf.js";
+import { corruptPNG, samplePNG } from "../../fixtures/images.js";
 
 function pdfInput(bytes: Buffer): ExtractInput {
-  return { kind: "pdf", mime: "application/pdf", bytes, path: "/data/statement.pdf" };
+  return { kind: "pdf", bytes };
 }
 
-const png = samplePNG();
+function imageInput(bytes: Buffer): ExtractInput {
+  return { kind: "image", bytes };
+}
 
-function imageInput(): ExtractInput {
-  return { kind: "image", mime: "image/png", bytes: png, path: "/data/receipt.png" };
+/** Answers each page with its size, and keeps what it was handed. */
+function fakeReader(): { read: PageReader; seen: Omit<Raster, "data">[] } {
+  const seen: Omit<Raster, "data">[] = [];
+  const read: PageReader = async ({ width, height, channels, data }) => {
+    expect(data).toHaveLength(width * height * channels);
+    seen.push({ width, height, channels });
+    return ok(`read ${width}x${height}`);
+  };
+  return { read, seen };
+}
+
+function unavailableReader(): { read: PageReader; calls: () => number } {
+  let calls = 0;
+  const read: PageReader = async () => {
+    calls += 1;
+    return err("the engine did not load");
+  };
+  return { read, calls: () => calls };
 }
 
 describe("extractFile: text-layer route", () => {
-  it("returns the probe's own text for a complete text layer", async () => {
-    const outcome = await extractFile(pdfInput(textPDF()), NO_OCR);
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    expect(outcome.value).toMatchObject({
-      kind: "text",
-      source: "text-layer",
-      textLayer: "complete",
-      failedPages: [],
-    });
-    expect(outcome.value.kind === "text" && outcome.value.pages[0]).toEqual({
-      page: 1,
-      text: expect.stringContaining("1234.56 THB DEBIT ACME"),
-    });
-  });
-
-  it("prefers the text layer over a configured endpoint, without calling it", async () => {
-    const outcome = await extractFile(pdfInput(textPDF()), { ocr: deadOCRSettings() });
-    expect(outcome.ok).toBe(true);
-    expect(outcome.ok && outcome.value.source).toBe("text-layer");
-  });
-});
-
-describe("extractFile: agent route", () => {
-  it("rasterizes a scanned PDF at the render spec when no endpoint is set", async () => {
-    const outcome = await extractFile(pdfInput(scanPDF()), NO_OCR);
-    // Named before the narrowing guard, so a silent fallback to the text route can't pass this vacuously.
-    expect(outcome.ok && outcome.value.kind).toBe("images");
-    if (!outcome.ok || outcome.value.kind !== "images") return;
-    expect(outcome.value).toMatchObject({
-      source: "raster",
-      textLayer: "none",
-      dpi: DEFAULT_RENDER.dpi,
-    });
-    expect(outcome.value.pages).toHaveLength(1);
-    expect(outcome.value.pages[0]).toMatchObject({ page: 1, mime: "image/png" });
-    expect(outcome.value.pages[0].bytes.subarray(1, 4).toString("latin1")).toBe("PNG");
-  });
-
-  it("hands back a mixed document as images rather than dropping its scanned page", async () => {
-    const outcome = await extractFile(pdfInput(mixedPDF()), NO_OCR);
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    expect(outcome.value).toMatchObject({ kind: "images", source: "raster", textLayer: "partial" });
-    expect(outcome.value.pages.map((page) => page.page)).toEqual([1, 2, 3]);
-  });
-
-  it("passes an image through as its own bytes, with no dpi and no mupdf", async () => {
-    const input = imageInput();
-    const outcome = await extractFile(input, NO_OCR);
-    // Named before the narrowing guard: an image must never be routed through mupdf.
-    expect(outcome.ok && outcome.value.kind).toBe("images");
-    if (!outcome.ok || outcome.value.kind !== "images") return;
-    expect(outcome.value).toMatchObject({ source: "original", textLayer: "none" });
-    expect(outcome.value.dpi).toBeUndefined();
-    expect(outcome.value.pages).toEqual([{ page: 1, mime: "image/png", bytes: input.bytes }]);
+  it("returns the probe's own text for a complete text layer, never calling the reader", async () => {
+    const reader = fakeReader();
+    const outcome = await extractFile(pdfInput(textPDF()), { read: reader.read });
+    expect(outcome.ok && outcome.value).toMatchObject({ source: "text-layer", textLayer: "complete" });
+    expect(outcome.ok && outcome.value.pages).toEqual([
+      { page: 1, text: expect.stringContaining("1234.56 THB DEBIT ACME") },
+    ]);
+    expect(reader.seen).toEqual([]);
   });
 });
 
 describe("extractFile: ocr route", () => {
-  it("fails the run when nothing is listening, rather than degrading to images", async () => {
-    const outcome = await extractFile(pdfInput(scanPDF()), { ocr: deadOCRSettings() });
-    expect(outcome).toMatchObject({ ok: false, reason: "ocr_unreachable" });
-  }, DEAD_OCR_TEST_TIMEOUT_MS);
-});
-
-describe.skipIf(!liveOCR)("extractFile: ocr route (live OCR endpoint)", () => {
-  it(
-    "reads a scanned PDF through the endpoint and names the model",
-    async () => {
-      const settings = requireLiveOCR();
-      const outcome = await extractFile(pdfInput(scanPDF()), { ocr: settings });
-      expect(outcome.ok).toBe(true);
-      if (!outcome.ok) return;
-      expect(outcome.value).toMatchObject({
-        kind: "text",
-        source: "ocr",
-        textLayer: "none",
-        model: settings.model,
-        failedPages: [],
-      });
-      expect(outcome.value.kind === "text" && outcome.value.pages).toEqual([
-        { page: 1, text: expect.any(String) },
-      ]);
-    },
-    LIVE_PAGE_TIMEOUT_MS,
-  );
-
-  it(
-    "re-reads a partial document whole, so every page cites one source",
-    async () => {
-      const outcome = await extractFile(pdfInput(pdfOf(["text", "image"])), {
-        ocr: requireLiveOCR(),
-      });
-      expect(outcome.ok).toBe(true);
-      if (!outcome.ok) return;
-      expect(outcome.value).toMatchObject({ kind: "text", source: "ocr", textLayer: "partial" });
-      expect(outcome.value.pages.map((page) => page.page)).toEqual([1, 2]);
-    },
-    2 * LIVE_PAGE_TIMEOUT_MS,
-  );
-
-  it(
-    "reads an image through the endpoint when one is configured",
-    async () => {
-      const outcome = await extractFile(imageInput(), { ocr: requireLiveOCR() });
-      expect(outcome.ok && outcome.value).toMatchObject({ kind: "text", source: "ocr" });
-    },
-    LIVE_PAGE_TIMEOUT_MS,
-  );
-});
-
-describe("extractFile: overrides", () => {
-  it("--rescan ignores a complete text layer and rasterizes instead", async () => {
-    const outcome = await extractFile(pdfInput(textPDF()), {
-      ocr: null,
-      overrides: { rescan: true },
-    });
-    expect(outcome.ok).toBe(true);
-    if (outcome.ok) {
-      expect(outcome.value).toMatchObject({ kind: "images", source: "raster", textLayer: "none" });
-    }
-  });
-
-  it("--no-ocr ignores a configured endpoint and returns images", async () => {
-    const outcome = await extractFile(pdfInput(scanPDF()), {
-      ocr: deadOCRSettings(),
-      overrides: { noOCR: true },
-    });
-    expect(outcome.ok && outcome.value).toMatchObject({ kind: "images", source: "raster" });
-  });
-
-  it("both overrides together always yield images", async () => {
-    const outcome = await extractFile(pdfInput(textPDF()), {
-      ocr: deadOCRSettings(),
-      overrides: { rescan: true, noOCR: true },
-    });
-    expect(outcome.ok && outcome.value).toMatchObject({
-      kind: "images",
-      source: "raster",
+  it("reads an image-only PDF page by page, each as a 300-dpi BGR raster", async () => {
+    const reader = fakeReader();
+    const outcome = await extractFile(pdfInput(pdfOf(["image", "image"])), { read: reader.read });
+    expect(outcome.ok && outcome.value).toEqual({
+      source: "ocr",
       textLayer: "none",
+      pages: [
+        { page: 1, text: "read 2550x3300" },
+        { page: 2, text: "read 2550x3300" },
+      ],
     });
+    expect(reader.seen).toEqual([
+      { width: 2550, height: 3300, channels: 3 },
+      { width: 2550, height: 3300, channels: 3 },
+    ]);
+  });
+
+  it("re-reads a partial document whole, so every page cites one source", async () => {
+    const reader = fakeReader();
+    const outcome = await extractFile(pdfInput(mixedPDF()), { read: reader.read });
+    expect(outcome.ok && outcome.value).toMatchObject({ source: "ocr", textLayer: "partial" });
+    expect(outcome.ok && outcome.value.pages.map((page) => page.page)).toEqual([1, 2, 3]);
+    expect(reader.seen).toHaveLength(3);
+  });
+
+  it("reads an image as one page at its own size, without mupdf probing it", async () => {
+    const reader = fakeReader();
+    const outcome = await extractFile(imageInput(samplePNG()), { read: reader.read });
+    expect(outcome.ok && outcome.value).toEqual({
+      source: "ocr",
+      textLayer: "none",
+      pages: [{ page: 1, text: "read 16x16" }],
+    });
+  });
+
+  it("--rescan reads a complete text layer by OCR instead", async () => {
+    const reader = fakeReader();
+    const outcome = await extractFile(pdfInput(textPDF()), { read: reader.read, rescan: true });
+    expect(outcome.ok && outcome.value).toMatchObject({ source: "ocr", textLayer: "none" });
+    expect(reader.seen).toHaveLength(1);
   });
 });
 
-describe.skipIf(!liveOCR)("extractFile: overrides (live OCR endpoint)", () => {
-  it(
-    "--rescan sends a text PDF to the endpoint when one is configured",
-    async () => {
-      const outcome = await extractFile(pdfInput(textPDF()), {
-        ocr: requireLiveOCR(),
-        overrides: { rescan: true },
-      });
-      expect(outcome.ok && outcome.value).toMatchObject({
-        kind: "text",
-        source: "ocr",
-        textLayer: "none",
-      });
-    },
-    LIVE_PAGE_TIMEOUT_MS,
-  );
-});
+describe("extractFile: failures", () => {
+  it("stops at the first page the reader cannot read, as ocr_unavailable", async () => {
+    const reader = unavailableReader();
+    const outcome = await extractFile(pdfInput(pdfOf(["image", "image"])), { read: reader.read });
+    expect(outcome).toEqual({ ok: false, reason: "ocr_unavailable", message: "the engine did not load" });
+    expect(reader.calls()).toBe(1);
+  });
 
-describe("extractFile: unreadable input", () => {
   it("reports bytes mupdf cannot open as pdf_unreadable", async () => {
-    const outcome = await extractFile(pdfInput(corruptPDF()), NO_OCR);
+    const outcome = await extractFile(pdfInput(corruptPDF()), { read: fakeReader().read });
     expect(outcome).toMatchObject({ ok: false, reason: "pdf_unreadable" });
     if (!outcome.ok) expect(outcome.message).toBeTruthy();
+  });
+
+  it("reports an image body mupdf cannot decode as image_unreadable, before any read", async () => {
+    const reader = fakeReader();
+    const outcome = await extractFile(imageInput(corruptPNG()), { read: reader.read });
+    expect(outcome).toMatchObject({ ok: false, reason: "image_unreadable" });
+    expect(reader.seen).toEqual([]);
   });
 });

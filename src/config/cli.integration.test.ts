@@ -5,13 +5,10 @@ import {
   createSandbox,
   makeRunCLI,
   parseOne,
-  writeConfig,
   type CLIRunner,
   type Sandbox,
 } from "../../fixtures/sandbox.js";
 import { createTestSandbox } from "../../fixtures/test-cleanup.js";
-import { expectMode } from "../../fixtures/modes.js";
-import { keyFingerprint } from "./config.js";
 
 let sandbox: Sandbox;
 let runCLI: CLIRunner;
@@ -25,7 +22,7 @@ beforeAll(() => {
 afterAll(() => sandbox.cleanup());
 
 describe("bare config shows (subprocess)", () => {
-  it("answers on a virgin setup with the defaults, typhoon among them", async () => {
+  it("answers on a virgin setup with the defaults", async () => {
     // `config` is exempt from the config-file gate (it reaches loadConfig directly rather
     // than requireConfig), so an absent file must read as defaults, never as E_NOT_READY.
     expect(existsSync(sandbox.configPath)).toBe(false);
@@ -33,7 +30,7 @@ describe("bare config shows (subprocess)", () => {
     const { stdout, code } = await runCLI(["config", "--json"]);
     expect(code).toBe(0);
     const shown = parseOne(stdout);
-    expect(shown).toMatchObject({ ocrModel: "typhoon-ocr1.5", config_path: sandbox.configPath });
+    expect(shown).toMatchObject({ userName: "User", country: "TH", config_path: sandbox.configPath });
     // The resolution fields render as their own snake_case rows; the internal ones never ship.
     expect(shown).not.toHaveProperty("configPath");
     expect(shown).not.toHaveProperty("exists");
@@ -238,11 +235,11 @@ describe("a broken config file (subprocess)", () => {
 });
 
 describe("a malformed config file never echoes its content (subprocess)", () => {
-  it("no surface shows a fragment of the half-typed API key in it", async () => {
+  it("no surface shows a fragment of the half-typed name in it", async () => {
     const isolated = createTestSandbox("oled-config-leak-it-");
     const run = makeRunCLI(isolated);
     // Unquoted, so V8's own parse message would quote the bytes around the bad token.
-    writeFileSync(isolated.configPath, '{"ocrApiKey": sk-live-SECRET123}\n');
+    writeFileSync(isolated.configPath, '{"userName": Somchai Jaidee}\n');
 
     const [show, showHuman, status, statusVerbatim, doctor, gated, converge] = await Promise.all([
       run(["config", "--json"]),
@@ -254,7 +251,7 @@ describe("a malformed config file never echoes its content (subprocess)", () => 
       run(["config", "--user-name", "Bob", "--json"]),
     ]);
     for (const { stdout, stderr } of [show, showHuman, status, statusVerbatim, doctor, gated, converge]) {
-      expect(stdout + stderr).not.toMatch(/sk-live|SECRET/);
+      expect(stdout + stderr).not.toMatch(/Somchai|Jaidee/);
     }
 
     expect(parseOne(show.stdout).problem).toBe("it is not valid JSON");
@@ -267,56 +264,5 @@ describe("a malformed config file never echoes its content (subprocess)", () => 
     expect(readable.detail).toBe(
       `${join("~", ".oled", "config.json")} is unusable, so defaults are in use: it is not valid JSON`,
     );
-  }, 30000);
-});
-
-describe("config --ocr-api-key (subprocess)", () => {
-  const readConfigFile = (box: Sandbox): Record<string, unknown> =>
-    JSON.parse(readFileSync(box.configPath, "utf8"));
-
-  it("persists the key 0600 and prints only its fingerprint", async () => {
-    const isolated = createTestSandbox("oled-config-key-it-");
-    const run = makeRunCLI(isolated);
-    const res = await run(["config", "--init", "--ocr-api-key", "sk-flag-secret", "--json"]);
-    expect(res.code).toBe(0);
-    const fingerprinted = { set: true, fingerprint: keyFingerprint("sk-flag-secret") };
-    expect(parseOne(res.stdout).ocrApiKey).toEqual(fingerprinted);
-    expect(res.stdout).not.toContain("sk-flag-secret");
-    expect(readConfigFile(isolated).ocrApiKey).toBe("sk-flag-secret");
-    expectMode(isolated.configPath, 0o600);
-
-    // Reading it back is the other half: the show path fingerprints a persisted key too.
-    const show = await run(["config", "--json"]);
-    expect(show.code).toBe(0);
-    expect(parseOne(show.stdout).ocrApiKey).toEqual(fingerprinted);
-    expect(show.stdout).not.toContain("sk-flag-secret");
-  }, 30000);
-
-  it("a converge with an unrelated flag leaves the persisted key alone", async () => {
-    const isolated = createTestSandbox("oled-config-key-it-");
-    const run = makeRunCLI(isolated);
-    // Seeded by hand: the write path is `--ocr-api-key`'s own test, not this one's.
-    writeConfig(isolated, { ocrApiKey: "sk-keep-me" });
-
-    // Guards saveConfig's drop-undefined merge: a patch without the key must not clear it.
-    const converge = await run(["config", "--user-name", "Somebody", "--json"]);
-    expect(converge.code).toBe(0);
-    expect(readConfigFile(isolated).ocrApiKey).toBe("sk-keep-me");
-  }, 30000);
-
-  it('--ocr-api-key "" clears the persisted key', async () => {
-    const isolated = createTestSandbox("oled-config-key-it-");
-    const run = makeRunCLI(isolated);
-    writeConfig(isolated, { ocrApiKey: "sk-old" });
-
-    const cleared = await run(["config", "--ocr-api-key", "", "--json"]);
-    expect(cleared.code).toBe(0);
-    expect(parseOne(cleared.stdout).ocrApiKey).toEqual({ set: false });
-    expect(readConfigFile(isolated).ocrApiKey).toBe("");
-
-    const show = await run(["config", "--json"]);
-    expect(show.code).toBe(0);
-    expect(parseOne(show.stdout).ocrApiKey).toEqual({ set: false });
-    expect(show.stdout).not.toContain("sk-old");
   }, 30000);
 });

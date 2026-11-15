@@ -1,12 +1,9 @@
 import type { Command } from "commander";
 import type Database from "libsql";
 import { existsSync, mkdirSync } from "fs";
-import { mapValues, pick } from "es-toolkit";
 import { openDB } from "../db/connection.js";
 import { ensureStructuralAccounts } from "../accounts/accounts.js";
 import {
-  CONFIG_SECRETS,
-  keyFingerprint,
   loadConfig,
   saveConfig,
   type LoadedConfig,
@@ -17,12 +14,11 @@ import { expandHome, relativizeHomeIn, resolveFromCwd, type PathRoots } from "..
 import { tryExecute } from "../lib/result.js";
 import { findCountryDefaults, availableCountries } from "../datasets/datasets.js";
 import { createContextTemplate } from "./context.js";
-import { DEFAULT_MODEL_ID } from "../extract/cards/index.js";
 import { runAction, type Invocation, type Output } from "../cli/output.js";
 import { fail } from "../cli/errors.js";
 import * as z from "zod";
 import { parseInput, str, bool } from "../lib/validate.js";
-import type { ConfigShowResult, ConfigConvergeResult, ConfigSecretStatus } from "../contract/config.js";
+import type { ConfigShowResult, ConfigConvergeResult } from "../contract/config.js";
 
 /** Fails NOT_READY on a config that can't back a command: an unusable file, or a path with
  *  nothing at it. Shared by `requireConfig` (always) and `inspectConfig` (only once a
@@ -79,19 +75,6 @@ export async function probeLedger(dbPath: string, home: string): Promise<LedgerP
   return { state: "open", db: opened.value };
 }
 
-type SecretKey = (typeof CONFIG_SECRETS)[number];
-
-type RedactedConfig = Omit<OpenLedgerConfig, SecretKey> & Record<SecretKey, ConfigSecretStatus>;
-
-function secretStatus(value: string): ConfigSecretStatus {
-  return value ? { set: true, fingerprint: keyFingerprint(value) } : { set: false };
-}
-
-/** Every CONFIG_SECRETS key surfaces as {set, fingerprint}, never plaintext: config output is safe to paste into shells/logs/bug reports. */
-function redactConfig(cfg: OpenLedgerConfig): RedactedConfig {
-  return { ...cfg, ...mapValues(pick(cfg, CONFIG_SECRETS), secretStatus) };
-}
-
 /** Strips the resolution fields: the two paths render as their own rows, and `home` never renders (it names the OS account). */
 function configValues(cfg: ResolvedConfig): OpenLedgerConfig {
   const { configPath, contextPath, exists, home, ...values } = cfg;
@@ -101,7 +84,7 @@ function configValues(cfg: ResolvedConfig): OpenLedgerConfig {
 function showPayload(loaded: LoadedConfig): ConfigShowResult {
   const cfg = loaded.config;
   return {
-    ...redactConfig(configValues(cfg)),
+    ...configValues(cfg),
     config_path: cfg.configPath,
     context_path: cfg.contextPath,
     // A broken file degrades to defaults; the payload must say so, not imply them.
@@ -140,20 +123,11 @@ const CONVERGE_FLAGS_SPEC = z.object({
     .optional(),
   user_name: str().optional(),
   country: str().optional(),
-  ocr_base_url: str().optional(),
-  ocr_model: str().optional(),
-  ocr_api_key: str().optional(),
 });
 
 type ConvergeFlags = z.infer<typeof CONVERGE_FLAGS_SPEC>;
 
 type SettingFlags = Omit<ConvergeFlags, "init">;
-
-/**
- * ocrApiKey may be undefined here; saveConfig drops undefined entries, so an
- * absent flag can never clear a persisted key.
- */
-type ConvergedConfig = Omit<OpenLedgerConfig, "ocrApiKey"> & { ocrApiKey?: string };
 
 /**
  * Precedence: flag > file > default; country is validated first so an unknown
@@ -163,7 +137,7 @@ function resolveConvergedConfig(
   flags: SettingFlags,
   loaded: LoadedConfig,
   roots: PathRoots,
-): ConvergedConfig {
+): OpenLedgerConfig {
   const current = loaded.config;
   const country = flags.country ?? current.country;
   const defaults = findCountryDefaults(country);
@@ -186,10 +160,6 @@ function resolveConvergedConfig(
     displayLocale: flags.locale || persisted.displayLocale || defaults.locale,
     displayCurrency: flags.currency || persisted.displayCurrency || defaults.currency,
     userName: flags.user_name ?? current.userName,
-    // The URL alone decides whether OCR is enabled.
-    ocrBaseUrl: flags.ocr_base_url ?? current.ocrBaseUrl,
-    ocrModel: flags.ocr_model ?? current.ocrModel,
-    ocrApiKey: flags.ocr_api_key,
   };
 }
 
@@ -216,7 +186,7 @@ async function convergeConfig(
   createContextTemplate(loaded.config.contextPath, merged.userName);
 
   const result: ConfigConvergeResult = {
-    ...redactConfig(merged),
+    ...merged,
     config_path: configPath,
     context_path: loaded.config.contextPath,
     created: { config: configPath, db: merged.dbPath, data_dir: merged.dataDir },
@@ -279,15 +249,12 @@ export function registerConfig(program: Command): void {
     .argument("[path]", "config file to read or write (default ~/.oled/config.json)")
     .option("--data-dir <dir>", "drop statement files here; oled open opens it")
     .option("--db <path>", "database path")
-    .option("--cache-dir <dir>", "extracted text and page images land here")
+    .option("--cache-dir <dir>", "extracted text lands here")
     .option("--init", "create the config file, database, and data dir; refuses a config that already exists")
     .option("--locale <locale>", "locale used to format money, e.g. th-TH")
     .option("--currency <code>", "display currency; also seeds that ledger's structural accounts")
     .option("--country <code>", "country whose reference data applies; also seeds locale/currency (default: TH)")
     .option("--user-name <name>", "your name; config shows it and redaction masks it")
-    .option("--ocr-base-url <url>", "OCR endpoint base URL, e.g. http://127.0.0.1:1234/v1; OCR is off until this is set")
-    .option("--ocr-model <id>", `model id, or a variant of it (default ${DEFAULT_MODEL_ID}); does nothing until --ocr-base-url is set`)
-    .option("--ocr-api-key <key>", 'API key for the OCR endpoint; saved to the config file (0600), shown only as a fingerprint; "" clears it')
     .addHelpText(
       "after",
       [

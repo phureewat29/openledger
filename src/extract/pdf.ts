@@ -8,7 +8,16 @@ type Mupdf = typeof import("mupdf");
 /** Lazy: the WASM module isn't loaded until first call; ESM caches the import. */
 export const loadMupdf = (): Promise<Mupdf> => import("mupdf");
 
-const PDF_MIME = "application/pdf";
+export const PDF_MIME = "application/pdf";
+
+/** Frees the object's WASM memory as soon as `use` returns or throws, rather than whenever GC finalizes it. */
+export function destroyAfter<T extends { destroy(): void }, R>(value: T, use: (value: T) => R): R {
+  try {
+    return use(value);
+  } finally {
+    value.destroy();
+  }
+}
 
 /** mupdf's authenticatePassword returns 0 on a wrong password, non-zero on success. */
 const MUPDF_AUTH_FAILED = 0;
@@ -19,32 +28,17 @@ type UnlockResult = { ok: true; decrypted: Buffer } | { ok: false; reason: Unloc
 
 export async function isEncryptedPDF(bytes: Buffer): Promise<boolean> {
   const mupdf = await loadMupdf();
-  const doc = mupdf.Document.openDocument(bytes, PDF_MIME);
-  try {
-    return doc.needsPassword();
-  } finally {
-    doc.destroy();
-  }
+  return destroyAfter(mupdf.Document.openDocument(bytes, PDF_MIME), (doc) => doc.needsPassword());
 }
 
 export async function unlockPDF(bytes: Buffer, password: string): Promise<UnlockResult> {
   const mupdf = await loadMupdf();
-  const doc = mupdf.Document.openDocument(bytes, PDF_MIME);
-  try {
-    if (!(doc instanceof mupdf.PDFDocument)) {
-      return { ok: false, reason: "unsupported_document" };
-    }
-    if (!doc.needsPassword()) {
-      return { ok: true, decrypted: bytes };
-    }
-    if (doc.authenticatePassword(password) === MUPDF_AUTH_FAILED) {
-      return { ok: false, reason: "wrong_password" };
-    }
-    const out = doc.saveToBuffer("encrypt=none");
-    return { ok: true, decrypted: Buffer.from(out.asUint8Array()) };
-  } finally {
-    doc.destroy();
-  }
+  return destroyAfter(mupdf.Document.openDocument(bytes, PDF_MIME), (doc): UnlockResult => {
+    if (!(doc instanceof mupdf.PDFDocument)) return { ok: false, reason: "unsupported_document" };
+    if (!doc.needsPassword()) return { ok: true, decrypted: bytes };
+    if (doc.authenticatePassword(password) === MUPDF_AUTH_FAILED) return { ok: false, reason: "wrong_password" };
+    return { ok: true, decrypted: Buffer.from(doc.saveToBuffer("encrypt=none").asUint8Array()) };
+  });
 }
 
 /** `text` is the extraction itself, not a sample. */
@@ -67,79 +61,20 @@ function hasImageBlock(stext: StructuredText): boolean {
 }
 
 function probeOne(doc: Document, index: number): ProbedPage {
-  const page = doc.loadPage(index);
-  try {
-    const stext = page.toStructuredText(STEXT_FLAGS);
-    try {
+  return destroyAfter(doc.loadPage(index), (page) =>
+    destroyAfter(page.toStructuredText(STEXT_FLAGS), (stext) => {
       const text = stext.asText().replace(/\n{3,}/g, "\n\n").trim();
       return { page: index + 1, chars: text.length, hasImage: hasImageBlock(stext), text };
-    } finally {
-      stext.destroy();
-    }
-  } finally {
-    page.destroy();
-  }
-}
-
-async function mapPages<T>(
-  bytes: Buffer,
-  fn: (mupdf: Mupdf, doc: Document, index: number) => T,
-): Promise<Result<T[]>> {
-  const mupdf = await loadMupdf();
-  return tryExecute(() => {
-    const doc = mupdf.Document.openDocument(bytes, PDF_MIME);
-    try {
-      return range(doc.countPages()).map((index) => fn(mupdf, doc, index));
-    } finally {
-      doc.destroy();
-    }
-  });
+    }),
+  );
 }
 
 /** Measures and extracts the text layer in one pass, so no page opens twice. */
-export function probePDFPages(bytes: Buffer): Promise<Result<ProbedPage[]>> {
-  return mapPages(bytes, (_mupdf, doc, index) => probeOne(doc, index));
-}
-
-export interface RenderSpec {
-  dpi: number;
-  /** Cap on the longest side in pixels, which is how vision models state their input limit. */
-  maxLongestDimPx: number;
-}
-
-/** 200 dpi keeps statement glyphs legible, 1800 px stays under common
- *  vision-model input limits; each model card may declare its own. */
-export const DEFAULT_RENDER: RenderSpec = { dpi: 200, maxLongestDimPx: 1800 };
-
-/** One page as image bytes, 1-based. */
-export interface PageImage {
-  page: number;
-  mime: string;
-  bytes: Buffer;
-}
-
-function renderOne(mupdf: Mupdf, doc: Document, index: number, spec: RenderSpec): PageImage {
-  const page = doc.loadPage(index);
-  try {
-    const [x0, y0, x1, y1] = page.getBounds();
-    const longestPt = Math.max(x1 - x0, y1 - y0);
-    const scale = Math.min(spec.dpi / 72, spec.maxLongestDimPx / longestPt);
-    // Statements assume paper; alpha:false renders on white.
-    const pixmap = page.toPixmap(
-      mupdf.Matrix.scale(scale, scale),
-      mupdf.ColorSpace.DeviceRGB,
-      false,
-    );
-    try {
-      return { page: index + 1, mime: "image/png", bytes: Buffer.from(pixmap.asPNG()) };
-    } finally {
-      pixmap.destroy();
-    }
-  } finally {
-    page.destroy();
-  }
-}
-
-export function renderPDFPages(bytes: Buffer, spec: RenderSpec): Promise<Result<PageImage[]>> {
-  return mapPages(bytes, (mupdf, doc, index) => renderOne(mupdf, doc, index, spec));
+export async function probePDFPages(bytes: Buffer): Promise<Result<ProbedPage[]>> {
+  const mupdf = await loadMupdf();
+  return tryExecute(() =>
+    destroyAfter(mupdf.Document.openDocument(bytes, PDF_MIME), (doc) =>
+      range(doc.countPages()).map((index) => probeOne(doc, index)),
+    ),
+  );
 }

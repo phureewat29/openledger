@@ -9,7 +9,6 @@ const KIND_BY_MIME = {
   "application/pdf": "pdf",
   "image/png": "image",
   "image/jpeg": "image",
-  "image/webp": "image",
 } as const satisfies Record<string, SourceKind>;
 
 type SourceMime = keyof typeof KIND_BY_MIME;
@@ -20,7 +19,6 @@ export const SOURCES: Record<string, SourceMime> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
 };
 
 export const SUPPORTED_EXTS = Object.keys(SOURCES);
@@ -37,8 +35,6 @@ const SIGNATURES: Record<SourceMime, (bytes: Buffer) => boolean> = {
   "application/pdf": (bytes) => bytes.subarray(0, PDF_SNIFF_BYTES).toString("latin1").includes("%PDF-"),
   "image/png": (bytes) => bytes.subarray(0, 8).equals(PNG_MAGIC),
   "image/jpeg": (bytes) => bytes.subarray(0, 3).equals(JPEG_MAGIC),
-  "image/webp": (bytes) =>
-    bytes.subarray(0, 4).toString("latin1") === "RIFF" && bytes.subarray(8, 12).toString("latin1") === "WEBP",
 };
 
 export function sniffSource(bytes: Buffer): { kind: SourceKind; mime: string } | null {
@@ -63,7 +59,7 @@ type LoadOutcome =
       message: string;
     };
 
-/** Extension and magic bytes must agree; a mismatch fails here, not deep in mupdf or the OCR endpoint. */
+/** Extension and magic bytes must agree; a mismatch fails here, not deep in mupdf. */
 export function loadSource(path: string): LoadOutcome {
   const ext = extname(path).toLowerCase();
   const declared = SOURCES[ext];

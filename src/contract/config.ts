@@ -1,13 +1,6 @@
 import * as z from "zod";
 import type { CommandContract } from "./kind.js";
 
-/** Every secret field (`ocrApiKey`) surfaces this way, never plaintext. */
-export const ConfigSecretStatus = z.object({
-  set: z.boolean(),
-  fingerprint: z.string().optional(),
-});
-export type ConfigSecretStatus = z.infer<typeof ConfigSecretStatus>;
-
 /** The shared base of every `oled config --json` line; `problem` or `created`
  *  distinguishes a read from a write. The one surface that answers camelCase. */
 export const ConfigView = z.object({
@@ -18,9 +11,6 @@ export const ConfigView = z.object({
   dataDir: z.string(),
   cacheDir: z.string(),
   userName: z.string(),
-  ocrBaseUrl: z.string(),
-  ocrModel: z.string(),
-  ocrApiKey: ConfigSecretStatus,
   config_path: z.string(),
   context_path: z.string(),
 });

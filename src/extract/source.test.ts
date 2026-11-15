@@ -8,7 +8,7 @@ import { textPDF } from "../../fixtures/pdf.js";
 import { samplePNG } from "../../fixtures/images.js";
 import { removeTree } from "../../fixtures/sandbox.js";
 
-// Sniffing reads signatures only, so a header is a complete jpeg/webp here.
+// Sniffing reads signatures only, so a header is a complete jpeg or webp here.
 const jpegBytes = () => Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
 const webpBytes = () => Buffer.from("RIFF\0\0\0\0WEBP", "latin1");
 
@@ -23,8 +23,8 @@ function write(name: string, bytes: Buffer): string {
 
 describe("SUPPORTED_EXTS", () => {
   // The CLI quotes this list in its help text and hints.
-  it("is the one pdf extension and four image extensions, in order", () => {
-    expect(SUPPORTED_EXTS).toEqual([".pdf", ".png", ".jpg", ".jpeg", ".webp"]);
+  it("is the one pdf extension and three image extensions, in order", () => {
+    expect(SUPPORTED_EXTS).toEqual([".pdf", ".png", ".jpg", ".jpeg"]);
   });
 });
 
@@ -33,7 +33,6 @@ describe("sniffSource", () => {
     expect(sniffSource(textPDF())).toEqual({ kind: "pdf", mime: "application/pdf" });
     expect(sniffSource(samplePNG())).toEqual({ kind: "image", mime: "image/png" });
     expect(sniffSource(jpegBytes())).toEqual({ kind: "image", mime: "image/jpeg" });
-    expect(sniffSource(webpBytes())).toEqual({ kind: "image", mime: "image/webp" });
   });
 
   it("finds a PDF header that sits behind a preamble", () => {
@@ -41,8 +40,9 @@ describe("sniffSource", () => {
     expect(sniffSource(padded)).toEqual({ kind: "pdf", mime: "application/pdf" });
   });
 
-  it("returns null for bytes it cannot place", () => {
+  it("returns null for bytes it cannot place, WebP among them", () => {
     expect(sniffSource(Buffer.from("just some text"))).toBeNull();
+    expect(sniffSource(webpBytes())).toBeNull();
     expect(sniffSource(Buffer.alloc(0))).toBeNull();
   });
 });
@@ -79,16 +79,18 @@ describe("loadSource", () => {
       ok: true,
       value: { kind: "image", mime: "image/jpeg" },
     });
-    expect(loadSource(write("c.webp", webpBytes()))).toMatchObject({
-      ok: true,
-      value: { kind: "image", mime: "image/webp" },
-    });
   });
 
-  it("rejects an extension it does not handle", () => {
-    const result = loadSource(write("notes.docx", Buffer.from("PK")));
-    expect(result).toMatchObject({ ok: false, reason: "unsupported_extension" });
-    if (!result.ok) expect(result.message).toContain(".docx");
+  it("rejects an extension it does not handle, WebP included, listing what it accepts", () => {
+    const docx = loadSource(write("notes.docx", Buffer.from("PK")));
+    expect(docx).toMatchObject({ ok: false, reason: "unsupported_extension" });
+    if (!docx.ok) expect(docx.message).toContain(".docx");
+
+    expect(loadSource(write("photo.webp", webpBytes()))).toEqual({
+      ok: false,
+      reason: "unsupported_extension",
+      message: "unsupported extension .webp (accepted: .pdf .png .jpg .jpeg)",
+    });
   });
 
   it("rejects bytes that disagree with the extension, naming what it found", () => {

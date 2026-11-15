@@ -321,31 +321,6 @@ describe("system CLI integration (subprocess)", () => {
   );
 
   it(
-    "config: an ocr model persists without a url, and the model card stays out of the surface",
-    async () => {
-      const isolated = createTestSandbox("oled-system-ocr-cfg-it-");
-      const env = { env: isolated.env, cwd: isolated.root };
-      const model = await runCLI(
-        ["config", "--db", isolated.dbPath, "--data-dir", isolated.dataDir, "--ocr-model", "test-ocr-model", "--json"],
-        env,
-      );
-      expect(model.code).toBe(0);
-      expect(parseOne(model.stdout)).toMatchObject({
-        ocrBaseUrl: "",
-        ocrModel: "test-ocr-model",
-      });
-
-      const show = await runCLI(["config", "--json"], env);
-      expect(show.code).toBe(0);
-      const shown = parseOne(show.stdout);
-      expect(shown).toMatchObject({ ocrModel: "test-ocr-model" });
-      // The model is the only OCR knob; the model card it selects is internal.
-      expect(shown).not.toHaveProperty("ocrModelCard");
-    },
-    30000,
-  );
-
-  it(
     "status net_worth + report reflect directly-seeded ledger data",
     async () => {
       const raw = new Database(dbPath);

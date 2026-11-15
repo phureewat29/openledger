@@ -1,24 +1,16 @@
-import type { PrepareTextResult, TextLayer } from "../contract/ingest.js";
+import type { PrepareResult, TextLayer } from "../contract/ingest.js";
 
-export type OCRAvailability = "ready" | "unset";
-export type Reader = PrepareTextResult["source"] | "agent";
-
-const READER: Record<`${TextLayer}/${OCRAvailability}`, Reader> = {
-  "complete/ready": "text-layer",
-  "complete/unset": "text-layer",
-  "partial/ready": "ocr",
-  "partial/unset": "agent",
-  "none/ready": "ocr",
-  "none/unset": "agent",
-};
+export type Reader = PrepareResult["source"];
 
 /**
- * File kind isn't an axis: an image enters as `"none"` and routes like a scan.
- * `ocr` means configured, not reachable: a dead endpoint aborts loudly.
+ * File kind isn't an axis: an image probes as one scanned page and routes like a scan.
+ * A partial layer is read whole by OCR, so every page of a document cites one source.
  */
-export function readerFor(textLayer: TextLayer, ocr: OCRAvailability): Reader {
-  return READER[`${textLayer}/${ocr}`];
-}
+export const READER: Record<TextLayer, Reader> = {
+  complete: "text-layer",
+  partial: "ocr",
+  none: "ocr",
+};
 
 type PageContent = "text" | "scan" | "blank";
 

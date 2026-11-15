@@ -5,7 +5,6 @@ import { runAction, type Invocation } from "../cli/output.js";
 import type { Column } from "../cli/format.js";
 import { fail, type FailureCode } from "../cli/errors.js";
 import { openLedger } from "../config/cli.js";
-import type { ExitCode } from "../contract/exit.js";
 import { commitIngest } from "./commit-cli.js";
 import { markFileFailed, markFileIngested } from "../files/queries.js";
 import { getAccountBalanceMinor } from "../accounts/balances.js";
@@ -19,6 +18,8 @@ import * as z from "zod";
 import { MAX_SOURCE_BYTES, SUPPORTED_EXTS } from "../extract/source.js";
 import { cleanCache } from "../files/files.js";
 import { requireFile } from "../files/cli.js";
+// readPage loads the OCR engine on its first call, never at import, so this import is safe on the startup path.
+import { readPage } from "../ocr/read.js";
 // prepare.ts keeps mupdf/libsql lazy internally (loadMupdf() in extract/pdf.ts), so this import is safe on the startup path.
 import {
   discoverFiles,
@@ -104,8 +105,6 @@ interface PrepareIngestOpts {
   password?: string;
   force?: boolean;
   rescan?: boolean;
-  /** commander's `--no-ocr` negation: false only when the flag was passed. */
-  ocr?: boolean;
 }
 
 const PASSWORD_HINT = "re-run with --password <password>";
@@ -113,7 +112,7 @@ const PASSWORD_HINT = "re-run with --password <password>";
 const ACCEPTED_EXTS = SUPPORTED_EXTS.join(" ");
 const SIZE_LIMIT = `${MAX_SOURCE_BYTES / (1024 * 1024)} MB`;
 
-const PREPARE_FAILURES: Record<PrepareFailure, { code: FailureCode; hint: string }> = {
+export const PREPARE_FAILURES: Record<PrepareFailure, { code: FailureCode; hint: string }> = {
   not_found: { code: "NOT_FOUND", hint: "run `oled ingest list --json` to see what is discoverable" },
   unsupported_extension: {
     code: "USAGE",
@@ -126,66 +125,40 @@ const PREPARE_FAILURES: Record<PrepareFailure, { code: FailureCode; hint: string
   },
   unreadable: { code: "NOT_FOUND", hint: "check the path and its permissions" },
   pdf_unreadable: { code: "INVALID", hint: "the PDF may be corrupt; re-download or re-export it" },
+  image_unreadable: { code: "INVALID", hint: "the image may be corrupt; re-export or retake it" },
   password_required: { code: "INPUT_REQUIRED", hint: PASSWORD_HINT },
   wrong_password: { code: "INPUT_REQUIRED", hint: PASSWORD_HINT },
-  ocr_unreachable: { code: "NOT_READY", hint: "start the OCR endpoint, or re-run with --no-ocr" },
-  ocr_rejected: {
+  ocr_unavailable: {
     code: "NOT_READY",
-    hint: "check the model against `oled doctor --json`, or re-run with --no-ocr",
+    hint: "the built-in OCR did not load, so the install is broken: reinstall with `npm install -g @aquartier/openledger`",
   },
 };
 
-/** What each route emits: a document to read, or one path per page image. */
-const PREPARE_LINE: {
-  [K in PrepareSuccess["kind"]]: (
-    result: Extract<PrepareSuccess, { kind: K }>,
-  ) => Extract<PrepareResult, { kind: K }>;
-} = {
-  text: (result) => ({
+function toPrepareResult(result: PrepareSuccess): PrepareResult {
+  return {
     file_id: result.fileId,
-    kind: "text",
     source: result.source,
     text_layer: result.textLayer,
-    page_count: result.pageCount,
-    ...(result.model ? { ocr_model: result.model } : {}),
+    page_count: result.pages.length,
     document: result.document,
     pages: result.pages,
-    // Only the OCR route reads page by page, so only it can lose one.
-    ...(result.source === "ocr" ? { failed_pages: result.failedPages } : {}),
-  }),
-  images: (result) => ({
-    file_id: result.fileId,
-    kind: "images",
-    source: result.source,
-    text_layer: result.textLayer,
-    page_count: result.pageCount,
-    ...(result.dpi ? { dpi: result.dpi } : {}),
-    pages: result.pages,
-  }),
-};
+  };
+}
 
-async function prepareIngest(
-  ctx: Invocation,
-  pathOrId: string,
-  opts: PrepareIngestOpts,
-): Promise<ExitCode | undefined> {
+async function prepareIngest(ctx: Invocation, pathOrId: string, opts: PrepareIngestOpts): Promise<void> {
   const { config, db } = await openLedger(ctx);
 
   const result = await prepareFile(db, config, pathOrId, ctx.roots, {
+    read: readPage,
     password: opts.password,
     force: !!opts.force,
     rescan: !!opts.rescan,
-    noOCR: opts.ocr === false,
   });
   if (!result.ok) {
     const { code, hint } = PREPARE_FAILURES[result.reason];
     fail(code, result.message, { hint });
   }
-
-  ctx.out.emitObject(PREPARE_LINE[result.kind](result as never));
-
-  // A page the endpoint could not read is a hole in the document, not a failed run.
-  if (result.kind === "text" && result.failedPages.length > 0) return "PARTIAL";
+  ctx.out.emitObject(toPrepareResult(result));
 }
 
 const DONE_FLAGS_SPEC = z.object({
@@ -346,36 +319,31 @@ export function registerIngest(program: Command): void {
 
   ingest
     .command("prepare <pathOrId>")
-    .description("Extract a statement file into text (or page images) to read")
+    .description("Extract a statement file into text to read")
     .option("--password <password>", "password for a locked PDF")
     .option("--force", "re-register the file, dropping the prior ingest's rows and artifacts")
-    .option("--rescan", "ignore the text layer and read the page images instead")
-    .option("--no-ocr", "ignore the OCR endpoint and return the page images to you")
+    .option("--rescan", "ignore the text layer and read every page with OCR instead")
     .addHelpText(
       "after",
       [
         "",
         "Behavior:",
-        "  Reads the file once and returns text whenever it can.",
-        "  A PDF with its own text layer is extracted directly. Otherwise the pages become images",
-        "  (a scan rasterized, a photo as it lies) and the OCR endpoint reads them when configured",
-        "  (`oled config --ocr-base-url <url>`); with none configured they come back to you.",
-        '  source names the reader: "text-layer" or "ocr" for kind "text", "raster" or "original" for kind "images".',
+        "  Reads the file once and returns its text as one document.",
+        "  A PDF with its own text layer is extracted directly. A scan, a photo, or a PDF with any",
+        "  scanned page is read by the built-in OCR, which runs locally on the CPU and reads",
+        "  printed Thai and English; handwriting is not supported.",
+        '  source names the reader: "text-layer" or "ocr".',
         "",
         "Output:",
-        '  kind "text": one `document` path to read; pages separated by --- page N --- markers.',
+        "  One `document` path to read; pages separated by --- page N --- markers.",
         "  Cite each row's page as source_page on commit. Pages count from 1 everywhere.",
-        '  kind "images": one path per page under pages[], in order; read them yourself.',
         "",
         "Escape Hatches:",
-        "  --rescan ignores a garbled text layer and reads the page images instead.",
-        "  --no-ocr ignores the OCR endpoint and returns the page images. Both together always return images.",
+        "  --rescan ignores a garbled text layer and reads every page with OCR instead.",
         "",
         "Exits:",
-        "  2 unsupported file type · 3 OCR endpoint misconfigured or unreachable",
+        "  2 unsupported file type · 3 the built-in OCR did not load (reinstall oled)",
         "  4 locked PDF (re-run with --password) · 5 nothing at that path or id · 6 too large or corrupt",
-        "  7 OCR failed on some pages: each carries a [page N: OCR failed] line in the document and",
-        "    is listed in failed_pages; re-run with --no-ocr to read those pages yourself.",
         "",
         "Example:",
         "  oled ingest prepare statement.pdf --json",

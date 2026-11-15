@@ -1,7 +1,7 @@
 import { chmodSync } from "node:fs";
 
 /**
- * Owner-only mode on files holding financial data and secrets; a refusal throws.
+ * Owner-only mode on files holding financial or personal data; a refusal throws.
  * No-op on Windows, and for a sidecar that never materialized.
  */
 export function chmod600(path: string): void {

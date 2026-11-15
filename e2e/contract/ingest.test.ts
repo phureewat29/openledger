@@ -213,10 +213,7 @@ describe("every ingest-lane line matches its COMMAND_CONTRACTS schema (dist subp
     const [prepared] = await contractRun("ingest prepare", [
       "ingest", "prepare", "bank/statement.pdf",
     ]);
-    expect(prepared).toMatchObject({ kind: "text", source: "text-layer", page_count: 1 });
-    // The two conditional keys stay absent off the OCR route.
-    expect(prepared).not.toHaveProperty("ocr_model");
-    expect(prepared).not.toHaveProperty("failed_pages");
+    expect(prepared).toMatchObject({ source: "text-layer", text_layer: "complete", page_count: 1 });
     statementFileId = prepared.file_id;
 
     const [second] = await contractRun("ingest prepare", ["ingest", "prepare", "bank/statement-2.pdf"]);

@@ -16,7 +16,7 @@ describe("packaged @aquartier/openledger/contract (dist)", () => {
 
   it("the built module exposes CONTRACT_VERSION and the full EXIT table", async () => {
     const mod = await import(pathToFileURL(contractEntry).href);
-    expect(mod.CONTRACT_VERSION).toBe(1);
+    expect(mod.CONTRACT_VERSION).toBe(2);
     expect(mod.EXIT.BUSY).toBe(8);
   });
 });

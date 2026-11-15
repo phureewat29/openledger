@@ -24,14 +24,8 @@ import {
 } from "../../fixtures/sandbox.js";
 import { createTestSandbox, tempDir } from "../../fixtures/test-cleanup.js";
 import { MAX_SOURCE_BYTES, loadSource } from "../extract/source.js";
-import { encryptedPDF, pdfOf, textPDF } from "../../fixtures/pdf.js";
+import { encryptedPDF, textPDF } from "../../fixtures/pdf.js";
 import { samplePNG } from "../../fixtures/images.js";
-import {
-  DEAD_OCR_BASE_URL,
-  liveOCR,
-  requireLiveOCR,
-  requireLiveOCRSource,
-} from "../../fixtures/ocr.js";
 
 let sandbox: Sandbox;
 let runCLI: CLIRunner;
@@ -654,15 +648,12 @@ describe("ingest prepare (subprocess)", () => {
     expect(prepare.code).toBe(0);
     const obj = JSON.parse(prepare.stdout.trim());
     expect(obj).toMatchObject({
-      kind: "text",
       source: "text-layer",
       text_layer: "complete",
       page_count: 1,
     });
     expect(obj.document).toBe(join(sandbox.cacheDir, obj.file_id, "document.txt"));
     expect(readFileSync(obj.document, "utf8")).toContain("--- page 1 ---");
-    expect(obj.failed_pages).toBeUndefined();
-    expect(obj.ocr_model).toBeUndefined();
   }, 30000);
 
   it("resolves a relative path outside the data dir against the caller's cwd", async () => {
@@ -674,64 +665,17 @@ describe("ingest prepare (subprocess)", () => {
 
     const prepare = await makeRunCLI(box)(["ingest", "prepare", "loose.pdf", "--json"], { cwd: elsewhere });
     expect(prepare.code).toBe(0);
-    expect(parseOne(prepare.stdout)).toMatchObject({ kind: "text", source: "text-layer" });
+    expect(parseOne(prepare.stdout)).toMatchObject({ source: "text-layer" });
   }, 30000);
 
-  it("hands an image back by its own path, writing nothing to the cache", async () => {
-    const path = stage("receipts/receipt.png", samplePNG());
-
-    const { stdout, code } = await runCLI(["ingest", "prepare", path, "--json"]);
-    expect(code).toBe(0);
-    const obj = JSON.parse(stdout.trim());
-    expect(obj).toMatchObject({
-      kind: "images",
-      source: "original",
-      text_layer: "none",
-      page_count: 1,
-      pages: [{ page: 1, path }],
-    });
-    expect(obj.dpi).toBeUndefined();
-    expect(existsSync(join(sandbox.cacheDir, obj.file_id))).toBe(false);
-  }, 30000);
-
-  it("rasterizes to 1-based page PNGs when no OCR server is configured, with or without --rescan", async () => {
-    const scan = stage("statements/scan.pdf", pdfOf(["image", "image"]));
-
-    const { stdout, code } = await runCLI(["ingest", "prepare", scan, "--json"]);
-    expect(code).toBe(0);
-    const obj = JSON.parse(stdout.trim());
-    expect(obj).toMatchObject({
-      kind: "images",
-      source: "raster",
-      text_layer: "none",
-      dpi: 200,
-      page_count: 2,
-    });
-    expect(obj.pages).toEqual([
-      { page: 1, path: join(sandbox.cacheDir, obj.file_id, "p1.png") },
-      { page: 2, path: join(sandbox.cacheDir, obj.file_id, "p2.png") },
-    ]);
-    expect(readFileSync(obj.pages[0].path).subarray(1, 4).toString("latin1")).toBe("PNG");
-
-    const text = stage("statements/two-page.pdf", pdfOf(["text", "text"]));
-    const rescanned = await runCLI(["ingest", "prepare", text, "--rescan", "--no-ocr", "--json"]);
-    expect(rescanned.code).toBe(0);
-    expect(JSON.parse(rescanned.stdout.trim())).toMatchObject({
-      kind: "images",
-      source: "raster",
-      text_layer: "none",
-      page_count: 2,
-    });
-  }, 30000);
-
-  it("maps a refusal to its exit code and hint: unreadable type USAGE, missing path NOT_FOUND", async () => {
-    const path = stage("bucket/notes.docx", Buffer.from("PK"));
+  it("maps a refusal to its exit code and hint: a WebP is USAGE, a missing path NOT_FOUND", async () => {
+    const path = stage("bucket/photo.webp", Buffer.from("RIFF\0\0\0\0WEBP", "latin1"));
 
     const unsupported = await runCLI(["ingest", "prepare", path, "--json"]);
     expect(unsupported.code).toBe(2);
     const { error } = JSON.parse(unsupported.stderr.trim());
     expect(error.code).toBe("E_USAGE");
-    expect(error.hint).toContain(".pdf");
+    expect(error.hint).toBe("supported: .pdf .png .jpg .jpeg, export other formats first");
 
     const missing = await runCLI(["ingest", "prepare", "no/such/statement.pdf", "--json"]);
     expect(missing.code).toBe(5);
@@ -750,7 +694,7 @@ describe("ingest prepare (subprocess)", () => {
     const unlocked = await runCLI(["ingest", "prepare", path, "--password", "secret", "--json"]);
     expect(unlocked.code).toBe(0);
     const obj = JSON.parse(unlocked.stdout.trim());
-    expect(obj).toMatchObject({ kind: "text", source: "text-layer" });
+    expect(obj).toMatchObject({ source: "text-layer" });
     expect(existsSync(join(sandbox.cacheDir, obj.file_id, "document.pdf"))).toBe(false);
   }, 30000);
 
@@ -788,52 +732,6 @@ describe("ingest prepare (subprocess)", () => {
     expect(list.code).toBe(0);
     expect(parseNDJSON(list.stdout).map((r) => r.id)).toContain(txId);
   }, 45000);
-});
-
-describe("ingest prepare against an OCR server (subprocess)", () => {
-  it("exits NOT_READY rather than degrading to images when nothing is listening", async () => {
-    // Two pages, so this doesn't hash-dedup onto the live case's one-page scan.
-    const path = stage("statements/scan-dead.pdf", pdfOf(["image", "image"]));
-    // OCR settings live in the config file; --config scopes them to this run.
-    const deadConfig = join(sandbox.root, "dead-ocr.json");
-    writeFileSync(
-      deadConfig,
-      JSON.stringify({ ocrBaseUrl: DEAD_OCR_BASE_URL, ocrModel: "test-ocr-model" }) + "\n",
-    );
-    const { code, stderr } = await runCLI([
-      "ingest", "prepare", path, "--config", deadConfig, "--json",
-    ]);
-    expect(code).toBe(3);
-    const { error } = JSON.parse(stderr.trim());
-    expect(error.code).toBe("E_NOT_READY");
-    expect(error.hint).toContain("--no-ocr");
-  }, 30000);
-});
-
-describe.skipIf(!liveOCR)("ingest prepare against an OCR server (live OCR endpoint)", () => {
-  it(
-    "reads a scan through the configured endpoint and names the model",
-    async () => {
-      const path = stage("statements/scan-ocr.pdf", pdfOf(["image"]));
-
-      const liveConfig = join(sandbox.root, "live-ocr.json");
-      writeFileSync(liveConfig, JSON.stringify(requireLiveOCRSource()) + "\n");
-      const { stdout, code } = await runCLI([
-        "ingest", "prepare", path, "--config", liveConfig, "--json",
-      ]);
-      expect(code).toBe(0);
-      const obj = JSON.parse(stdout.trim());
-      expect(obj).toMatchObject({
-        kind: "text",
-        source: "ocr",
-        ocr_model: requireLiveOCR().model,
-        page_count: 1,
-        failed_pages: [],
-      });
-      expect(readFileSync(obj.document, "utf8").startsWith("--- page 1 ---\n")).toBe(true);
-    },
-    240_000,
-  );
 });
 
 describe("ingest list (subprocess)", () => {

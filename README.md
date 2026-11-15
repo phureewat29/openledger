@@ -44,17 +44,9 @@ This repo supports [Agent Plugins](https://agent-plugins.org) package, so compli
    npm install -g @aquartier/openledger
    ```
 
-   It runs on macOS, Linux and Windows (x64); on Windows on ARM, use the x64 build of Node.js.
+   It runs on macOS, Linux and Windows (x64); on Windows on ARM, use the x64 build of Node.js. OCR is built in and runs locally on the CPU: it reads printed Thai and English from scans and photos (PDF, PNG, JPEG). It does not read handwriting.
 
-2. Run OCR locally (optional). Download [Typhoon-OCR-1.5-2B](https://huggingface.co/typhoon-ai/typhoon-ocr1.5-2b) in [LM Studio](https://lmstudio.ai) and start its local server, then hand this to your agent:
-
-   ```
-   Configure OpenLedger to use my local OCR at http://localhost:1234/v1 (model typhoon-ocr1.5), then run `oled doctor` to confirm.
-   ```
-
-   Any variant works, 2B or 3B, GGUF or not: the CLI matches `typhoon-ocr1.5` to the id the server serves. Only scanned documents and photos need OCR; PDFs with a text layer are read directly. Recommended if you plan to handle many payment slip photos in your project.
-
-3. Add the skill:
+2. Add the skill:
 
    ```bash
    npx skills add phureewat29/openledger
@@ -75,8 +67,8 @@ Every row becomes a *transaction*: it debits one account and credits another by 
 This is the loop the skill and `oled ingest --help` steer an agent through:
 
 1. **Discover**: `oled ingest list --json` to find new/pending files.
-2. **Prepare**: `oled ingest prepare <path>` registers the file and extracts it. A locked PDF exits 4 until the agent re-runs with `--password <password>`. A PDF carrying its own text layer, or a scan read by a configured OCR endpoint, comes back as a `document` text file. OCR is off until `oled config --ocr-base-url` sets it; with no text layer and no OCR endpoint, it comes back as one image per page.
-3. **Read**: the agent reads what prepare returned, either the text document or the page images, and picks out every transaction row.
+2. **Prepare**: `oled ingest prepare <path>` registers the file and extracts its text into one `document` file. A locked PDF exits 4 until the agent re-runs with `--password <password>`. A PDF with its own text layer is read directly; the built-in OCR reads scans and photos.
+3. **Read**: the agent reads the document and picks out every transaction row.
 4. **Commit**: the agent pipes the transactions it extracted (one debit account, one credit account, one positive amount per row; splits go as a compound `linked` group) into `oled ingest commit`. The harness posts them into the ledger and raises a question for anything it can't resolve confidently (unknown merchant, a lookalike account, uncategorized fallback, cross-currency row).
 5. **Resolve**: the agent (or you) works through `oled questions` for whatever got raised.
 6. **Close**: `oled ingest done <id>` closes the file out, and until it runs the file stays pending. When the statement prints a closing balance, pass it: `oled ingest done <id> --account <card-or-bank> --closing-balance <n>` refuses to close unless that account's balance in the ledger equals the statement's figure, so a misread amount surfaces instead of settling in. A first statement needs its opening balance posted as a row against `<currency>:equity:opening` for the two to agree.
@@ -119,16 +111,15 @@ if (status.contract_version !== CONTRACT_VERSION) {
 }
 ```
 
-`oled status --json` stamps `contract_version` (currently 1), and it bumps whenever any command's JSON shape changes, additive or not. Exit codes are data too: `EXIT.BUSY` (8) means another process held the ledger, and the same command is safe to re-run unless the error carries `details.resume_from_index`. `ingest commit` sets it once rows have posted: re-run only the rows from that index, or rows without a stable id post twice.
+`oled status --json` stamps `contract_version` (currently 2), and it bumps whenever any command's JSON shape changes, additive or not. Exit codes are data too: `EXIT.BUSY` (8) means another process held the ledger, and the same command is safe to re-run unless the error carries `details.resume_from_index`. `ingest commit` sets it once rows have posted: re-run only the rows from that index, or rows without a stable id post twice.
 
 ## Security & Privacy
 
 - All financial data stays on your machine; default `~/.oled/db.sqlite`. Both it and the config file are written with `0600` permissions.
-- The config file (default `~/.oled/config.json`) holds one secret at most, the OCR endpoint API key; `oled config` surfaces a fingerprint of it, never the plaintext.
 - Statement passwords are never stored. The caller keeps them and passes one per run with `--password`, a command-line argument, so it shows up in shell history and process listings.
-- A decrypted statement stays in memory. Only what an agent has to read is written to `cache/`: the extracted text, or the page images.
+- A decrypted statement stays in memory. Only the extracted text, which an agent has to read, is written to `cache/`.
 - Read commands mask PII in free-text fields by default; `--no-redact` returns verbatim text.
-- No telemetry, no analytics. OpenLedger makes no network calls of its own; OCR is the one exception, and it stays off until you set `--ocr-base-url`. Once set, `ingest prepare` sends page images to the endpoint to read, and `doctor` asks it which models it serves.
+- No telemetry, no analytics. OpenLedger makes no network calls of its own.
 
 ## Configuration
 
@@ -139,8 +130,8 @@ OpenLedger reads one JSON config file per run and nothing else: no environment v
   config.json    # all settings (0600 permissions)
   context.md     # persistent freeform context an agent can read (lives beside the config file)
   db.sqlite      # SQLite database (0600 permissions)
-  data/          # drop your statements here, as PDFs or images (subfolders allowed)
-  cache/         # extracted text and page images handed to an agent
+  data/          # drop your statements here, as PDF, PNG or JPEG files (subfolders allowed)
+  cache/         # extracted text handed to an agent
 ```
 
 ### Config Properties
@@ -154,11 +145,8 @@ Each property is set with an `oled config` flag and read back with bare `oled co
 | `displayCurrency` | `--currency` | Display currency; also seeds that ledger's structural accounts | from country |
 | `dbPath` | `--db` | Database file path | `<config dir>/db.sqlite` |
 | `dataDir` | `--data-dir` | Statement drop folder | `<config dir>/data` |
-| `cacheDir` | `--cache-dir` | Extracted text and page image cache | `<config dir>/cache` |
+| `cacheDir` | `--cache-dir` | Extracted text cache | `<config dir>/cache` |
 | `userName` | `--user-name` | Your name; redaction masks it | `User` |
-| `ocrBaseUrl` | `--ocr-base-url` | Base URL of an OpenAI-compatible OCR endpoint, version segment included; OCR is off until this is set | unset (OCR off) |
-| `ocrModel` | `--ocr-model` | Model id, or any fragment of it; matched case-insensitively against the ids the endpoint serves, so `typhoon-ocr1.5` covers all 2b, 3b variant. | `typhoon-ocr1.5` |
-| `ocrApiKey` | `--ocr-api-key` | OCR endpoint API key; shown only as a fingerprint | unset |
 
 [`.env.example`](./.env.example) documents build-and-test variables only; the CLI reads no environment configuration.
 
@@ -175,3 +163,5 @@ npm link # makes 'oled' available globally
 ## License
 
 OpenLedger is licensed under the [MIT License](./LICENSE).
+
+The built-in OCR runs [OpenThai2.0-OCR-Text](https://huggingface.co/iapp/OpenThai2.0-OCR-Text) by iApp, licensed under Apache-2.0. Its notices, and those of the OpenCV, KleidiCV and Clipper code the OCR reproduces, are in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).

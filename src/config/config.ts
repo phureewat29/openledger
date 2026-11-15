@@ -1,8 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { createHash } from "crypto";
 import { dirname, resolve } from "path";
 import { isPlainObject, mapValues, pick, pickBy } from "es-toolkit";
-import { DEFAULT_MODEL_ID } from "../extract/cards/index.js";
 import { expandHome, relativizeHomeIn, resolveFromCwd, type PathRoots } from "../lib/path.js";
 import { decodeUserText } from "../lib/text.js";
 import { chmod600 } from "../lib/perms.js";
@@ -16,9 +14,6 @@ export interface OpenLedgerConfig {
   dataDir: string;
   cacheDir: string;
   userName: string;
-  ocrBaseUrl: string;
-  ocrModel: string;
-  ocrApiKey: string;
 }
 
 /** What one invocation resolved: the config values plus where they came from. */
@@ -57,20 +52,9 @@ const CONFIG_FIELDS: Record<keyof OpenLedgerConfig, { default: (configDir: strin
   dataDir: { default: (configDir) => resolve(configDir, "data") },
   cacheDir: { default: (configDir) => resolve(configDir, "cache") },
   userName: { default: () => "User" },
-  ocrBaseUrl: { default: () => "" },
-  ocrModel: { default: () => DEFAULT_MODEL_ID },
-  ocrApiKey: { default: () => "" },
 };
 
 const CONFIG_KEYS = Object.keys(CONFIG_FIELDS) as readonly (keyof OpenLedgerConfig)[];
-
-/** Fields never echoed in plaintext; `oled config` renders each as `{ set, fingerprint }` via `keyFingerprint()` instead. */
-export const CONFIG_SECRETS = ["ocrApiKey"] as const;
-
-/** Non-reversible, so `oled config` can prove a secret is set without printing it. */
-export function keyFingerprint(key: string): string {
-  return `sha256:${createHash("sha256").update(key).digest("hex").slice(0, 8)}`;
-}
 
 /** Known keys with string values only: drops `undefined` (so a patch can never
  *  delete a persisted key by accident) and hand-edited non-strings alike. */
@@ -78,7 +62,7 @@ function pickConfigFields(obj: Record<string, unknown>): Partial<OpenLedgerConfi
   return pickBy(pick(obj, CONFIG_KEYS), (value) => typeof value === "string") as Partial<OpenLedgerConfig>;
 }
 
-/** V8's message quotes the input around a bad token, and this file holds ocrApiKey. */
+/** V8's message quotes the input around a bad token, and this file holds userName, which redaction masks. */
 const JSON_POSITION_RE = /at position (\d+)/;
 
 /** A fixed message with at most a line and column; never any of the file's text. */
