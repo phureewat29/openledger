@@ -2,7 +2,7 @@ import { ok, type Result } from "../lib/result.js";
 import type { TextLayer } from "../contract/ingest.js";
 import type { Raster } from "../ocr/raster.js";
 import { probePDFPages, type ProbedPage } from "./pdf.js";
-import { decodeImage, renderPDFPage } from "./render.js";
+import { decodeImage, renderPDFPage, type RenderFailure, type RenderOutcome } from "./render.js";
 import { READER, verdictOf, type Reader } from "./route.js";
 import type { SourceKind } from "./source.js";
 
@@ -20,7 +20,7 @@ export interface Extraction {
   pages: TextPage[];
 }
 
-type ExtractFailure = "pdf_unreadable" | "image_unreadable" | "ocr_unavailable";
+type ExtractFailure = "pdf_unreadable" | "image_unreadable" | "too_large" | "ocr_unavailable";
 
 type Failure = { ok: false; reason: ExtractFailure; message: string };
 type PagesOutcome = { ok: true; value: TextPage[] } | Failure;
@@ -41,9 +41,9 @@ interface ExtractOptions {
 /** How each source kind is probed for a text layer and drawn for OCR. */
 interface Kind {
   probe: (bytes: Buffer) => Promise<Result<ProbedPage[]>>;
-  render: (bytes: Buffer, page: number) => Promise<Result<Raster>>;
+  render: (bytes: Buffer, page: number) => Promise<RenderOutcome>;
   /** What bytes mupdf cannot open or draw fail as. */
-  unreadable: Exclude<ExtractFailure, "ocr_unavailable">;
+  unreadable: "pdf_unreadable" | "image_unreadable";
 }
 
 /** An image is one scanned page with no text layer; mupdf would probe it as a resampled fake 96-dpi PDF. */
@@ -52,6 +52,11 @@ const IMAGE_PAGE: ProbedPage = { page: 1, chars: 0, imageCover: 1, text: "" };
 const KINDS: Record<SourceKind, Kind> = {
   pdf: { probe: probePDFPages, render: renderPDFPage, unreadable: "pdf_unreadable" },
   image: { probe: async () => ok([IMAGE_PAGE]), render: decodeImage, unreadable: "image_unreadable" },
+};
+
+const FAILURE_OF: Record<RenderFailure["reason"], (unreadable: Kind["unreadable"]) => ExtractFailure> = {
+  too_large: () => "too_large",
+  unreadable: (unreadable) => unreadable,
 };
 
 function failure(reason: ExtractFailure, message: string): Failure {
@@ -70,7 +75,7 @@ async function readByOCR({ input, pages, read }: ReaderContext): Promise<PagesOu
   const texts: TextPage[] = [];
   for (const { page } of pages) {
     const raster = await render(input.bytes, page);
-    if (!raster.ok) return failure(unreadable, raster.error);
+    if (!raster.ok) return failure(FAILURE_OF[raster.reason](unreadable), raster.message);
     const text = await read(raster.value);
     if (!text.ok) return failure("ocr_unavailable", text.error);
     texts.push({ page, text: text.value });

@@ -123,7 +123,7 @@ export const PREPARE_FAILURES: Record<PrepareFailure, { code: FailureCode; hint:
   kind_mismatch: { code: "USAGE", hint: "the bytes disagree with the extension; re-export or rename" },
   too_large: {
     code: "INVALID",
-    hint: `the limit is ${SIZE_LIMIT}, split the file or export it smaller`,
+    hint: `the file limit is ${SIZE_LIMIT}; split it, or export the image smaller`,
   },
   unreadable: { code: "NOT_FOUND", hint: "check the path and its permissions" },
   pdf_unreadable: { code: "INVALID", hint: "the PDF may be corrupt; re-download or re-export it" },

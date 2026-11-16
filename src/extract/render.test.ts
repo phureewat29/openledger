@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Raster } from "../ocr/raster.js";
-import { decodeImage, renderPDFPage } from "./render.js";
+import { MAX_IMAGE_PIXELS, decodeImage, orient, renderPDFPage } from "./render.js";
+import type { Orientation } from "./exif.js";
 import { LETTER, corruptPDF, pdfOf, scanPDF } from "../../fixtures/pdf.js";
 import { corruptPNG, jpegOf, pngOf, samplePNG } from "../../fixtures/images.js";
 
@@ -58,5 +59,53 @@ describe("decodeImage", () => {
 
   it("returns an error for an image body no decoder accepts", async () => {
     expect(await decodeImage(corruptPNG())).toMatchObject({ ok: false });
+  });
+});
+
+describe("orient", () => {
+  /** 3 wide, 2 tall; each pixel's blue channel is its own index, so a move is visible. Row 0: 0 1 2, row 1: 3 4 5. */
+  const source: Raster = {
+    width: 3,
+    height: 2,
+    channels: 3,
+    data: Uint8Array.from([0, 1, 2, 3, 4, 5].flatMap((n) => [n, 0, 0])),
+  };
+  const indexes = (raster: Raster): number[] => Array.from({ length: raster.width * raster.height }, (_, i) => raster.data[i * 3]);
+
+  const EXPECTED: Record<Orientation, { width: number; height: number; indexes: number[] }> = {
+    1: { width: 3, height: 2, indexes: [0, 1, 2, 3, 4, 5] },
+    2: { width: 3, height: 2, indexes: [2, 1, 0, 5, 4, 3] },
+    3: { width: 3, height: 2, indexes: [5, 4, 3, 2, 1, 0] },
+    4: { width: 3, height: 2, indexes: [3, 4, 5, 0, 1, 2] },
+    5: { width: 2, height: 3, indexes: [0, 3, 1, 4, 2, 5] },
+    6: { width: 2, height: 3, indexes: [3, 0, 4, 1, 5, 2] },
+    7: { width: 2, height: 3, indexes: [5, 2, 4, 1, 3, 0] },
+    8: { width: 2, height: 3, indexes: [2, 5, 1, 4, 0, 3] },
+  };
+
+  it.each(Object.entries(EXPECTED))("orientation %s", (tag, want) => {
+    const turned = orient(source, Number(tag) as Orientation);
+    expect({ width: turned.width, height: turned.height, indexes: indexes(turned) }).toEqual(want);
+  });
+});
+
+describe("decodeImage limits and orientation", () => {
+  it("refuses an image over the pixel cap, naming its size and the limit", async () => {
+    const mupdf = await import("mupdf");
+    const pixmap = new mupdf.Pixmap(mupdf.ColorSpace.DeviceGray, [0, 0, 8000, 6300], false);
+    const png = Buffer.from(pixmap.asPNG());
+    pixmap.destroy();
+    const decoded = await decodeImage(png);
+    expect(decoded).toMatchObject({ ok: false, reason: "too_large" });
+    expect(!decoded.ok && decoded.message).toContain("8000x6300");
+    expect(!decoded.ok && decoded.message).toContain(MAX_IMAGE_PIXELS.toLocaleString("en-US"));
+  });
+
+  it("turns a JPEG tagged orientation 6 upright", async () => {
+    const plain = await jpegOf(8, 4, 200);
+    const app1 = Buffer.from([0xff, 0xe1, 0, 0x22, ...Buffer.from("Exif\0\0"), 0x4d, 0x4d, 0, 0x2a, 0, 0, 0, 8, 0, 1, 1, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0]);
+    const tagged = Buffer.concat([plain.subarray(0, 2), app1, plain.subarray(2)]);
+    const decoded = await decodeImage(tagged);
+    expect(decoded.ok && decoded.value).toMatchObject({ width: 4, height: 8 });
   });
 });
