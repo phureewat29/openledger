@@ -5,7 +5,7 @@ import { f32 } from "../numeric.js";
 import type { Raster } from "../raster.js";
 
 /** Which genericWarp coordinate formula runs: a 2x3 matrix is affine, a 3x3 one perspective. */
-export type Projection = "affine" | "perspective";
+type Projection = "affine" | "perspective";
 
 const BLOCK = 128;
 const BATCH = 8;

@@ -1,6 +1,7 @@
 /** Ported from line_engine.py (Apache-2.0); see THIRD_PARTY_NOTICES.md. */
 
-import { f32, median, norm32 } from "../numeric.js";
+import { median } from "es-toolkit";
+import { f32, norm32 } from "../numeric.js";
 
 /** Four corners as float32 values, x0 y0 x1 y1 x2 y2 x3 y3; ordered quads run top-left, top-right, bottom-right, bottom-left. */
 export type Quad = Float32Array;

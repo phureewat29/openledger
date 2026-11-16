@@ -1,12 +1,12 @@
 /** Ported from line_engine.py (Apache-2.0); see THIRD_PARTY_NOTICES.md. */
 
-import { sum } from "es-toolkit";
+import { median, sum } from "es-toolkit";
 import { cropLine } from "./crop.js";
 import { orientation, quadHeight, quadWidth, type Quad } from "./geometry/quad.js";
 import { rot90 } from "./image/rotate.js";
 import { rotationMatrix, warpAffineCubic } from "./image/warp.js";
 import type { Models } from "./models.js";
-import { codePointLength, mean, median, roundHalfEven } from "./numeric.js";
+import { codePointLength, mean, roundHalfEven } from "./numeric.js";
 import type { PageLines } from "./page-lines.js";
 import type { Raster } from "./raster.js";
 import { recognize } from "./recognize/recognize.js";

@@ -1,5 +1,6 @@
 /** Reproduces _box_score's cv2.fillPoly and cv2.mean as line_engine.py (Apache-2.0) calls them; see THIRD_PARTY_NOTICES.md. */
 
+import { clamp } from "es-toolkit";
 import type { Quad } from "./quad.js";
 
 const SHIFT = 65536;
@@ -213,8 +214,6 @@ function bubbleSort(head: Edge): void {
   }
 }
 
-const clip = (value: number, high: number): number => Math.min(Math.max(value, 0), high);
-
 /**
  * _box_score: the mean of prob over cv2.fillPoly of the box inside its clipped bounding rectangle, summed in double
  * in raster order and scaled by 1/count as cv2.mean does.
@@ -222,10 +221,10 @@ const clip = (value: number, high: number): number => Math.min(Math.max(value, 0
 export function boxScore(prob: Float32Array, width: number, height: number, box: Quad): number {
   const xs = [box[0], box[2], box[4], box[6]];
   const ys = [box[1], box[3], box[5], box[7]];
-  const x0 = clip(Math.floor(Math.min(...xs)), width - 1);
-  const x1 = clip(Math.ceil(Math.max(...xs)), width - 1);
-  const y0 = clip(Math.floor(Math.min(...ys)), height - 1);
-  const y1 = clip(Math.ceil(Math.max(...ys)), height - 1);
+  const x0 = clamp(Math.floor(Math.min(...xs)), 0, width - 1);
+  const x1 = clamp(Math.ceil(Math.max(...xs)), 0, width - 1);
+  const y0 = clamp(Math.floor(Math.min(...ys)), 0, height - 1);
+  const y1 = clamp(Math.ceil(Math.max(...ys)), 0, height - 1);
   const mask: Mask = { cols: x1 - x0 + 1, rows: y1 - y0 + 1, data: new Uint8Array((x1 - x0 + 1) * (y1 - y0 + 1)) };
   fillEdges(mask, collectEdges(mask, xs.map((x) => Math.trunc(x - x0)), ys.map((y) => Math.trunc(y - y0))));
   let sum = 0;

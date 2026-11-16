@@ -3,7 +3,7 @@
 import type { Raster } from "../raster.js";
 
 /** A quarter turn as np.rot90 counts it: 1 counter-clockwise, -1 clockwise, 2 half. */
-export type Turn = 1 | -1 | 2;
+type Turn = 1 | -1 | 2;
 
 type SourceIndex = (x: number, y: number, width: number, height: number) => number;
 

@@ -14,12 +14,11 @@ import { recognize } from "./recognize/recognize.js";
 import { DET, REC } from "./settings.js";
 import { pageSkew } from "./skew.js";
 
-/** A page's line boxes, their raw readings by index, rows of indices in reading order, and the boxes' skew. */
+/** A page's line boxes, their raw readings by index, and rows of indices in reading order. */
 export interface PageLines {
   boxes: Quad[];
   readings: Reading[];
   rows: number[][];
-  angle: number;
 }
 
 /**
@@ -70,11 +69,10 @@ export async function readLines(page: Raster, boxes: readonly Quad[], models: Mo
     finalBoxes.push(...group);
     readings.push(...read);
   });
-  const angle = pageSkew(finalBoxes);
   const rows = readingOrder(
     finalBoxes,
     readings.map((r) => r.text),
-    angle,
+    pageSkew(finalBoxes),
   );
-  return { boxes: finalBoxes, readings, rows, angle };
+  return { boxes: finalBoxes, readings, rows };
 }

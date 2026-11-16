@@ -1,18 +1,19 @@
 /** Ported from line_engine.py (Apache-2.0); see THIRD_PARTY_NOTICES.md. */
 
+import { maxBy, median } from "es-toolkit";
 import { atLeastOne, lineHeight, quadHeight, type Quad } from "./geometry/quad.js";
-import { argmin, f32, mean, median, sortedIndices } from "./numeric.js";
+import { argmin, f32, mean, sortedIndices } from "./numeric.js";
 import { pageSkew } from "./skew.js";
+import { PY_SPACE } from "./thai-norm.js";
 
 /** x min, x max, y min, y max of a box in deskewed coordinates. */
 type Extent = readonly [number, number, number, number];
 type Interval = readonly [number, number];
 
 const DIGITS = new Set("0123456789๐๑๒๓๔๕๖๗๘๙");
-/** Python's str.isspace() set, which its re module's \s also matches. */
-const PY_SPACE_CLASS = "[\\t-\\r\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]";
-const PY_SPACE = new RegExp(PY_SPACE_CLASS, "u");
-const ENUM = new RegExp(`^${PY_SPACE_CLASS}*\\(?([0-9\\u0E50-\\u0E59]{1,4})${PY_SPACE_CLASS}*[.)]`, "u");
+const SPACE_CLASS = `[${PY_SPACE}]`;
+const SPACE = new RegExp(SPACE_CLASS, "u");
+const ENUM = new RegExp(`^${SPACE_CLASS}*\\(?([0-9\\u0E50-\\u0E59]{1,4})${SPACE_CLASS}*[.)]`, "u");
 
 /** Box corners turned by -angle, through a float32 matrix as numpy's 4x2 @ 2x2 does it (fused second product). */
 function deskewedExtents(boxes: readonly Quad[], angle: number): Extent[] {
@@ -40,10 +41,6 @@ function gaps(intervals: readonly Interval[], minGap: number): Interval[] {
     reach = Math.max(reach, hi);
   }
   return out;
-}
-
-function firstWidest<T>(items: readonly T[], width: (item: T) => number): T {
-  return items.reduce((best, item) => (width(item) > width(best) ? item : best));
 }
 
 interface Layout {
@@ -74,7 +71,7 @@ function isProse(col: readonly number[], { ext, hmed, texts }: Layout): boolean 
   const span = Math.max(...col.map((i) => ext[i][1])) - Math.min(...col.map((i) => ext[i][0]));
   if (median(widths) < 7 * hmed) return false;
   if (widths.filter((w) => w >= 0.75 * span).length / widths.length < 0.5) return false;
-  const chars = col.flatMap((i) => Array.from(texts[i])).filter((ch) => !PY_SPACE.test(ch));
+  const chars = col.flatMap((i) => Array.from(texts[i])).filter((ch) => !SPACE.test(ch));
   return !(chars.length > 0 && chars.filter((ch) => DIGITS.has(ch)).length > 0.3 * chars.length);
 }
 
@@ -102,7 +99,7 @@ function blocks(idx: number[], layout: Layout, depth: number): number[][] {
     return prose ? [{ width: g1 - g0, left, right }] : [];
   });
   if (cuts.length > 0) {
-    const { left, right } = firstWidest(cuts, (c) => c.width);
+    const { left, right } = maxBy(cuts, (c) => c.width)!;
     return [...blocks(left, layout, depth + 1), ...blocks(right, layout, depth + 1)];
   }
   const horizontal = gaps(
@@ -110,7 +107,7 @@ function blocks(idx: number[], layout: Layout, depth: number): number[][] {
     0.8 * hmed,
   );
   if (horizontal.length === 0) return [idx];
-  const [g0, g1] = firstWidest(horizontal, ([lo, hi]) => hi - lo);
+  const [g0, g1] = maxBy(horizontal, ([lo, hi]) => hi - lo)!;
   const top = idx.filter((i) => ext[i][3] <= g0);
   const bottom = idx.filter((i) => ext[i][2] >= g1);
   return [...blocks(top, layout, depth + 1), ...blocks(bottom, layout, depth + 1)];

@@ -30,7 +30,7 @@ const MARK_RUN = new RegExp(`[${VOWEL_MARKS}${TONE_MARKS}${NIKHAHIT}]{2,}`, "gu"
 const SARA_AM = /([\u0E48-\u0E4B]?)\u0E4D([\u0E48-\u0E4B]?)\u0E32/gu;
 const SPACES = /[ \t\f\v]+/gu;
 /** Python's str.isspace() set, which str.strip() trims. */
-const PY_SPACE = "\\t-\\r\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+export const PY_SPACE = "\\t-\\r\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
 const EDGE_SPACE = new RegExp(`^[${PY_SPACE}]+|[${PY_SPACE}]+$`, "gu");
 
 const LONE_W = /(?<![A-Za-z])[Ww](?=\.?[\u0E01-\u0E2E\u0E40-\u0E44])/gu;

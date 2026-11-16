@@ -32,11 +32,16 @@ const fixture = (name: string) => new URL(`../../fixtures/ocr/${name}`, import.m
 
 async function readPNG(name: string): Promise<Raster> {
   const mupdf = await import("mupdf");
-  const pixmap = new mupdf.Image(readFileSync(fixture(name))).toPixmap().convertToColorSpace(mupdf.ColorSpace.DeviceBGR, false);
+  const image = new mupdf.Image(readFileSync(fixture(name)));
+  const decoded = image.toPixmap();
+  const pixmap = decoded.convertToColorSpace(mupdf.ColorSpace.DeviceBGR, false);
   const [width, height, stride] = [pixmap.getWidth(), pixmap.getHeight(), pixmap.getStride()];
   const pixels = pixmap.getPixels();
   const data = new Uint8Array(width * height * 3);
   for (let y = 0; y < height; y++) data.set(pixels.subarray(y * stride, y * stride + width * 3), y * width * 3);
+  pixmap.destroy();
+  decoded.destroy();
+  image.destroy();
   return { width, height, channels: 3, data };
 }
 

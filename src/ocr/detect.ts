@@ -1,5 +1,6 @@
 /** Ported from line_engine.py (Apache-2.0); see THIRD_PARTY_NOTICES.md. */
 
+import { clamp } from "es-toolkit";
 import { boxScore } from "./geometry/box-score.js";
 import { boxPoints, minAreaRect } from "./geometry/min-area-rect.js";
 import { findContours } from "./geometry/contours.js";
@@ -13,7 +14,7 @@ import type { Raster } from "./raster.js";
 import { DET, DET_MEAN, DET_STD } from "./settings.js";
 
 /** Where the detector's map sits on the page: the white pad added around it and the page size. */
-export interface DetectionFrame {
+interface DetectionFrame {
   pad: number;
   paddedWidth: number;
   paddedHeight: number;
@@ -22,7 +23,7 @@ export interface DetectionFrame {
 }
 
 /** Per channel, uint8 to the detector's normalised float32, step by step as numpy does it. */
-export const DET_NORMALIZE = DET_MEAN.map((mean, c) =>
+const DET_NORMALIZE = DET_MEAN.map((mean, c) =>
   Float32Array.from({ length: 256 }, (_, v) => f32(f32(f32(v / 255) - f32(mean)) / f32(DET_STD[c]))),
 );
 
@@ -49,7 +50,7 @@ export function detectorGeometry(pageWidth: number, pageHeight: number): Detecti
  * The page padded white so text touching an edge still closes a region, then its long side scaled to the
  * detector's working size in both directions, as a 1x3xHxW tensor.
  */
-export function detectorInput(page: Raster): { input: Tensor; frame: DetectionFrame } {
+function detectorInput(page: Raster): { input: Tensor; frame: DetectionFrame } {
   const { width, height, ...frame } = detectorGeometry(page.width, page.height);
   const resized = resizeLinear(padWhite(page, frame.pad), width, height);
   const plane = resized.width * resized.height;
@@ -62,14 +63,12 @@ export function detectorInput(page: Raster): { input: Tensor; frame: DetectionFr
 
 const shortSide = (rect: RotatedRect): number => Math.min(rect.width, rect.height);
 
-const clip = (value: number, high: number): number => Math.min(Math.max(value, 0), high);
-
 /** Map-space box to page space, in float32 as numpy computes it; sx and sy are already float32. */
 export function toPage(box: Quad, frame: DetectionFrame, sx: number, sy: number): Quad {
   const out = new Float32Array(8);
   for (let i = 0; i < 8; i += 2) {
-    out[i] = clip(f32(f32(box[i] * sx) - frame.pad), frame.pageWidth - 1);
-    out[i + 1] = clip(f32(f32(box[i + 1] * sy) - frame.pad), frame.pageHeight - 1);
+    out[i] = clamp(f32(f32(box[i] * sx) - frame.pad), 0, frame.pageWidth - 1);
+    out[i + 1] = clamp(f32(f32(box[i + 1] * sy) - frame.pad), 0, frame.pageHeight - 1);
   }
   return out;
 }
@@ -80,7 +79,7 @@ const spread = (box: Quad, axis: 0 | 1): number => {
 };
 
 /** DB postprocessing: threshold the probability map, box each region, keep confident ones, grow them back to full lines. */
-export function boxesFromMap(prob: Tensor, frame: DetectionFrame): Quad[] {
+function boxesFromMap(prob: Tensor, frame: DetectionFrame): Quad[] {
   const [height, width] = prob.dims.slice(-2);
   const threshold = f32(DET.thresh);
   const bitmap = new Uint8Array(prob.data.length);

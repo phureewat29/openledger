@@ -1,5 +1,7 @@
 /** Ported from line_engine.py (Apache-2.0); see THIRD_PARTY_NOTICES.md. */
 
+import { range } from "es-toolkit";
+
 export const f32 = Math.fround;
 
 /** Python's round(): halves go to the even neighbour. */
@@ -39,13 +41,6 @@ function pairwiseSum(values: readonly number[], start: number, n: number): numbe
 /** np.mean on a list of Python floats. */
 export const mean = (values: readonly number[]): number => (0 + pairwiseSum(values, 0, values.length)) / values.length;
 
-/** np.median on a list of Python floats. */
-export function median(values: readonly number[]): number {
-  const sorted = values.toSorted((a, b) => a - b);
-  const mid = sorted.length >> 1;
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
 /** Index of the first smallest value, as np.argmin. */
 export function argmin(values: readonly number[]): number {
   let best = 0;
@@ -54,8 +49,7 @@ export function argmin(values: readonly number[]): number {
 }
 
 /** Python's sorted(range(n), key=...): stable, ascending. */
-export const sortedIndices = (n: number, key: (i: number) => number): number[] =>
-  Array.from({ length: n }, (_, i) => i).sort((a, b) => key(a) - key(b));
+export const sortedIndices = (n: number, key: (i: number) => number): number[] => range(n).sort((a, b) => key(a) - key(b));
 
 /** Python's len(): code points, not UTF-16 units. */
 export const codePointLength = (text: string): number => Array.from(text).length;

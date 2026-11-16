@@ -16,7 +16,7 @@ export const recognizerWidth = (width: number, height: number): number =>
 export const toRecognizerHeight = (crop: Raster): Raster =>
   prepareCrop(resizeLinear(crop, recognizerWidth(crop.width, crop.height), REC.height));
 
-export interface BatchPlan {
+interface BatchPlan {
   indices: number[];
   width: number;
 }
