@@ -5,7 +5,7 @@ import { join, resolve } from "path";
 import type { LoadedConfig, ResolvedConfig } from "../../config/config.js";
 import { listMissingTables } from "../../db/schema.js";
 import { inspectConfig, NO_LEDGER, probeLedger, type LedgerProbe } from "../../config/cli.js";
-import { getVersion } from "../../lib/version.js";
+import { getVersion, INSTALL_COMMAND, PACKAGE_ROOT } from "../../lib/version.js";
 import { homeRelative, relativizeHomeIn, type PathRoots } from "../../lib/path.js";
 import { installedVersion, SKILL_DIRS } from "../../setup/install.js";
 import { RM_OPTS } from "../../files/files.js";
@@ -73,14 +73,11 @@ function schemaTablesCheck(ledger: LedgerProbe): Check {
  * Not a HARD_CHECK, like mupdf_loads: a broken engine blocks only pages with no text
  * layer, and `ingest prepare` refuses those itself, while the ledger stays usable.
  */
-export function ocrEngineCheck(engine: Result<unknown>): Check {
+export function ocrEngineCheck(engine: Result<unknown>, home: string): Check {
   const name = "ocr_engine";
   if (engine.ok) return { name, ok: true };
-  return {
-    name,
-    ok: false,
-    detail: `${engine.error}: reinstall the CLI (npm install -g @aquartier/openledger)`,
-  };
+  const shown = relativizeHomeIn(engine.error, PACKAGE_ROOT, home);
+  return { name, ok: false, detail: `${shown}: reinstall the CLI (${INSTALL_COMMAND})` };
 }
 
 /** Informational only; never a HARD_CHECK. */
@@ -102,7 +99,7 @@ function skillPackCheck({ cwd, home }: PathRoots): Check {
     return {
       name,
       ok: false,
-      detail: `installed ${found.version} (${found.where}), cli ${cli}: refresh the skill (oled setup --force) or upgrade the CLI (npm install -g @aquartier/openledger@latest)`,
+      detail: `installed ${found.version} (${found.where}), cli ${cli}: refresh the skill (oled setup --force) or upgrade the CLI (${INSTALL_COMMAND}@latest)`,
     };
   }
   return { name, ok: true, detail: `installed ${found.version} (${found.where})` };
@@ -120,7 +117,7 @@ async function runChecks(loaded: LoadedConfig, roots: PathRoots): Promise<Check[
     checkFrom("mupdf_loads", await tryExecute(loadMupdf)),
     schemaTablesCheck(ledger),
     skillPackCheck(roots),
-    ocrEngineCheck(await loadEngine()),
+    ocrEngineCheck(await loadEngine(), cfg.home),
   ];
 }
 

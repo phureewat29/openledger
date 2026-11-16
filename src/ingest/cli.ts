@@ -12,6 +12,8 @@ import { DIRECTION_RULES } from "../transactions/posting.js";
 import { currencyOf } from "../lib/ids.js";
 import { formatFixed, fromMinorUnits, toMinorUnits } from "../lib/money.js";
 import { tryExecute } from "../lib/result.js";
+import { relativizeHomeIn } from "../lib/path.js";
+import { INSTALL_COMMAND, PACKAGE_ROOT } from "../lib/version.js";
 import { parseInput, num, str } from "../lib/validate.js";
 import * as z from "zod";
 // source.ts avoids mupdf/libsql, so this import is safe on the startup path.
@@ -130,7 +132,7 @@ export const PREPARE_FAILURES: Record<PrepareFailure, { code: FailureCode; hint:
   wrong_password: { code: "INPUT_REQUIRED", hint: PASSWORD_HINT },
   ocr_unavailable: {
     code: "NOT_READY",
-    hint: "the built-in OCR did not load, so the install is broken: reinstall with `npm install -g @aquartier/openledger`",
+    hint: `the built-in OCR did not load, so the install is broken: reinstall with \`${INSTALL_COMMAND}\``,
   },
 };
 
@@ -156,7 +158,7 @@ async function prepareIngest(ctx: Invocation, pathOrId: string, opts: PrepareIng
   });
   if (!result.ok) {
     const { code, hint } = PREPARE_FAILURES[result.reason];
-    fail(code, result.message, { hint });
+    fail(code, relativizeHomeIn(result.message, PACKAGE_ROOT, ctx.roots.home), { hint });
   }
   ctx.out.emitObject(toPrepareResult(result));
 }
