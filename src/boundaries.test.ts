@@ -13,7 +13,11 @@ const isBoundary = (path: string): boolean => /(^|-)cli\.ts$/.test(basename(path
 const isStore = (path: string): boolean => /(^|-)queries\.ts$/.test(basename(path));
 
 const SHELL = ["cli/output.ts", "cli/errors.ts", "cli/input.ts", "cli/format.ts"];
-const NATIVE_LOADER: Record<string, string> = { libsql: "db/connection.ts", mupdf: "extract/pdf.ts" };
+const NATIVE_LOADER: Record<string, string> = {
+  libsql: "db/connection.ts",
+  mupdf: "extract/pdf.ts",
+  "onnxruntime-web": "ocr/session.ts",
+};
 const LIB_PACKAGES = new Set(["es-toolkit", "zod"]);
 
 type Rule = (file: SourceFile, ref: ImportRef, target: string | null) => boolean;
@@ -99,7 +103,7 @@ describe("module boundaries", () => {
     ).toEqual([]);
   });
 
-  it("libsql and mupdf load only through their one dynamic import", () => {
+  it("libsql, mupdf and onnxruntime-web load only through their one dynamic import", () => {
     expect(
       violations(PRODUCTION, (file, ref) => {
         const loader = NATIVE_LOADER[ref.specifier];
