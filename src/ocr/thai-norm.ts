@@ -1,4 +1,4 @@
-/** Ported from thai_norm.py and line_engine.py (Apache-2.0); see THIRD_PARTY_NOTICES.md. */
+/** Ported from thai_norm.py and line_engine.py (Apache-2.0). */
 
 /** Legacy Thai glyph variants (shifted or lowered marks, tail-less ฐ ญ) to standard code points. */
 const PUA: Readonly<Record<number, number>> = {

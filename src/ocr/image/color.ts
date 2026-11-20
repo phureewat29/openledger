@@ -1,4 +1,4 @@
-/** Reproduces cv2.cvtColor BGR2GRAY and GRAY2BGR as line_engine.py (Apache-2.0) calls them; see THIRD_PARTY_NOTICES.md. */
+/** Reproduces cv2.cvtColor BGR2GRAY and GRAY2BGR as line_engine.py (Apache-2.0) calls them. */
 
 import type { Raster } from "../raster.js";
 

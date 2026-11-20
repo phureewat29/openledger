@@ -1,4 +1,4 @@
-/** Reproduces cv2.convexHull as cv2.minAreaRect calls it from line_engine.py (Apache-2.0); see THIRD_PARTY_NOTICES.md. */
+/** Reproduces cv2.convexHull as cv2.minAreaRect calls it from line_engine.py (Apache-2.0). */
 
 const f32 = Math.fround;
 

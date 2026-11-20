@@ -1,4 +1,4 @@
-/** Reproduces cv2.resize INTER_LINEAR on OpenCV's own uint8 code as line_engine.py (Apache-2.0) calls it; see THIRD_PARTY_NOTICES.md. */
+/** Reproduces cv2.resize INTER_LINEAR on OpenCV's own uint8 code as line_engine.py (Apache-2.0) calls it. */
 
 import { f32, roundHalfEven } from "../numeric.js";
 import type { Raster } from "../raster.js";

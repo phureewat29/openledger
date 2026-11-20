@@ -1,4 +1,4 @@
-/** Ported from line_engine.py (Apache-2.0); see THIRD_PARTY_NOTICES.md. */
+/** Ported from line_engine.py (Apache-2.0). */
 
 import { maxBy, range } from "es-toolkit";
 import { shouldCutBetween, type Extent, type Layout } from "./columns.js";

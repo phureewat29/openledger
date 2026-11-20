@@ -1,4 +1,4 @@
-/** Reproduces the fused multiply-adds cv2 and pyclipper compile to on arm64, as line_engine.py (Apache-2.0) calls them; see THIRD_PARTY_NOTICES.md. */
+/** Reproduces the fused multiply-adds cv2 and pyclipper compile to on arm64, as line_engine.py (Apache-2.0) calls them. */
 
 /**
  * Float32 a*b + c with one rounding, as arm64's fmadd on single precision. a, b and c must hold float32 values,

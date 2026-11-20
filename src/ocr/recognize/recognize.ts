@@ -1,4 +1,4 @@
-/** Ported from line_engine.py (Apache-2.0); see THIRD_PARTY_NOTICES.md. */
+/** Ported from line_engine.py (Apache-2.0). */
 
 import type { Models, Network } from "../models.js";
 import type { Raster } from "../raster.js";

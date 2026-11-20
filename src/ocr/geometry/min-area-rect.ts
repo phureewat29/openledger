@@ -1,4 +1,4 @@
-/** Reproduces cv2.minAreaRect and cv2.boxPoints as line_engine.py (Apache-2.0) calls them; see THIRD_PARTY_NOTICES.md. */
+/** Reproduces cv2.minAreaRect and cv2.boxPoints as line_engine.py (Apache-2.0) calls them. */
 
 import { fma32 } from "./fma.js";
 import { convexHull } from "./hull.js";

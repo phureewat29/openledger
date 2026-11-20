@@ -1,4 +1,4 @@
-/** Reproduces _box_score's cv2.fillPoly and cv2.mean as line_engine.py (Apache-2.0) calls them; see THIRD_PARTY_NOTICES.md. */
+/** Reproduces _box_score's cv2.fillPoly and cv2.mean as line_engine.py (Apache-2.0) calls them. */
 
 import { clamp } from "es-toolkit";
 import type { Quad } from "./quad.js";

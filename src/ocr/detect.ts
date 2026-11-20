@@ -1,4 +1,4 @@
-/** Ported from line_engine.py (Apache-2.0); see THIRD_PARTY_NOTICES.md. */
+/** Ported from line_engine.py (Apache-2.0). */
 
 import { clamp } from "es-toolkit";
 import { boxScore } from "./geometry/box-score.js";

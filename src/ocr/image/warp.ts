@@ -1,4 +1,4 @@
-/** Reproduces cv2.getPerspectiveTransform, getRotationMatrix2D, warpPerspective and warpAffine as line_engine.py (Apache-2.0) calls them; see THIRD_PARTY_NOTICES.md. */
+/** Reproduces cv2.getPerspectiveTransform, getRotationMatrix2D, warpPerspective and warpAffine as line_engine.py (Apache-2.0) calls them. */
 
 import { fma64 } from "../geometry/fma.js";
 import type { Quad } from "../geometry/quad.js";

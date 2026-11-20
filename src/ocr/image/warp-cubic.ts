@@ -1,4 +1,4 @@
-/** Reproduces cv2's INTER_CUBIC warp kernel on 8-bit images as line_engine.py (Apache-2.0) calls it; see THIRD_PARTY_NOTICES.md. */
+/** Reproduces cv2's INTER_CUBIC warp kernel on 8-bit images as line_engine.py (Apache-2.0) calls it. */
 
 import { fma32 } from "../geometry/fma.js";
 import { f32 } from "../numeric.js";

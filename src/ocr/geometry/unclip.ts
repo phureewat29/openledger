@@ -1,4 +1,4 @@
-/** Reproduces _unclip (pyclipper's round-joined offset of a box) as line_engine.py (Apache-2.0) calls it; see THIRD_PARTY_NOTICES.md. */
+/** Reproduces _unclip (pyclipper's round-joined offset of a box) as line_engine.py (Apache-2.0) calls it. */
 
 import { fma32, fma64 } from "./fma.js";
 import type { Quad } from "./quad.js";

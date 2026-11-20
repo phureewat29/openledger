@@ -1,4 +1,4 @@
-/** Reproduces np.rot90 as line_engine.py (Apache-2.0) calls it; see THIRD_PARTY_NOTICES.md. */
+/** Reproduces np.rot90 as line_engine.py (Apache-2.0) calls it. */
 
 import type { Raster } from "../raster.js";
 

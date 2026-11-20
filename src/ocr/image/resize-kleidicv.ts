@@ -1,4 +1,4 @@
-/** Reproduces cv2.resize INTER_LINEAR through KleidiCV's NEON generic u8 kernel as line_engine.py (Apache-2.0) calls it; see THIRD_PARTY_NOTICES.md. */
+/** Reproduces cv2.resize INTER_LINEAR through KleidiCV's NEON generic u8 kernel as line_engine.py (Apache-2.0) calls it. */
 
 import type { Raster } from "../raster.js";
 

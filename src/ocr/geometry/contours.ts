@@ -1,4 +1,4 @@
-/** Reproduces cv2.findContours(RETR_LIST, CHAIN_APPROX_SIMPLE) as line_engine.py (Apache-2.0) calls it; see THIRD_PARTY_NOTICES.md. */
+/** Reproduces cv2.findContours(RETR_LIST, CHAIN_APPROX_SIMPLE) as line_engine.py (Apache-2.0) calls it. */
 
 /** Marks in cv2's signed 8-bit scan image: a traced border pixel, and one whose right side lies outside its region. */
 const NEW = 2;

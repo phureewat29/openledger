@@ -1,4 +1,4 @@
-/** Ported from line_engine.py (Apache-2.0); see THIRD_PARTY_NOTICES.md. */
+/** Ported from line_engine.py (Apache-2.0). */
 
 import { extent, lineHeight, quadHeight, type Quad } from "./geometry/quad.js";
 import { codePointLength, f32 } from "./numeric.js";
