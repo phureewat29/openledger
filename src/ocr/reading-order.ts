@@ -1,19 +1,12 @@
 /** Ported from line_engine.py (Apache-2.0); see THIRD_PARTY_NOTICES.md. */
 
-import { maxBy, median } from "es-toolkit";
-import { atLeastOne, lineHeight, quadHeight, type Quad } from "./geometry/quad.js";
+import { maxBy, range } from "es-toolkit";
+import { shouldCutBetween, type Extent, type Layout } from "./columns.js";
+import { atLeastOne, extent, lineHeight, quadHeight, type Quad } from "./geometry/quad.js";
 import { argmin, f32, mean, sortedIndices } from "./numeric.js";
 import { pageSkew } from "./skew.js";
-import { PY_SPACE } from "./thai-norm.js";
 
-/** x min, x max, y min, y max of a box in deskewed coordinates. */
-type Extent = readonly [number, number, number, number];
 type Interval = readonly [number, number];
-
-const DIGITS = new Set("0123456789๐๑๒๓๔๕๖๗๘๙");
-const SPACE_CLASS = `[${PY_SPACE}]`;
-const SPACE = new RegExp(SPACE_CLASS, "u");
-const ENUM = new RegExp(`^${SPACE_CLASS}*\\(?([0-9\\u0E50-\\u0E59]{1,4})${SPACE_CLASS}*[.)]`, "u");
 
 /** Box corners turned by -angle, through a float32 matrix as numpy's 4x2 @ 2x2 does it (fused second product). */
 function deskewedExtents(boxes: readonly Quad[], angle: number): Extent[] {
@@ -43,12 +36,6 @@ function gaps(intervals: readonly Interval[], minGap: number): Interval[] {
   return out;
 }
 
-interface Layout {
-  ext: readonly Extent[];
-  hmed: number;
-  texts: readonly string[];
-}
-
 const xIntervals = (idx: readonly number[], ext: readonly Extent[]): Interval[] => idx.map((i) => [ext[i][0], ext[i][1]]);
 
 /** The column of one side that touches the gutter; a side can hold several. */
@@ -59,44 +46,15 @@ function nextToGutter(side: number[], layout: Layout, gutterOnRight: boolean): n
   return gutterOnRight ? side.filter((i) => layout.ext[i][0] >= g[g.length - 1][1]) : side.filter((i) => layout.ext[i][1] <= g[0][0]);
 }
 
-const enumNumber = (text: string): number | undefined => {
-  const m = text.match(ENUM);
-  return m ? Number(Array.from(m[1], (d) => (d >= "๐" ? String(d.charCodeAt(0) - 0x0e50) : d)).join("")) : undefined;
-};
-
-/** A column of prose: enough long lines, most filling the column width, few digits. */
-function isProse(col: readonly number[], { ext, hmed, texts }: Layout): boolean {
-  if (col.length < 12) return false;
-  const widths = col.map((i) => ext[i][1] - ext[i][0]);
-  const span = Math.max(...col.map((i) => ext[i][1])) - Math.min(...col.map((i) => ext[i][0]));
-  if (median(widths) < 7 * hmed) return false;
-  if (widths.filter((w) => w >= 0.75 * span).length / widths.length < 0.5) return false;
-  const chars = col.flatMap((i) => Array.from(texts[i])).filter((ch) => !SPACE.test(ch));
-  return !(chars.length > 0 && chars.filter((ch) => DIGITS.has(ch)).length > 0.3 * chars.length);
-}
-
-/** Most facing lines numbered n on the left and n+1 on the right: a list that reads across. */
-function numberedAcross(lcol: readonly number[], rcol: readonly number[], { ext, hmed, texts }: Layout): boolean {
-  const middle = (i: number) => (ext[i][2] + ext[i][3]) / 2;
-  const pairs = lcol.filter((i) => {
-    const n = enumNumber(texts[i]);
-    if (n === undefined) return false;
-    return rcol.some((j) => enumNumber(texts[j]) === n + 1 && Math.abs(middle(j) - middle(i)) <= 0.5 * hmed);
-  }).length;
-  return pairs >= 0.5 * Math.min(lcol.length, rcol.length);
-}
-
-/** Recursive XY-cut: a vertical cut only between two prose columns, else the widest horizontal gap. */
+/** Recursive XY-cut: a vertical cut only between two prose columns, else the widest horizontal gap, else banded columns. */
 function blocks(idx: number[], layout: Layout, depth: number): number[][] {
   if (idx.length < 6 || depth > 12) return [idx];
   const { ext, hmed } = layout;
   const cuts = gaps(xIntervals(idx, ext), 0.8 * hmed).flatMap(([g0, g1]) => {
     const left = idx.filter((i) => ext[i][1] <= g0);
     const right = idx.filter((i) => ext[i][0] >= g1);
-    const lcol = nextToGutter(left, layout, true);
-    const rcol = nextToGutter(right, layout, false);
-    const prose = isProse(lcol, layout) && isProse(rcol, layout) && !numberedAcross(lcol, rcol, layout);
-    return prose ? [{ width: g1 - g0, left, right }] : [];
+    const cut = shouldCutBetween(nextToGutter(left, layout, true), nextToGutter(right, layout, false), layout);
+    return cut ? [{ width: g1 - g0, left, right }] : [];
   });
   if (cuts.length > 0) {
     const { left, right } = maxBy(cuts, (c) => c.width)!;
@@ -106,11 +64,74 @@ function blocks(idx: number[], layout: Layout, depth: number): number[][] {
     idx.map((i): Interval => [ext[i][2], ext[i][3]]),
     0.8 * hmed,
   );
-  if (horizontal.length === 0) return [idx];
+  if (horizontal.length === 0) return bandedColumns(idx, layout, depth) ?? [idx];
   const [g0, g1] = maxBy(horizontal, ([lo, hi]) => hi - lo)!;
   const top = idx.filter((i) => ext[i][3] <= g0);
   const bottom = idx.filter((i) => ext[i][2] >= g1);
   return [...blocks(top, layout, depth + 1), ...blocks(bottom, layout, depth + 1)];
+}
+
+/** Integer x bands in the middle 70 % of the block, at least 0.4 line heights wide, that at most 3 % of `rest` (or one line) crosses. */
+function gutterRuns(rest: readonly number[], { ext, hmed }: Layout, x0: number, x1: number): Interval[] {
+  const lo = Math.trunc(x0 + 0.15 * (x1 - x0));
+  const n = Math.trunc(0.7 * (x1 - x0)) + 1;
+  const cover = new Int32Array(n);
+  for (const i of rest) {
+    const end = Math.min(n, Math.ceil(ext[i][1]) - lo);
+    for (let x = Math.max(0, Math.trunc(ext[i][0]) - lo); x < end; x++) cover[x]++;
+  }
+  const limit = Math.max(1, Math.trunc(0.03 * rest.length));
+  const runs: Interval[] = [];
+  let start: number | undefined;
+  for (let x = 0; x <= n; x++) {
+    if (x < n && cover[x] <= limit) {
+      start ??= x;
+      continue;
+    }
+    if (start === undefined) continue;
+    if (x - start >= 0.4 * hmed) runs.push([lo + start, lo + x]);
+    start = undefined;
+  }
+  return runs;
+}
+
+/**
+ * Prose columns that a few full-width lines cross (a title over both, a footer, a caption between sections), where
+ * neither cut applies. The wide lines and those crossing the whole gutter cut the block into bands; each band is read
+ * left of the gutter, then right of it, then the crossing line under it. Undefined when the block has no such gutter.
+ */
+export function bandedColumns(idx: readonly number[], layout: Layout, depth: number): number[][] | undefined {
+  const { ext } = layout;
+  const x0 = Math.min(...idx.map((i) => ext[i][0]));
+  const x1 = Math.max(...idx.map((i) => ext[i][1]));
+  const wide = idx.filter((i) => ext[i][1] - ext[i][0] >= 0.55 * (x1 - x0));
+  if (wide.length > 0.15 * idx.length) return undefined;
+  const wideSet = new Set(wide);
+  const rest = idx.filter((i) => !wideSet.has(i));
+  if (rest.length < 24) return undefined;
+  const runs = gutterRuns(rest, layout, x0, x1);
+  const columnGutters = runs.filter(([g0, g1], k) => {
+    const lcol = rest.filter((i) => ext[i][1] <= g0 && (k === 0 || ext[i][0] >= runs[k - 1][1]));
+    const rcol = rest.filter((i) => ext[i][0] >= g1 && (k === runs.length - 1 || ext[i][1] <= runs[k + 1][0]));
+    return shouldCutBetween(lcol, rcol, layout);
+  });
+  const gutter = maxBy(columnGutters, ([g0, g1]) => g1 - g0);
+  if (!gutter) return undefined;
+  const [g0, g1] = gutter;
+  const centreX = (g0 + g1) / 2;
+  const cy = (i: number) => (ext[i][2] + ext[i][3]) / 2;
+  const cx = (i: number) => (ext[i][0] + ext[i][1]) / 2;
+  const crossing = rest.filter((i) => ext[i][0] < g0 && ext[i][1] > g1);
+  const crossingSet = new Set(crossing);
+  const seps = [...wide, ...crossing].toSorted((p, q) => cy(p) - cy(q));
+  return range(seps.length + 1).flatMap((b) => {
+    const lo = b > 0 ? cy(seps[b - 1]) : -Infinity;
+    const hi = b < seps.length ? cy(seps[b]) : Infinity;
+    const band = rest.filter((i) => !crossingSet.has(i) && lo < cy(i) && cy(i) <= hi);
+    const sides = [band.filter((i) => cx(i) < centreX), band.filter((i) => cx(i) >= centreX)];
+    const read = sides.filter((side) => side.length > 0).flatMap((side) => blocks(side, layout, depth + 1));
+    return b < seps.length ? [...read, [seps[b]]] : read;
+  });
 }
 
 /** Rows of one block: full-height lines group by their row's running centre; small boxes then join the nearest row. */
@@ -140,16 +161,19 @@ function blockRows(blk: readonly number[], cy: readonly number[], rx: readonly n
 
 /**
  * Rows top to bottom, each left to right, in deskewed coordinates, block by block so text columns read one after
- * the other. `texts` (the raw line readings) lets the column test reject number columns.
+ * the other. `texts` (the raw line readings) lets the column test reject number columns and lists. On a tilted page
+ * the blocks come from the unrotated boxes instead when those find more: a skew estimate a degree or two off lets
+ * line ends cover a narrow gutter. Rows always group in the deskewed frame.
  */
-export function readingOrder(boxes: readonly Quad[], texts: readonly string[], angle = pageSkew(boxes)): number[][] {
+export function readingOrder(boxes: readonly Quad[], texts?: readonly string[], angle = pageSkew(boxes)): number[][] {
   if (boxes.length === 0) return [];
   const ext = deskewedExtents(boxes, angle);
   const hmed = lineHeight(boxes);
-  const layout: Layout = { ext, hmed, texts };
+  const all = boxes.map((_, i) => i);
+  const deskewed = blocks(all, { ext, hmed, texts }, 0);
+  const unrotated = angle !== 0 ? blocks(all, { ext: boxes.map(extent), hmed, texts }, 0) : [];
   const cy = ext.map((e) => (e[2] + e[3]) / 2);
   const rx = ext.map((e) => (e[0] + e[1]) / 2);
   const hs = boxes.map((box) => atLeastOne(quadHeight(box)));
-  const all = boxes.map((_, i) => i);
-  return blocks(all, layout, 0).flatMap((blk) => blockRows(blk, cy, rx, hs, hmed));
+  return (unrotated.length > deskewed.length ? unrotated : deskewed).flatMap((blk) => blockRows(blk, cy, rx, hs, hmed));
 }

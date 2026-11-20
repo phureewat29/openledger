@@ -3,8 +3,8 @@
 import { extent, lineHeight, quadHeight, type Quad } from "./geometry/quad.js";
 import { codePointLength, f32 } from "./numeric.js";
 import { REC } from "./settings.js";
+import { DIGITS, LATIN, MARKS } from "./text-classes.js";
 
-const MARKS = new Set("\u0E31\u0E34\u0E35\u0E36\u0E37\u0E38\u0E39\u0E3A\u0E47\u0E48\u0E49\u0E4A\u0E4B\u0E4C\u0E4D\u0E4E");
 const LEADING = new Set("\u0E40\u0E41\u0E42\u0E43\u0E44");
 const isThai = (ch: string): boolean => ch >= "\u0E00" && ch <= "\u0E7F";
 const isConsonant = (ch: string | undefined): boolean => ch !== undefined && ch >= "\u0E01" && ch <= "\u0E2E";
@@ -57,11 +57,23 @@ export function fragments(boxes: readonly Quad[], texts: readonly string[]): Set
 
 export type DropReason = "empty" | "low_confidence" | "too_short" | "invalid_thai";
 
-/** Why a recognised line is dropped (stamps, seals, signatures, stray marks), or undefined to keep it. */
-export function dropReason(text: string, confidence: number): DropReason | undefined {
+const CELL_CHARS: ReadonlySet<string> = new Set([...DIGITS, ...LATIN]);
+
+/** A table cell's lone "2" or "M" is not junk when its box is tall enough; a floating mark read as "9" or "๘" is shorter. */
+function minChars(text: string, heightRatio: number | undefined): number {
+  const bare = Array.from(text.replaceAll(" ", ""));
+  const cell = bare.length > 0 && bare.every((ch) => CELL_CHARS.has(ch)) && (heightRatio ?? 0) >= REC.minCharsDigitsHeight;
+  return cell ? REC.minCharsDigits : REC.minChars;
+}
+
+/**
+ * Why a canonical, script-fixed reading is dropped (stamps, seals, signatures, stray marks), or undefined to keep it.
+ * `heightRatio` is the box's height over the page's line height; without it the one-character exception never applies.
+ */
+export function dropReason(text: string, confidence: number, heightRatio?: number): DropReason | undefined {
   if (!text) return "empty";
   if (confidence < REC.dropBelow) return "low_confidence";
-  if (nonSpaceLength(text) < REC.minChars) return "too_short";
+  if (nonSpaceLength(text) < minChars(text, heightRatio)) return "too_short";
   if (confidence < REC.junkBelow && invalidShare(text) > REC.junkInvalid) return "invalid_thai";
   return undefined;
 }

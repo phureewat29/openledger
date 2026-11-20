@@ -1,17 +1,18 @@
 /** Ported from line_engine.py (Apache-2.0); see THIRD_PARTY_NOTICES.md. */
 
 import { detectBoxes } from "./detect.js";
-import type { Quad } from "./geometry/quad.js";
+import { heightRatios, type Quad } from "./geometry/quad.js";
 import { toBGR } from "./image/color.js";
 import { rot90 } from "./image/rotate.js";
 import { dropReason, fragments, type DropReason } from "./line-filter.js";
+import { attachMarks } from "./marks.js";
 import type { Models } from "./models.js";
 import { deskew, sidewaysTurn, upsideDown } from "./orientation.js";
 import { readLines, type PageLines } from "./page-lines.js";
 import type { Raster } from "./raster.js";
 import { ORI } from "./settings.js";
 import { pageSkew } from "./skew.js";
-import { canonical, fixScripts } from "./thai-norm.js";
+import { fixDecimalCommas, normalizeReading } from "./thai-norm.js";
 
 type Rotation = 0 | 90 | 180 | 270;
 
@@ -63,19 +64,16 @@ async function upright(start: Raster, models: Models): Promise<Upright> {
   return { page: level, boxes: await detectBoxes(level, models), rotation };
 }
 
-/** Canonical text per kept line, rows joined by spaces and newlines; fragments of marks vanish, junk is dropped with a reason. */
-function filterLines({ boxes, readings, rows }: PageLines): Pick<PageText, "text" | "lines" | "dropped"> {
-  const marks = fragments(
-    boxes,
-    readings.map((r) => r.text),
-  );
+/** Canonical text per kept line, rows joined by spaces and newlines; `skip` boxes (marks) vanish, junk is dropped with a reason. */
+function filterLines({ boxes, readings, rows }: PageLines, skip: ReadonlySet<number>): Pick<PageText, "text" | "lines" | "dropped"> {
+  const ratios = heightRatios(boxes);
   const lines: Line[] = [];
   const dropped: DroppedLine[] = [];
   const rowTexts = rows.flatMap((row) => {
     const kept = row.flatMap((i) => {
-      if (marks.has(i)) return [];
-      const line = { text: fixScripts(canonical(readings[i].text)), confidence: readings[i].confidence };
-      const reason = dropReason(line.text, line.confidence);
+      if (skip.has(i)) return [];
+      const line = { text: fixDecimalCommas(normalizeReading(readings[i].text)), confidence: readings[i].confidence };
+      const reason = dropReason(line.text, line.confidence, ratios[i]);
       if (reason) {
         dropped.push({ ...line, reason });
         return [];
@@ -93,7 +91,9 @@ export async function readPageText(input: Raster, models: Models): Promise<PageT
   const { page, boxes, rotation } = await upright(toBGR(input), models);
   const first = await readLines(page, boxes, models);
   const flip = rotation === 0 && (await upsideDown(page, first, models));
-  const flipped = flip ? rot90(page, 2) : page;
-  const lines = flip ? await readLines(flipped, await detectBoxes(flipped, models), models) : first;
-  return { ...filterLines(lines), rotation: flip ? 180 : rotation };
+  const final = flip ? rot90(page, 2) : page;
+  const read = flip ? await readLines(final, await detectBoxes(final, models), models) : first;
+  const markFragments = fragments(read.boxes, read.readings.map((r) => r.text));
+  const { lines, absorbed } = await attachMarks(final, read, markFragments, models);
+  return { ...filterLines(lines, new Set([...markFragments, ...absorbed])), rotation: flip ? 180 : rotation };
 }

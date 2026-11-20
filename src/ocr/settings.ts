@@ -20,8 +20,30 @@ export const REC = {
   batch: 16,
   dropBelow: 0.8,
   minChars: 2,
+  /** A line of only digits or Latin letters needs this many characters when its box is at least `minCharsDigitsHeight` line heights tall. */
+  minCharsDigits: 1,
+  minCharsDigitsHeight: 0.62,
   junkBelow: 0.9,
   junkInvalid: 0.05,
+} as const;
+
+/** The loopless-font recognizer re-reads a line with at least `minMixed` Latin letters inside Thai words. */
+export const REC2 = {
+  minMixed: 1,
+} as const;
+
+/** Floating marks; distances and heights are in line heights. */
+export const MARKS = {
+  maxGap: 0.35,
+  maxExt: 0.9,
+  maxHeight: 0.9,
+  pageShare: 0.25,
+  pageMin: 3,
+} as const;
+
+/** Two sides of a gap whose lines start alike at least this often, on average, are a list read row by row. */
+export const COLS = {
+  listRep: 0.6,
 } as const;
 
 export const ORI = {

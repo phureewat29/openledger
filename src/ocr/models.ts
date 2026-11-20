@@ -6,12 +6,16 @@ export interface Tensor {
   dims: readonly number[];
 }
 
-/** The two networks as the pipeline sees them; the session module binds them to the runtime. */
+export type Network = (input: Tensor) => Promise<Tensor>;
+
+/** The networks as the pipeline sees them; the session module binds them to the runtime. */
 export interface Models {
   /** 1x3xHxW normalised page in, 1x1xHxW text probability out. */
-  detect(input: Tensor): Promise<Tensor>;
+  detect: Network;
   /** Nx3x48xW normalised lines in, NxTxC class probabilities out. */
-  recognize(input: Tensor): Promise<Tensor>;
+  recognize: Network;
+  /** The same recognizer trained with loopless Thai fonts as well; same input, output and charset. */
+  recognizeLoopless: Network;
   /** CTC classes: blank, the dictionary, then the space the trainer appends. */
   charset: readonly string[];
 }

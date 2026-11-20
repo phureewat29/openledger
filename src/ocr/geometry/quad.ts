@@ -51,6 +51,12 @@ export function lineHeight(boxes: readonly Quad[]): number {
   return median(lines.length >= 3 ? lines : heights);
 }
 
+/** Each box's height over the page's line height. */
+export function heightRatios(boxes: readonly Quad[]): number[] {
+  const hmed = lineHeight(boxes);
+  return boxes.map((box) => quadHeight(box) / hmed);
+}
+
 export type Orientation = 1 | -1 | 0;
 
 /** 1 for a box `ratio` times taller than wide, -1 for one that much wider than tall, 0 otherwise. */

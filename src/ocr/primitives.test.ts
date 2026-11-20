@@ -1,5 +1,7 @@
+import { partition } from "es-toolkit";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { isListPair, isProse, startRep, type Extent } from "./columns.js";
 import { cropLine } from "./crop.js";
 import { detectorGeometry, toPage } from "./detect.js";
 import { lineHeight, orderPoints, orientation, type Quad } from "./geometry/quad.js";
@@ -7,14 +9,17 @@ import { splitLine } from "./gutter-split.js";
 import { padWhite } from "./image/border.js";
 import { bgrToGray, grayToBGR } from "./image/color.js";
 import { rot90 } from "./image/rotate.js";
-import { invalidShare } from "./line-filter.js";
+import { dropReason, invalidShare } from "./line-filter.js";
+import { applyMarks, markCandidates, planMarks } from "./marks.js";
 import { f32, roundHalfEven } from "./numeric.js";
 import type { Raster } from "./raster.js";
-import { readingOrder } from "./reading-order.js";
+import { bandedColumns, readingOrder } from "./reading-order.js";
 import { LINE_NORMALIZE, lineWidth, planBatches, recognizerWidth } from "./recognize/batch.js";
 import { decodeCTC } from "./recognize/ctc.js";
 import { flatten, medianRow } from "./recognize/flatten.js";
 import { pageSkew } from "./skew.js";
+import { baseLetters, digitsOf, mixedLatin } from "./text-classes.js";
+import { fixDecimalCommas } from "./thai-norm.js";
 
 interface NDArray {
   shape: number[];
@@ -146,9 +151,108 @@ describe("page geometry functions", () => {
   it("orders boxes into rows and column blocks", () => {
     const cases = fn("reading_order") as { name: string; boxes: Points[]; angle: number | null; columns: boolean; texts: string[] | null; out: number[][] }[];
     for (const c of cases.filter((k) => k.columns)) {
-      const boxes = c.boxes.map(quad);
-      const texts = c.texts ?? boxes.map(() => "");
-      expect([c.name, c.angle === null ? readingOrder(boxes, texts) : readingOrder(boxes, texts, c.angle)]).toEqual([c.name, c.out]);
+      expect([c.name, readingOrder(c.boxes.map(quad), c.texts ?? undefined, c.angle ?? undefined)]).toEqual([c.name, c.out]);
+    }
+  });
+});
+
+interface Rules {
+  list_rep: number;
+  list_facing: number;
+  list_max_w: number;
+  list_enum: number;
+}
+type Reading = [text: string, confidence: number];
+
+const SHIPPED_RULES: Rules = { list_rep: 0.6, list_facing: 0, list_max_w: 10, list_enum: 0 };
+const SHIPPED_REC = { drop_below: 0.8, min_chars: 2, min_chars_digits: 1, min_chars_digits_height: 0.62, min_chars_latin: true, junk_below: 0.9, junk_invalid: 0.05 };
+const shipped = (actual: Record<string, unknown> | null, expected: Record<string, unknown>) =>
+  actual !== null && Object.entries(expected).every(([key, value]) => actual[key] === value);
+const reading = ([text, confidence]: Reading) => ({ text, confidence });
+
+describe("2.1 runtime functions", () => {
+  it("count mixed Latin, pick digits as str.isdigit, strip marks, fix decimal commas and measure line starts", () => {
+    for (const c of fn("mixed") as { text: string; out: number }[]) expect([c.text, mixedLatin(c.text)]).toEqual([c.text, c.out]);
+    for (const c of fn("digits") as { text: string; out: string }[]) expect([c.text, digitsOf(c.text)]).toEqual([c.text, c.out]);
+    for (const c of fn("base") as { text: string; out: string }[]) expect([c.text, baseLetters(c.text)]).toEqual([c.text, c.out]);
+    const { cases } = fn("decimal_comma") as unknown as { cases: { text: string; out: string }[] };
+    for (const c of cases) expect([c.text, fixDecimalCommas(c.text)]).toEqual([c.text, c.out]);
+    for (const c of fn("start_rep") as { lines: string[]; out: number }[]) expect([c.lines, startRep(c.lines)]).toEqual([c.lines, c.out]);
+  });
+
+  it("drop lines with the shipped filter, the one-character exception gated by box height", () => {
+    const cases = fn("drop_reason") as { text: string; conf: number; hratio: number | null; rec: Record<string, unknown>; out: string | null }[];
+    // A case that changes a rec key exercises a config the bundled model does not ship.
+    const [run, skipped] = partition(cases, (k) => shipped(k.rec, SHIPPED_REC));
+    expect(skipped.map((k) => k.text)).toEqual(["2", "2", "g", "ก"]);
+    for (const c of run) {
+      expect([c.text, c.conf, c.hratio, dropReason(c.text, c.conf, c.hratio ?? undefined) ?? null]).toEqual([c.text, c.conf, c.hratio, c.out]);
+    }
+  });
+
+  it("test prose columns, the list guard and banded columns at the shipped rules", () => {
+    type ColumnCase = { name: string; ext: Extent[]; hmed: number; texts: string[] | null };
+    const layout = (c: ColumnCase) => ({ ext: c.ext, hmed: c.hmed, texts: c.texts ?? undefined });
+    for (const c of fn("prose") as (ColumnCase & { col: number[]; out: boolean })[]) expect([c.name, isProse(c.col, layout(c))]).toEqual([c.name, c.out]);
+    const pairs = fn("list_pair") as (ColumnCase & { lcol: number[]; rcol: number[]; rules: Rules | null; out: boolean })[];
+    // rules=None, list_rep 0, list_facing and list_enum are off in the shipped config, which always runs the list_rep guard.
+    const [run, skipped] = partition(pairs, (k) => shipped(k.rules as Record<string, unknown> | null, { ...SHIPPED_RULES }));
+    expect(skipped.map((k) => k.name)).toEqual([
+      "rules_none",
+      "rules_all_zero",
+      "facing_narrow",
+      "facing_wide",
+      "facing_offset_rows",
+      "enum_numbered_left",
+      "enum_half_numbered",
+      "enum_not_facing",
+    ]);
+    for (const c of run) {
+      expect([c.name, isListPair(c.lcol, c.rcol, layout(c))]).toEqual([c.name, c.out]);
+    }
+    for (const c of fn("banded_columns") as (ColumnCase & { idx: number[]; depth: number; rules: Rules; out: number[][] | null })[]) {
+      expect(c.rules).toEqual(SHIPPED_RULES);
+      expect([c.name, bandedColumns(c.idx, layout(c), c.depth) ?? null]).toEqual([c.name, c.out]);
+    }
+  });
+
+  it("order boxes with the shipped list guard and the unrotated frame", () => {
+    const cases = fn("reading_order_rules") as { name: string; boxes: Points[]; angle: number | null; texts: string[] | null; rules: Rules | null; out: number[][] }[];
+    // rules=None turns the list guard off, which the shipped config never does.
+    const [run, skipped] = partition(cases, (k) => k.rules !== null);
+    expect(skipped.map((k) => k.name)).toEqual(["columns_starting_alike_rules_none", "committee_list_rules_none"]);
+    for (const c of run) {
+      expect(c.rules).toEqual(SHIPPED_RULES);
+      expect([c.name, readingOrder(c.boxes.map(quad), c.texts ?? undefined, c.angle ?? undefined)]).toEqual([c.name, c.out]);
+    }
+  });
+
+  it("attach floating marks: grown boxes, accepted re-reads and absorbed marks", () => {
+    const cases = fn("attach_marks") as {
+      name: string;
+      img_hw: [number, number];
+      boxes: Points[];
+      rec: Reading[];
+      frag: number[];
+      reread: Record<string, Reading>;
+      reread_boxes: Points[];
+      absorbed: number[];
+      boxes_after: Points[];
+      rec_after: Reading[];
+    }[];
+    for (const c of cases) {
+      const lines = { boxes: c.boxes.map(quad), readings: c.rec.map(reading), rows: [] };
+      const page = { height: c.img_hw[0], width: c.img_hw[1] };
+      const plan = planMarks(lines.boxes, markCandidates(lines, new Set(c.frag)), page);
+      const grown = plan?.grown ?? [];
+      expect([c.name, grown.map((g) => Array.from(g.box))]).toEqual([c.name, c.reread_boxes.map((b) => b.flat())]);
+      const after = plan ? applyMarks(lines, plan, grown.map(({ line }) => reading(c.reread[line] ?? ["", 0]))) : { lines, absorbed: new Set<number>() };
+      expect([c.name, [...after.absorbed].sort((a, b) => a - b), after.lines.boxes.map((b) => Array.from(b)), after.lines.readings.map((r) => [r.text, r.confidence])]).toEqual([
+        c.name,
+        c.absorbed,
+        c.boxes_after.map((b) => b.flat()),
+        c.rec_after,
+      ]);
     }
   });
 });

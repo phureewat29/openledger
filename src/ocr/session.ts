@@ -24,6 +24,9 @@ const SESSION_OPTIONS: InferenceSession.SessionOptions = {
   executionProviders: ["wasm"],
   graphOptimizationLevel: "all",
   logSeverityLevel: 3,
+  /** Already this backend's defaults; set so a future runtime default cannot turn them on (upstream ort_low_memory). */
+  enableCpuMemArena: false,
+  enableMemPattern: false,
   /** Spinning idle threads cost both CPU time and speed at every thread count measured. */
   extra: { session: { intra_op: { allow_spinning: "0" } } },
 };
@@ -32,9 +35,11 @@ async function openModels(): Promise<Models> {
   const ort = await loadRuntime();
   ort.env.wasm.numThreads = THREADS;
   ort.env.logLevel = "error";
-  const [detector, recognizer, dictionary] = await Promise.all([
-    readFile(resolve(MODEL_DIR, "det.onnx")).then((bytes) => ort.InferenceSession.create(bytes, SESSION_OPTIONS)),
-    readFile(resolve(MODEL_DIR, "rec.onnx")).then((bytes) => ort.InferenceSession.create(bytes, SESSION_OPTIONS)),
+  const open = (file: string) => readFile(resolve(MODEL_DIR, file)).then((bytes) => ort.InferenceSession.create(bytes, SESSION_OPTIONS));
+  const [detector, recognizer, loopless, dictionary] = await Promise.all([
+    open("det.onnx"),
+    open("rec.onnx"),
+    open("rec2.onnx"),
     readFile(resolve(MODEL_DIR, "rec_dict.txt"), "utf8"),
   ]);
   const run =
@@ -47,6 +52,7 @@ async function openModels(): Promise<Models> {
   return {
     detect: run(detector),
     recognize: run(recognizer),
+    recognizeLoopless: run(loopless),
     charset: ["", ...dictionary.split("\n").filter(Boolean), " "],
   };
 }

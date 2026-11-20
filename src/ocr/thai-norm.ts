@@ -35,6 +35,8 @@ const EDGE_SPACE = new RegExp(`^[${PY_SPACE}]+|[${PY_SPACE}]+$`, "gu");
 
 const LONE_W = /(?<![A-Za-z])[Ww](?=\.?[\u0E01-\u0E2E\u0E40-\u0E44])/gu;
 const ZERO_IN_THAI = /(?<=[\u0E50-\u0E59])[Oo0]|[Oo0](?=[\u0E50-\u0E59])/gu;
+/** Python's re `\d` on str is any Unicode Nd digit, Thai ones included. */
+const DECIMAL_COMMA = /(?<![\p{Nd}.,])(\p{Nd}{1,3}(?:,\p{Nd}{3})*),(\p{Nd}{2})(?![\p{Nd}.,])/gu;
 
 const translate = (text: string): string => Array.from(text, (ch) => TRANSLATE.get(ch.codePointAt(0) ?? 0) ?? ch).join("");
 
@@ -45,7 +47,7 @@ function orderMarks(run: string): string {
   return sorted.filter((ch, i) => i === 0 || sorted[i - 1] !== ch).join("");
 }
 
-const pyStrip = (text: string): string => text.replace(EDGE_SPACE, "");
+export const pyStrip = (text: string): string => text.replace(EDGE_SPACE, "");
 
 /** One canonical spelling for Thai text, so equal renderings compare equal. */
 export function canonical(text: string): string {
@@ -67,3 +69,9 @@ export function canonical(text: string): string {
 
 /** Look-alikes no real Thai text contains: a Latin W glued to Thai letters (a bold พ), a Latin O or digit zero inside Thai digits. */
 export const fixScripts = (text: string): string => text.replace(LONE_W, "\u0E1E").replace(ZERO_IN_THAI, "\u0E50");
+
+/** A raw reading as the line filter judges it: canonical, look-alikes fixed. */
+export const normalizeReading = (raw: string): string => fixScripts(canonical(raw));
+
+/** A whole amount whose last comma has exactly two digits after it ("88,226,21", "280,00") gets a decimal point. */
+export const fixDecimalCommas = (text: string): string => text.replace(DECIMAL_COMMA, "$1.$2");
