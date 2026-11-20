@@ -2,13 +2,15 @@
 
 OpenLedger is MIT-licensed. Its built-in OCR (`src/ocr/`, `models/ocr/`) includes or reproduces the work below.
 
-## OpenThai2.0-OCR-Text
+## OpenThai2.1-OCR-Text
 
-By iApp Technology, Apache License 2.0. The model files in `models/ocr/` are distributed as published at
-https://huggingface.co/iapp/OpenThai2.0-OCR-Text (commit 40e8e9ff), with their NOTICE and the license text in
-`models/ocr/LICENSE`. The pipeline in `src/ocr/` is a TypeScript port of the model's runtime
-(`runtime/line_engine.py`, `runtime/thai_norm.py`). Changes: rewritten in TypeScript on ONNX Runtime Web; word
-boxes, colour modes other than "flatten", and the OpenVINO backend were left out.
+By iApp Technology, Apache License 2.0. The model files in `models/ocr/` (`det.onnx`, `rec.onnx`, `rec2.onnx`,
+`rec_dict.txt`) are distributed as published at https://huggingface.co/iapp/OpenThai2.1-OCR-Text-20261118 (v2.1.4,
+commit fac2b5ce), with their NOTICE and the license text in `models/ocr/LICENSE`. `rec2.onnx` is iApp's second
+recognizer, the same network trained with loopless Thai fonts as well. The pipeline in `src/ocr/` is a TypeScript
+port of the model's runtime (`runtime/line_engine.py`, `runtime/thai_norm.py`). Changes: rewritten in TypeScript on
+ONNX Runtime Web; word boxes, colour modes other than "flatten", the OpenVINO backend, and the options the shipped
+`config.json` leaves off (short-box padding, the small-text rescan, paragraph breaks) were left out.
 
 ## PaddleOCR models
 

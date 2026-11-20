@@ -164,4 +164,4 @@ npm link # makes 'oled' available globally
 
 OpenLedger is licensed under the [MIT License](./LICENSE).
 
-The built-in OCR runs [OpenThai2.0-OCR-Text](https://huggingface.co/iapp/OpenThai2.0-OCR-Text) by iApp, licensed under Apache-2.0. Its notices, and those of the OpenCV, KleidiCV and Clipper code the OCR reproduces, are in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+The built-in OCR runs [OpenThai2.1-OCR-Text](https://huggingface.co/iapp/OpenThai2.1-OCR-Text-20261118) by iApp, licensed under Apache-2.0. Its notices, and those of the OpenCV, KleidiCV and Clipper code the OCR reproduces, are in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
